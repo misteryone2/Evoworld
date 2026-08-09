@@ -37,7 +37,9 @@ export function StatsPanel({ stats }: Props) {
       <div className="stats-grid">
         <Stat label="Anno simulato" value={stats.year.toLocaleString("it-IT")} />
         <Stat label="Popolazione" value={stats.population.toLocaleString("it-IT")} />
-        <Stat label="Specie" value={String(stats.speciesCount)} />
+        <Stat label="Specie viventi" value={String(stats.speciesAlive)} />
+        <Stat label="Specie totali create" value={String(stats.speciesTotalEver)} />
+        <Stat label="Specie estinte" value={String(stats.speciesExtinct)} />
         <Stat label="Nascite (ultimo tick)" value={String(stats.births)} />
         <Stat label="Morti (ultimo tick)" value={String(stats.deaths)} />
       </div>
