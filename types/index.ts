@@ -43,13 +43,25 @@ export interface Organism {
   alive: boolean;
 }
 
-/** Terrain classification for a grid cell, derived from environmental values. */
-export type TerrainType = "ocean" | "plains" | "desert" | "mountain";
+/**
+ * Terrain/biome classification for a grid cell.
+ *
+ * "ocean" and "mountain" are structural: they come from elevation and do not
+ * change over time. The other four ("plains", "desert", "forest", "tundra",
+ * "savanna") are climate-dependent biomes that are re-evaluated every tick
+ * from the cell's current temperature, water and vegetation — so a biome can
+ * genuinely shift as the climate drifts (v0.2 requirement).
+ */
+export type TerrainType = "ocean" | "mountain" | "plains" | "desert" | "forest" | "tundra" | "savanna";
+
+/** The four seasons of a simulated year, driven by SimulationClock ticks. */
+export type Season = "primavera" | "estate" | "autunno" | "inverno";
 
 /** A single cell of the planetary grid. */
 export interface Cell {
+  elevation: number; // 0..1, fixed at generation time
   temperature: number; // degrees, arbitrary unit centered near 20
-  water: number; // 0..1
+  water: number; // 0..1, fixed at generation time
   vegetation: number; // 0..1, regrows over time, consumed by herbivores
   terrain: TerrainType;
 }
@@ -64,6 +76,7 @@ export interface PlanetConfig {
 export interface SimulationStats {
   tick: number;
   year: number;
+  season: Season;
   population: number;
   speciesCount: number;
   averageGenome: Genome | null;
