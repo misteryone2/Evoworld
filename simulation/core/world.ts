@@ -11,13 +11,12 @@ import { averageGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { feedOrganisms } from "../ecology/feeding";
 import { reproduceOrganisms } from "../evolution/reproduction";
-
-const TICKS_PER_YEAR = 100;
+import { TICKS_PER_YEAR } from "./constants";
 
 /**
  * World is the top-level simulation object. It owns the planet, the
  * population of organisms, and drives the tick cycle:
- *  1. update environment
+ *  1. update environment (climate, seasons, biomes)
  *  2. update metabolism
  *  3. update movement
  *  4. handle feeding
@@ -64,7 +63,7 @@ export class World {
   step(): void {
     this.tick++;
 
-    // 1. environment
+    // 1. environment (includes seasonal cycle and dynamic biome shifts)
     this.planet.update(this.tick);
 
     // 2 & 3. metabolism + movement
@@ -103,6 +102,7 @@ export class World {
     return {
       tick: this.tick,
       year: Math.floor(this.tick / TICKS_PER_YEAR),
+      season: Planet.seasonForTick(this.tick),
       population: this.organisms.length,
       speciesCount: speciesIds.size,
       averageGenome: averageGenome(this.organisms.map((o) => o.genome)),
