@@ -3,11 +3,25 @@
 import { useEffect, useRef } from "react";
 import type { RenderFrame } from "../../types";
 
+// Terrain codes must match simulation/core/renderFrame.ts TERRAIN_CODE.
 const TERRAIN_COLORS: Record<number, string> = {
   0: "#123a52", // ocean
   1: "#5b7a3a", // plains (base, blended with vegetation)
   2: "#c2a25a", // desert
   3: "#6b6558", // mountain
+  4: "#1f5c34", // forest
+  5: "#c7d4d6", // tundra
+  6: "#a68a3c", // savanna
+};
+
+const TERRAIN_LABELS: Record<number, string> = {
+  0: "Oceano",
+  1: "Pianura",
+  2: "Deserto",
+  3: "Montagna",
+  4: "Foresta",
+  5: "Tundra",
+  6: "Savana",
 };
 
 const SPECIES_HUES = [16, 195, 300, 48, 130, 260, 0, 170];
@@ -52,24 +66,48 @@ export function PlanetCanvas({ frame }: Props) {
   }, [frame]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={800}
-      className="planet-canvas"
-      aria-label="Visualizzazione del pianeta simulato"
-      role="img"
-    />
+    <div className="canvas-wrap">
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={800}
+        className="planet-canvas"
+        aria-label="Visualizzazione del pianeta simulato"
+        role="img"
+      />
+      <ul className="biome-legend" aria-label="Legenda dei biomi">
+        {Object.entries(TERRAIN_LABELS).map(([code, label]) => (
+          <li key={code}>
+            <span className="swatch" style={{ background: TERRAIN_COLORS[Number(code)] }} />
+            {label}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
 function shadeTerrain(terrainCode: number, vegetation: number): string {
-  if (terrainCode === 0) return TERRAIN_COLORS[0];
-  if (terrainCode === 3) return TERRAIN_COLORS[3];
+  // ocean, mountain, tundra: fixed color, not vegetation-blended.
+  if (terrainCode === 0 || terrainCode === 3 || terrainCode === 5) {
+    return TERRAIN_COLORS[terrainCode];
+  }
   if (terrainCode === 2) {
+    // desert lightly greens with vegetation
     const g = Math.round(140 + vegetation * 40);
     return `rgb(${194 - vegetation * 60}, ${g}, 90)`;
   }
+  if (terrainCode === 4) {
+    // forest: darker and richer with more vegetation
+    const g = Math.round(70 + vegetation * 70);
+    return `rgb(${20 + (1 - vegetation) * 30}, ${g}, ${40 + (1 - vegetation) * 20})`;
+  }
+  if (terrainCode === 6) {
+    // savanna: warm tan blended slightly with green
+    const g = Math.round(120 + vegetation * 40);
+    return `rgb(${168 - vegetation * 30}, ${g}, 60)`;
+  }
+  // plains: interpolate from dry tan to lush green based on vegetation
   const r = Math.round(120 - vegetation * 50);
   const g = Math.round(110 + vegetation * 70);
   const b = Math.round(70 - vegetation * 20);
