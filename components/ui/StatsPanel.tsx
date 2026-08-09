@@ -15,6 +15,13 @@ const TRAIT_LABELS: Record<string, string> = {
   lifespan: "Longevità",
 };
 
+const SEASON_ICONS: Record<string, string> = {
+  primavera: "🌱",
+  estate: "☀️",
+  autunno: "🍂",
+  inverno: "❄️",
+};
+
 export function StatsPanel({ stats }: Props) {
   if (!stats) {
     return <div className="stats-panel">Inizializzazione del mondo…</div>;
@@ -22,6 +29,11 @@ export function StatsPanel({ stats }: Props) {
 
   return (
     <div className="stats-panel">
+      <div className="season-badge">
+        <span>{SEASON_ICONS[stats.season]}</span>
+        <span>{capitalize(stats.season)}</span>
+      </div>
+
       <div className="stats-grid">
         <Stat label="Anno simulato" value={stats.year.toLocaleString("it-IT")} />
         <Stat label="Popolazione" value={stats.population.toLocaleString("it-IT")} />
@@ -58,4 +70,8 @@ function Stat({ label, value }: { label: string; value: string }) {
       <span className="stat-label">{label}</span>
     </div>
   );
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
