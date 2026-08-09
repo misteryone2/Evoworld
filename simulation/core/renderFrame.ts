@@ -6,10 +6,16 @@ const TERRAIN_CODE: Record<string, number> = {
   plains: 1,
   desert: 2,
   mountain: 3,
+  forest: 4,
+  tundra: 5,
+  savanna: 6,
 };
 
 /**
- * Converts the full World state into a compact, transferable payload.
+ * Converts the full World state into a compact, transferable payload. We
+ * deliberately avoid sending per-organism objects with named fields: typed
+ * arrays are cheap to structured-clone/transfer across the worker boundary
+ * and keep the UI thread from having to manage React state per organism.
  */
 export function buildRenderFrame(world: World): RenderFrame {
   const { planet, organisms } = world;
