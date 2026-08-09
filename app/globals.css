@@ -1,0 +1,253 @@
+/*
+  EvoWorld — visual identity
+  Design idea: a night observation deck for a living planet. The palette is
+  built from a deep space void, a bioluminescent signal green (the "life"
+  color used for vegetation/organisms and accents), and a warm data-amber
+  used sparingly for numbers, echoing old phosphor terminal read-outs.
+*/
+
+@font-face {
+  font-family: "EvoMono";
+  src: local("JetBrains Mono"), local("Menlo"), local("Consolas");
+}
+
+:root {
+  --void: #05070a;
+  --void-2: #0b0f14;
+  --panel: #10151c;
+  --line: #202b35;
+  --signal: #6bffb0;
+  --signal-dim: #3a8f68;
+  --amber: #ffb35c;
+  --danger: #ff6b6b;
+  --text: #e7ede8;
+  --text-dim: #8a9a92;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: radial-gradient(ellipse at 20% -10%, #0e1720 0%, var(--void) 55%);
+  color: var(--text);
+  font-family: ui-sans-serif, "Inter", "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 1.5rem;
+}
+
+.page-header h1 {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  letter-spacing: -0.02em;
+  margin: 0;
+  font-weight: 700;
+  background: linear-gradient(180deg, #ffffff 0%, var(--signal) 140%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--text-dim);
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.canvas-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.planet-canvas {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--void-2);
+  image-rendering: pixelated;
+  box-shadow: 0 0 0 1px rgba(107, 255, 176, 0.05), 0 20px 60px -20px rgba(0, 0, 0, 0.6);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.btn {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  border-color: var(--signal-dim);
+  color: var(--signal);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: #04140c;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  color: #04140c;
+  opacity: 0.9;
+}
+
+.btn-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.speed-group {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.btn-speed.active {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.stats-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat-value {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 1.4rem;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.genome-section h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.genome-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.genome-list li {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text);
+}
+
+.genome-list li span:first-child {
+  color: var(--text-dim);
+}
+
+.genome-list li span:last-child {
+  color: var(--signal);
+}
+
+.extinction-notice {
+  margin-top: 1rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.loading {
+  color: var(--text-dim);
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.85rem;
+}
