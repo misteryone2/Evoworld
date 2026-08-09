@@ -23,6 +23,27 @@ const MUTATION_STD_FRACTION = 0.04;
 /** Probability that any single trait mutates during reproduction. */
 export const MUTATION_RATE = 0.15;
 
+/**
+ * Genetic distance threshold below which two organisms are considered
+ * reproductively compatible, regardless of their current speciesId label.
+ * This is what makes speciation an emergent consequence of accumulated
+ * genetic drift rather than an arbitrary rule tied to a label: two
+ * organisms with the same speciesId that have drifted too far apart will
+ * stop being able to interbreed, and conversely two organisms that still
+ * happen to be genetically close remain compatible even right after a
+ * species split.
+ */
+export const MATE_COMPATIBILITY_THRESHOLD = 0.16;
+
+/**
+ * Genetic distance threshold above which two diverging sub-populations are
+ * considered distinct enough to be recognized as separate species. Kept
+ * comfortably above MATE_COMPATIBILITY_THRESHOLD so that a freshly split
+ * species is, by construction, already reproductively isolated from its
+ * parent population.
+ */
+export const SPECIATION_DISTANCE_THRESHOLD = 0.26;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -84,4 +105,29 @@ export function averageGenome(genomes: Genome[]): Genome | null {
   const avg = {} as Genome;
   for (const trait of TRAIT_NAMES) avg[trait] = sum[trait] / genomes.length;
   return avg;
+}
+
+/**
+ * Normalized genetic distance between two genomes, in roughly [0, 1].
+ *
+ * Each trait's absolute difference is normalized by that trait's valid
+ * range (so traits with very different natural scales, like lifespan vs.
+ * fertility, contribute comparably), then combined as a Euclidean distance
+ * and averaged across the number of traits. Identical genomes have distance
+ * 0; genomes at opposite ends of every trait range approach distance 1.
+ */
+export function geneticDistance(a: Genome, b: Genome): number {
+  let sumSquares = 0;
+  for (const trait of TRAIT_NAMES) {
+    const { min, max } = TRAIT_RANGES[trait];
+    const range = max - min;
+    const normalizedDiff = range > 0 ? (a[trait] - b[trait]) / range : 0;
+    sumSquares += normalizedDiff * normalizedDiff;
+  }
+  return Math.sqrt(sumSquares / TRAIT_NAMES.length);
+}
+
+/** Whether two organisms' genomes are close enough to interbreed. */
+export function areGeneticallyCompatible(a: Genome, b: Genome): boolean {
+  return geneticDistance(a, b) <= MATE_COMPATIBILITY_THRESHOLD;
 }
