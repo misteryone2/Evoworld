@@ -2,6 +2,7 @@ import type {
   Organism,
   PlanetConfig,
   SimulationStats,
+  SpeciesRecord,
   WorldSnapshot,
 } from "../../types";
 import { Random } from "./random";
@@ -11,19 +12,27 @@ import { averageGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { feedOrganisms } from "../ecology/feeding";
 import { reproduceOrganisms } from "../evolution/reproduction";
+import {
+  attemptSpeciation,
+  initializeSpeciesRegistry,
+  updateSpeciesPopulations,
+  SPECIATION_CHECK_INTERVAL,
+} from "../evolution/speciation";
 import { TICKS_PER_YEAR } from "./constants";
 
 /**
  * World is the top-level simulation object. It owns the planet, the
- * population of organisms, and drives the tick cycle:
+ * population of organisms, the species genealogy registry, and drives the
+ * tick cycle:
  *  1. update environment (climate, seasons, biomes)
  *  2. update metabolism
  *  3. update movement
  *  4. handle feeding
  *  5. handle death + removal
- *  6. handle reproduction
+ *  6. handle reproduction (genetic-distance-based mate compatibility)
  *  7. apply mutation to offspring (done inside reproduction)
- *  8. update statistics
+ *  8. update statistics (including species population/extinction bookkeeping,
+ *     and periodic speciation checks)
  */
 export class World {
   planet: Planet;
@@ -33,11 +42,13 @@ export class World {
   private rng: Random;
   private nextOrganismId = 1;
   private nextSpeciesId = 1;
+  private speciesRegistry: Map<number, SpeciesRecord>;
   private lastStats: SimulationStats;
 
   constructor(config: PlanetConfig, initialPopulation: number) {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
+    this.speciesRegistry = new Map();
     this.seedPopulation(initialPopulation);
     this.lastStats = this.computeStats(0, 0);
   }
@@ -57,6 +68,7 @@ export class World {
       );
       placed++;
     }
+    this.speciesRegistry = initializeSpeciesRegistry(speciesId, placed);
   }
 
   /** Runs exactly one simulation tick, per the documented 8-step cycle. */
@@ -89,22 +101,41 @@ export class World {
       this.organisms = this.organisms.filter((o) => o.alive);
     }
 
-    // 6 & 7. reproduction + mutation
+    // 6 & 7. reproduction + mutation (mate compatibility is genetic-distance-based)
     const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++);
     if (offspring.length > 0) this.organisms.push(...offspring);
 
-    // 8. statistics
+    // 8a. species bookkeeping: population counts + extinction detection
+    updateSpeciesPopulations(this.organisms, this.speciesRegistry, this.tick);
+
+    // 8b. periodic speciation check: can a species' population be split
+    // into two geographically + genetically diverged groups?
+    if (this.tick % SPECIATION_CHECK_INTERVAL === 0) {
+      const currentYear = Math.floor(this.tick / TICKS_PER_YEAR);
+      attemptSpeciation(this.organisms, this.speciesRegistry, this.tick, currentYear, this.rng, () => this.nextSpeciesId++);
+      // Recompute populations again since organisms may have just been
+      // reassigned to newly created species.
+      updateSpeciesPopulations(this.organisms, this.speciesRegistry, this.tick);
+    }
+
+    // 8c. statistics
     this.lastStats = this.computeStats(offspring.length, deaths);
   }
 
   private computeStats(births: number, deaths: number): SimulationStats {
-    const speciesIds = new Set(this.organisms.map((o) => o.speciesId));
+    const records = Array.from(this.speciesRegistry.values());
+    const speciesAlive = records.filter((r) => r.alive).length;
+    const speciesExtinct = records.filter((r) => !r.alive).length;
+
     return {
       tick: this.tick,
       year: Math.floor(this.tick / TICKS_PER_YEAR),
       season: Planet.seasonForTick(this.tick),
       population: this.organisms.length,
-      speciesCount: speciesIds.size,
+      speciesCount: speciesAlive,
+      speciesAlive,
+      speciesTotalEver: records.length,
+      speciesExtinct,
       averageGenome: averageGenome(this.organisms.map((o) => o.genome)),
       births,
       deaths,
@@ -115,6 +146,11 @@ export class World {
     return this.lastStats;
   }
 
+  /** Full species genealogy (living and extinct), for the UI/albero evolutivo. */
+  getSpeciesTree(): SpeciesRecord[] {
+    return Array.from(this.speciesRegistry.values());
+  }
+
   toSnapshot(): WorldSnapshot {
     return {
       tick: this.tick,
@@ -123,6 +159,7 @@ export class World {
       nextOrganismId: this.nextOrganismId,
       nextSpeciesId: this.nextSpeciesId,
       randomState: this.rng.getState(),
+      speciesRegistry: Array.from(this.speciesRegistry.values()),
     };
   }
 
@@ -135,6 +172,7 @@ export class World {
     world.nextSpeciesId = snapshot.nextSpeciesId;
     world.rng = new Random(snapshot.planet.config.seed);
     world.rng.setState(snapshot.randomState);
+    world.speciesRegistry = new Map(snapshot.speciesRegistry.map((r) => [r.speciesId, r]));
     world.lastStats = world.computeStats(0, 0);
     return world;
   }
