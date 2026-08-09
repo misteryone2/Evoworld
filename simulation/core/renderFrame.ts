@@ -16,6 +16,8 @@ const TERRAIN_CODE: Record<string, number> = {
  * deliberately avoid sending per-organism objects with named fields: typed
  * arrays are cheap to structured-clone/transfer across the worker boundary
  * and keep the UI thread from having to manage React state per organism.
+ * The species genealogy is small (one small object per species ever
+ * created), so it is sent as a plain array rather than a typed array.
  */
 export function buildRenderFrame(world: World): RenderFrame {
   const { planet, organisms } = world;
@@ -55,5 +57,6 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsY,
     organismsSpecies,
     organismsSize,
+    speciesTree: world.getSpeciesTree(),
   };
 }
