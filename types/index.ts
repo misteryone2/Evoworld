@@ -72,6 +72,23 @@ export interface PlanetConfig {
   seed: number;
 }
 
+/**
+ * Record of a single species in the evolutionary tree (v0.2.1).
+ *
+ * Species are never mutated in place once extinct: history is append-only,
+ * so the full genealogy (which species split from which, and when) is
+ * always reconstructable from the collection of SpeciesRecord entries.
+ */
+export interface SpeciesRecord {
+  speciesId: number;
+  parentSpeciesId: number | null;
+  originTick: number;
+  originYear: number;
+  population: number;
+  alive: boolean;
+  extinctionTick: number | null;
+}
+
 /** Aggregated statistics computed once per tick for the UI. */
 export interface SimulationStats {
   tick: number;
@@ -79,6 +96,9 @@ export interface SimulationStats {
   season: Season;
   population: number;
   speciesCount: number;
+  speciesAlive: number;
+  speciesTotalEver: number;
+  speciesExtinct: number;
   averageGenome: Genome | null;
   births: number;
   deaths: number;
@@ -97,6 +117,7 @@ export interface WorldSnapshot {
   nextOrganismId: number;
   nextSpeciesId: number;
   randomState: number;
+  speciesRegistry: SpeciesRecord[];
 }
 
 /** Lightweight payload sent from the worker to the UI every rendered frame. */
@@ -114,6 +135,8 @@ export interface RenderFrame {
   organismsY: Float32Array;
   organismsSpecies: Uint16Array;
   organismsSize: Float32Array;
+  // Full species genealogy, small enough to send as a plain array every frame.
+  speciesTree: SpeciesRecord[];
 }
 
 // ---- Worker <-> UI message protocol -------------------------------------
