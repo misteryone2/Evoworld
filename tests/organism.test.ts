@@ -9,6 +9,7 @@ const baseGenome: Genome = {
   vision: 5,
   fertility: 0.5,
   lifespan: 100,
+  carnivory: 0,
 };
 
 describe("organism lifecycle", () => {
@@ -34,5 +35,11 @@ describe("organism lifecycle", () => {
     const large = createOrganism(2, 1, 0, 0, { ...baseGenome, size: 2.5, speed: 2.5, vision: 12 });
     expect(upkeepCost(small)).toBeGreaterThan(0);
     expect(upkeepCost(large)).toBeGreaterThan(upkeepCost(small));
+  });
+
+  it("upkeep cost increases with carnivory (predatory builds are expensive to maintain)", () => {
+    const herbivore = createOrganism(1, 1, 0, 0, { ...baseGenome, carnivory: 0 });
+    const carnivore = createOrganism(2, 1, 0, 0, { ...baseGenome, carnivory: 0.8 });
+    expect(upkeepCost(carnivore)).toBeGreaterThan(upkeepCost(herbivore));
   });
 });
