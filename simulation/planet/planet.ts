@@ -138,8 +138,9 @@ export class Planet {
 
       cell.temperature = cell.temperature * 0.999 + (cell.temperature + seasonalOffset * 0.02 + climateDrift * 0.005) * 0.001;
 
-      if (cell.terrain !== "mountain") {
-        const regrowth = 0.0025 * growthFactor * (1 - cell.vegetation) * (cell.water > 0.1 ? 1 : 0.2);
+            if (cell.terrain !== "mountain") {
+        const regrowth = 0.005 * growthFactor * (1 - cell.vegetation) * (cell.water > 0.1 ? 1 : 0.2);
+
         cell.vegetation = Math.max(0, Math.min(1, cell.vegetation + regrowth));
         // Biome can shift dynamically as temperature/vegetation change.
         cell.terrain = Planet.classifyBiome(cell.temperature, cell.water, cell.vegetation);
