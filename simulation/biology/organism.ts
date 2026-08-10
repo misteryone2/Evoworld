@@ -36,15 +36,20 @@ export function createRandomOrganism(
 /**
  * Energy cost paid every tick just for being alive. Larger, faster and more
  * carnivorous organisms cost more energy per tick (a real tradeoff: no
- * trait is free), scaled by the organism's own metabolism trait. Carnivory
- * carries a substantial cost (v0.3) — a predatory build (hunting muscle,
- * different digestion) is genuinely expensive to maintain, not a marginal
- * one, which is what keeps maximal carnivory from being an unconditionally
- * winning strategy.
+ * trait is free), scaled by the organism's own metabolism trait.
+ *
+ * Carnivory's cost is convex (linear term + cubic term), not just linear
+ * (v0.3.1): a moderately carnivorous build is only mildly more expensive
+ * than a herbivore, but pushing toward the extreme gets disproportionately
+ * costly. This creates a genuine interior fitness optimum for diet instead
+ * of "more carnivory is always better", which previously caused the whole
+ * population to converge on maximal carnivory regardless of how much
+ * hunting was actually succeeding.
  */
 export function upkeepCost(organism: Organism): number {
   const { size, speed, metabolism, vision, carnivory } = organism.genome;
-  return (0.05 + size * 0.06 + speed * 0.05 + vision * 0.01 + carnivory * 0.14) * metabolism;
+  const carnivoryCost = carnivory * 0.08 + Math.pow(carnivory, 3) * 0.55;
+  return (0.05 + size * 0.06 + speed * 0.05 + vision * 0.01 + carnivoryCost) * metabolism;
 }
 
 /** Returns true if the organism should die this tick (starvation or old age). */
