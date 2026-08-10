@@ -13,6 +13,7 @@ const TRAIT_LABELS: Record<string, string> = {
   vision: "Vista",
   fertility: "Fertilità",
   lifespan: "Longevità",
+  carnivory: "Carnivoria",
 };
 
 const SEASON_ICONS: Record<string, string> = {
@@ -42,6 +43,7 @@ export function StatsPanel({ stats }: Props) {
         <Stat label="Specie estinte" value={String(stats.speciesExtinct)} />
         <Stat label="Nascite (ultimo tick)" value={String(stats.births)} />
         <Stat label="Morti (ultimo tick)" value={String(stats.deaths)} />
+        <Stat label="Prede cacciate (ultimo tick)" value={String(stats.predationKills)} />
       </div>
 
       {stats.averageGenome && (
