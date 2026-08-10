@@ -5,6 +5,12 @@ import { Random } from "../core/random";
  * Valid ranges for every heritable trait. Values are always clamped into
  * these ranges after mutation so the genome cannot drift into nonsensical
  * territory (e.g. negative size).
+ *
+ * carnivory's max is capped at 0.85, not 1.0 (v0.3): if genetic drift ever
+ * fixed the *entire* population at carnivory = 1, no organism could hunt
+ * any other (prey must have strictly lower carnivory) or get any energy
+ * from vegetation — a fatal absorbing state discovered during testing. The
+ * cap guarantees a small vegetation fallback always remains available.
  */
 export const TRAIT_RANGES: TraitRanges = {
   size: { min: 0.2, max: 3.0 },
@@ -13,6 +19,7 @@ export const TRAIT_RANGES: TraitRanges = {
   vision: { min: 1, max: 15 },
   fertility: { min: 0.05, max: 1.0 },
   lifespan: { min: 50, max: 2000 },
+  carnivory: { min: 0, max: 0.85 },
 };
 
 const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as (keyof Genome)[];
@@ -53,7 +60,18 @@ export function randomGenome(rng: Random): Genome {
   const genome = {} as Genome;
   for (const trait of TRAIT_NAMES) {
     const { min, max } = TRAIT_RANGES[trait];
-    genome[trait] = rng.range(min, max);
+    if (trait === "carnivory") {
+      // Bias the initial population toward herbivory (squaring a uniform
+      // sample skews it toward 0). This mirrors how real food chains
+      // bootstrap: a population cannot start out mostly predators with no
+      // prey base to hunt. Higher carnivory is still fully reachable — and
+      // can spread through the population — via mutation and selection
+      // over subsequent generations, once there is something to hunt.
+      const u = rng.next();
+      genome[trait] = min + (max - min) * (u * u);
+    } else {
+      genome[trait] = rng.range(min, max);
+    }
   }
   return genome;
 }
