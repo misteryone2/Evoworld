@@ -76,18 +76,21 @@ function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, 
  * attempt to hunt the nearest valid prey within HUNT_RADIUS. A predator
  * only targets organisms with strictly lower carnivory than itself — this
  * keeps apex carnivores from endlessly preying on each other and gives the
- * food chain a clear direction (herbivores and lower-carnivory omnivores
- * are what gets hunted), while still leaving room for real
- * omnivore/omnivore interactions.
+ * food chain a clear direction.
  *
  * Hunt success is probabilistic, based on relative hunting power (size ×
  * speed) between predator and prey, with a small built-in evasion
- * advantage for prey so predators do not dominate unconditionally. Every
- * attempt costs the predator energy regardless of outcome (a real cost,
- * not a free roll) — this is what stops carnivory from being a strictly
- * dominant strategy that would otherwise run to fixation across the whole
- * population. On a successful hunt, the prey dies immediately and the
- * predator gains additional energy scaled by its own carnivory.
+ * advantage for prey so predators do not dominate unconditionally.
+ * Additionally (v0.3.1), success is reduced by local interference
+ * competition: the more other eligible predators are crowded into the same
+ * area relative to available prey, the harder it is for any one of them to
+ * actually land a kill. This is what stops high carnivory from being a
+ * free win once many individuals share it — a population that is mostly
+ * predators is mostly competing with itself for a shrinking prey pool, not
+ * just facing a fixed per-encounter success rate. On a successful hunt,
+ * the prey dies immediately and the predator gains energy scaled by its
+ * own carnivory (a partial carnivore still gets a partial benefit from a
+ * kill).
  *
  * Returns the number of successful kills, for statistics.
  */
@@ -106,28 +109,39 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random): nu
 
     let target: Organism | null = null;
     let bestDistance = Infinity;
-    for (const prey of candidates) {
-      if (prey === predator || !prey.alive) continue;
-      if (prey.genome.carnivory >= predator.genome.carnivory) continue;
-      const d = distanceWrapped(predator.position.x, predator.position.y, prey.position.x, prey.position.y, planet);
+    let rivalPredators = 0;
+    let availablePrey = 0;
+    for (const other of candidates) {
+      if (other === predator || !other.alive) continue;
+      if (other.genome.carnivory >= CARNIVORY_HUNT_THRESHOLD) {
+        rivalPredators++;
+        continue;
+      }
+      if (other.genome.carnivory < predator.genome.carnivory) availablePrey++;
+      if (other.genome.carnivory >= predator.genome.carnivory) continue;
+      const d = distanceWrapped(predator.position.x, predator.position.y, other.position.x, other.position.y, planet);
       if (d <= HUNT_RADIUS && d < bestDistance) {
         bestDistance = d;
-        target = prey;
+        target = other;
       }
     }
     if (!target) continue;
 
     // Hunting has a real cost: the attempt itself burns energy regardless
-    // of whether it succeeds. This is what stops carnivory from being a
-    // strictly dominant, risk-free strategy that would otherwise run to
-    // fixation across the whole population (and then collapse entirely,
-    // since a population that is 100% carnivorous has no prey left to hunt
-    // and no vegetation income either).
+    // of whether it succeeds.
     predator.energy -= HUNT_ENERGY_COST;
 
     const predatorPower = huntingPower(predator);
     const preyPower = huntingPower(target) * 1.15; // slight evasion advantage for prey
-    const successChance = predatorPower / (predatorPower + preyPower);
+    const baseChance = predatorPower / (predatorPower + preyPower);
+
+    // Interference competition: more rival predators sharing a thinner
+    // prey pool means each individual hunt is less likely to land,
+    // regardless of raw hunting power. A lone predator among abundant prey
+    // is barely affected; a predator-crowded area with scarce prey is
+    // strongly penalized.
+    const interference = rivalPredators / (availablePrey + 1);
+    const successChance = baseChance / (1 + interference);
 
     if (rng.chance(successChance)) {
       const energyGained = Math.min(MEAT_ENERGY_VALUE, target.energy + 30) * predator.genome.carnivory;
