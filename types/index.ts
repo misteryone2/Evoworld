@@ -15,6 +15,14 @@ export interface Genome {
   vision: number;
   fertility: number;
   lifespan: number;
+  /**
+   * Diet trait, 0..1 (v0.3). 0 = pure herbivore (all energy from
+   * vegetation), 1 = pure carnivore (relies on hunting), values in between
+   * are omnivores that draw on both sources in proportion to this value.
+   * There is no fixed "correct" value: it is under the same selection
+   * pressure as every other trait.
+   */
+  carnivory: number;
 }
 
 export type TraitName = keyof Genome;
@@ -102,6 +110,7 @@ export interface SimulationStats {
   averageGenome: Genome | null;
   births: number;
   deaths: number;
+  predationKills: number;
 }
 
 export type SimulationSpeed = 0 | 1 | 10 | 100 | 1000;
