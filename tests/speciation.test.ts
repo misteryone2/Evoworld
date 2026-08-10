@@ -24,6 +24,7 @@ const lowGenome: Genome = {
   vision: TRAIT_RANGES.vision.min,
   fertility: TRAIT_RANGES.fertility.min,
   lifespan: TRAIT_RANGES.lifespan.min,
+  carnivory: TRAIT_RANGES.carnivory.min,
 };
 
 const highGenome: Genome = {
@@ -33,6 +34,7 @@ const highGenome: Genome = {
   vision: TRAIT_RANGES.vision.max,
   fertility: TRAIT_RANGES.fertility.max,
   lifespan: TRAIT_RANGES.lifespan.max,
+  carnivory: TRAIT_RANGES.carnivory.max,
 };
 
 describe("geneticDistance", () => {
@@ -67,9 +69,6 @@ describe("areGeneticallyCompatible", () => {
   });
 
   it("agrees with the documented MATE_COMPATIBILITY_THRESHOLD", () => {
-    // Distance for a single-trait offset of fraction f of that trait's
-    // range is f / sqrt(numberOfTraits). Solve for f so the resulting
-    // distance clearly exceeds MATE_COMPATIBILITY_THRESHOLD.
     const numTraits = Object.keys(TRAIT_RANGES).length;
     const f = (MATE_COMPATIBILITY_THRESHOLD + 0.1) * Math.sqrt(numTraits);
     const range = TRAIT_RANGES.size.max - TRAIT_RANGES.size.min;
@@ -108,7 +107,7 @@ describe("speciation registry", () => {
   it("marks a species extinct once its population drops to zero, recording the tick", () => {
     const registry = initializeSpeciesRegistry(1, 10);
     const survivors = [createOrganism(1, 1, 0, 0, lowGenome, 50)];
-    survivors[0].alive = false; // the only member of species 1 has died
+    survivors[0].alive = false;
 
     updateSpeciesPopulations(survivors, registry, 123);
 
@@ -139,12 +138,9 @@ describe("speciation registry", () => {
     const registry = initializeSpeciesRegistry(1, 0);
     const organisms = [];
 
-    // Cluster A: clustered near the origin, low-trait genome.
     for (let i = 0; i < MIN_SPECIATION_POPULATION + 2; i++) {
       organisms.push(createOrganism(i + 1, 1, i * 0.1, i * 0.1, { ...lowGenome }, 100));
     }
-    // Cluster B: clustered far away, high-trait genome (guarantees distance
-    // well above SPECIATION_DISTANCE_THRESHOLD).
     for (let i = 0; i < MIN_SPECIATION_POPULATION + 2; i++) {
       organisms.push(createOrganism(i + 100, 1, 90 + i * 0.1, 90 + i * 0.1, { ...highGenome }, 100));
     }
@@ -161,10 +157,8 @@ describe("speciation registry", () => {
     expect(newRecord.originYear).toBe(1);
     expect(newRecord.alive).toBe(true);
 
-    // The original species record must still exist (parent lineage preserved).
     expect(registry.get(1)).toBeDefined();
 
-    // Every organism must now belong to either the original or the new species.
     const speciesIdsUsed = new Set(organisms.map((o) => o.speciesId));
     expect(speciesIdsUsed.has(newRecord.speciesId)).toBe(true);
     expect(speciesIdsUsed.size).toBe(2);
@@ -174,7 +168,6 @@ describe("speciation registry", () => {
     const rng = new Random(9);
     const registry = initializeSpeciesRegistry(1, 0);
     const organisms = [];
-    // All organisms genetically identical and spatially close: no valid split.
     for (let i = 0; i < 30; i++) {
       organisms.push(createOrganism(i + 1, 1, 50 + (i % 3), 50 + (i % 3), { ...lowGenome }, 100));
     }
