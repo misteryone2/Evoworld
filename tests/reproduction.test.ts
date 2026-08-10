@@ -12,6 +12,7 @@ const genome: Genome = {
   vision: 5,
   fertility: 1, // guarantee reproduction attempts for deterministic testing
   lifespan: 1000,
+  carnivory: 0,
 };
 
 describe("reproduction", () => {
@@ -34,9 +35,6 @@ describe("reproduction", () => {
     let nextId = 100;
 
     let offspring: ReturnType<typeof reproduceOrganisms> = [];
-    // Reproduction is probabilistic (scaled by fertility); retry across a
-    // handful of ticks with refreshed energy so the test isn't flaky while
-    // still exercising the real, chance-based reproduction path.
     for (let attempt = 0; attempt < 20 && offspring.length === 0; attempt++) {
       const a = createOrganism(1, 1, 5, 5, genome, 100);
       a.age = 500;
