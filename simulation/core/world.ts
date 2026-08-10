@@ -11,6 +11,7 @@ import { createRandomOrganism, upkeepCost, isDying } from "../biology/organism";
 import { averageGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { feedOrganisms } from "../ecology/feeding";
+import { huntPrey } from "../ecology/predation";
 import { reproduceOrganisms } from "../evolution/reproduction";
 import {
   attemptSpeciation,
@@ -27,7 +28,7 @@ import { TICKS_PER_YEAR } from "./constants";
  *  1. update environment (climate, seasons, biomes)
  *  2. update metabolism
  *  3. update movement
- *  4. handle feeding
+ *  4. handle feeding (vegetation, weighted by herbivory) + predation (v0.3)
  *  5. handle death + removal
  *  6. handle reproduction (genetic-distance-based mate compatibility)
  *  7. apply mutation to offspring (done inside reproduction)
@@ -50,7 +51,7 @@ export class World {
     this.planet = new Planet(config);
     this.speciesRegistry = new Map();
     this.seedPopulation(initialPopulation);
-    this.lastStats = this.computeStats(0, 0);
+    this.lastStats = this.computeStats(0, 0, 0);
   }
 
   private seedPopulation(count: number): void {
@@ -86,10 +87,13 @@ export class World {
       moveOrganism(o, this.planet, this.rng);
     }
 
-    // 4. feeding
+    // 4. feeding (vegetation, weighted by 1 - carnivory)
     feedOrganisms(this.organisms, this.planet);
 
-    // 5. death + removal
+    // 4b. predation (v0.3): carnivorous organisms may hunt nearby prey
+    const predationKills = huntPrey(this.organisms, this.planet, this.rng);
+
+    // 5. death + removal (includes organisms killed by predation above)
     let deaths = 0;
     for (const o of this.organisms) {
       if (o.alive && isDying(o)) {
@@ -97,7 +101,7 @@ export class World {
         deaths++;
       }
     }
-    if (deaths > 0) {
+    if (deaths > 0 || predationKills > 0) {
       this.organisms = this.organisms.filter((o) => o.alive);
     }
 
@@ -113,16 +117,14 @@ export class World {
     if (this.tick % SPECIATION_CHECK_INTERVAL === 0) {
       const currentYear = Math.floor(this.tick / TICKS_PER_YEAR);
       attemptSpeciation(this.organisms, this.speciesRegistry, this.tick, currentYear, this.rng, () => this.nextSpeciesId++);
-      // Recompute populations again since organisms may have just been
-      // reassigned to newly created species.
       updateSpeciesPopulations(this.organisms, this.speciesRegistry, this.tick);
     }
 
     // 8c. statistics
-    this.lastStats = this.computeStats(offspring.length, deaths);
+    this.lastStats = this.computeStats(offspring.length, deaths, predationKills);
   }
 
-  private computeStats(births: number, deaths: number): SimulationStats {
+  private computeStats(births: number, deaths: number, predationKills: number): SimulationStats {
     const records = Array.from(this.speciesRegistry.values());
     const speciesAlive = records.filter((r) => r.alive).length;
     const speciesExtinct = records.filter((r) => !r.alive).length;
@@ -139,6 +141,7 @@ export class World {
       averageGenome: averageGenome(this.organisms.map((o) => o.genome)),
       births,
       deaths,
+      predationKills,
     };
   }
 
@@ -173,7 +176,7 @@ export class World {
     world.rng = new Random(snapshot.planet.config.seed);
     world.rng.setState(snapshot.randomState);
     world.speciesRegistry = new Map(snapshot.speciesRegistry.map((r) => [r.speciesId, r]));
-    world.lastStats = world.computeStats(0, 0);
+    world.lastStats = world.computeStats(0, 0, 0);
     return world;
   }
 }
