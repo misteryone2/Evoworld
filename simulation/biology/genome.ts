@@ -27,6 +27,11 @@ export const TRAIT_RANGES: TraitRanges = {
   temperatureTolerance: { min: 2, max: 25 },
   preferredWater: { min: 0, max: 1 },
   waterTolerance: { min: 0.05, max: 0.6 },
+    // Capped below 1.0, same precedent as carnivory: leaving some residual
+  // vulnerability/inefficiency avoids a degenerate all-or-nothing extreme.
+  evasion: { min: 0, max: 0.8 },
+  huntingSkill: { min: 0, max: 0.8 },
+
 };
 
 const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as (keyof Genome)[];
