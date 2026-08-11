@@ -45,11 +45,19 @@ export function createRandomOrganism(
  * of "more carnivory is always better", which previously caused the whole
  * population to converge on maximal carnivory regardless of how much
  * hunting was actually succeeding.
+ *
+ * evasion and huntingSkill (v0.3.3) each carry their own mild, linear
+ * upkeep cost too — maintaining constant vigilance or specialized hunting
+ * acumen is metabolically expensive whether or not it's ever put to use
+ * that particular tick.
  */
 export function upkeepCost(organism: Organism): number {
-  const { size, speed, metabolism, vision, carnivory } = organism.genome;
+  const { size, speed, metabolism, vision, carnivory, evasion, huntingSkill } = organism.genome;
   const carnivoryCost = carnivory * 0.08 + Math.pow(carnivory, 3) * 0.55;
-  return (0.05 + size * 0.06 + speed * 0.05 + vision * 0.01 + carnivoryCost) * metabolism;
+  return (
+    (0.05 + size * 0.06 + speed * 0.05 + vision * 0.01 + carnivoryCost + evasion * 0.04 + huntingSkill * 0.04) *
+    metabolism
+  );
 }
 
 /** Returns true if the organism should die this tick (starvation or old age). */
