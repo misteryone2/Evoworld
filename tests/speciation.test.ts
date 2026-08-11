@@ -29,6 +29,8 @@ const lowGenome: Genome = {
   temperatureTolerance: TRAIT_RANGES.temperatureTolerance.min,
   preferredWater: TRAIT_RANGES.preferredWater.min,
   waterTolerance: TRAIT_RANGES.waterTolerance.min,
+  evasion: TRAIT_RANGES.evasion.min,
+  huntingSkill: TRAIT_RANGES.huntingSkill.min,
 };
 
 const highGenome: Genome = {
@@ -43,6 +45,8 @@ const highGenome: Genome = {
   temperatureTolerance: TRAIT_RANGES.temperatureTolerance.max,
   preferredWater: TRAIT_RANGES.preferredWater.max,
   waterTolerance: TRAIT_RANGES.waterTolerance.max,
+  evasion: TRAIT_RANGES.evasion.max,
+  huntingSkill: TRAIT_RANGES.huntingSkill.max,
 };
 
 describe("geneticDistance", () => {
