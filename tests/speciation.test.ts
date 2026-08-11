@@ -25,6 +25,10 @@ const lowGenome: Genome = {
   fertility: TRAIT_RANGES.fertility.min,
   lifespan: TRAIT_RANGES.lifespan.min,
   carnivory: TRAIT_RANGES.carnivory.min,
+  preferredTemperature: TRAIT_RANGES.preferredTemperature.min,
+  temperatureTolerance: TRAIT_RANGES.temperatureTolerance.min,
+  preferredWater: TRAIT_RANGES.preferredWater.min,
+  waterTolerance: TRAIT_RANGES.waterTolerance.min,
 };
 
 const highGenome: Genome = {
@@ -35,6 +39,10 @@ const highGenome: Genome = {
   fertility: TRAIT_RANGES.fertility.max,
   lifespan: TRAIT_RANGES.lifespan.max,
   carnivory: TRAIT_RANGES.carnivory.max,
+  preferredTemperature: TRAIT_RANGES.preferredTemperature.max,
+  temperatureTolerance: TRAIT_RANGES.temperatureTolerance.max,
+  preferredWater: TRAIT_RANGES.preferredWater.max,
+  waterTolerance: TRAIT_RANGES.waterTolerance.max,
 };
 
 describe("geneticDistance", () => {
