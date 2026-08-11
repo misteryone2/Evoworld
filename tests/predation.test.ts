@@ -13,13 +13,17 @@ const herbivoreGenome: Genome = {
   fertility: 0.5,
   lifespan: 500,
   carnivory: 0,
+  preferredTemperature: 20,
+  temperatureTolerance: 20,
+  preferredWater: 0.4,
+  waterTolerance: 0.5,
 };
 
 const strongCarnivoreGenome: Genome = {
   ...herbivoreGenome,
   size: 2.5,
   speed: 2.5,
-  carnivory: 0.8,
+  carnivory: 1,
 };
 
 const weakCarnivoreGenome: Genome = {
@@ -55,11 +59,6 @@ describe("predation — huntPrey", () => {
       if (kills > 0) successes++;
     }
 
-    // A much stronger predator (higher size*speed) should win a meaningful
-    // share of encounters. Note the realistic ceiling here isn't 100%: even
-    // an eligible predator only *attempts* a hunt some of the time
-    // (scaled by carnivory), and a successful attempt still isn't
-    // guaranteed (prey has a built-in evasion advantage).
     expect(successes).toBeGreaterThan(attempts * 0.15);
   });
 
