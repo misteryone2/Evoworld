@@ -36,6 +36,19 @@ export interface Genome {
   temperatureTolerance: number;
   preferredWater: number;
   waterTolerance: number;
+
+  /**
+   * Coevolutionary predator-prey traits (v0.3.3), directly opposed to each
+   * other in the predation success formula (see predation.ts). `evasion`
+   * (anti-predator vigilance/agility beyond raw speed) helps an organism
+   * survive being hunted; `huntingSkill` (predatory acumen beyond raw
+   * size*speed) helps a predator land a kill. Neither is free: both carry
+   * a metabolic cost. Because each trait's payoff depends on the current
+   * distribution of the *other* trait in the population, selection on one
+   * side keeps pushing selection on the other — the arms-race dynamic.
+   */
+  evasion: number;
+  huntingSkill: number;
 }
 
 export type TraitName = keyof Genome;
