@@ -13,6 +13,10 @@ const genome: Genome = {
   fertility: 1, // guarantee reproduction attempts for deterministic testing
   lifespan: 1000,
   carnivory: 0,
+  preferredTemperature: 20,
+  temperatureTolerance: 20,
+  preferredWater: 0.4,
+  waterTolerance: 0.5,
 };
 
 describe("reproduction", () => {
