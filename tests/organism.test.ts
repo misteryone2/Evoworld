@@ -14,6 +14,9 @@ const baseGenome: Genome = {
   temperatureTolerance: 20,
   preferredWater: 0.4,
   waterTolerance: 0.5,
+    evasion: 0.2,
+  huntingSkill: 0.2,
+
 };
 
 describe("organism lifecycle", () => {
