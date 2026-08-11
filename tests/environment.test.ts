@@ -15,6 +15,9 @@ const baseGenome: Genome = {
   temperatureTolerance: 10,
   preferredWater: 0.4,
   waterTolerance: 0.2,
+    evasion: 0.2,
+  huntingSkill: 0.2,
+
 };
 
 function makeCell(temperature: number, water: number): Cell {
