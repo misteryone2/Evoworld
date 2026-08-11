@@ -20,6 +20,13 @@ export const TRAIT_RANGES: TraitRanges = {
   fertility: { min: 0.05, max: 1.0 },
   lifespan: { min: 50, max: 2000 },
   carnivory: { min: 0, max: 0.85 },
+  // Matches the planet's realistic temperature spread (see planet.ts:
+  // 32 - latitude*40 - elevation*10 +- noise, roughly -18..34).
+  preferredTemperature: { min: -15, max: 34 },
+  // Narrow (specialist) to broad (generalist) tolerance, in the same units as temperature.
+  temperatureTolerance: { min: 2, max: 25 },
+  preferredWater: { min: 0, max: 1 },
+  waterTolerance: { min: 0.05, max: 0.6 },
 };
 
 const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as (keyof Genome)[];
