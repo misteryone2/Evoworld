@@ -23,6 +23,19 @@ export interface Genome {
    * pressure as every other trait.
    */
   carnivory: number;
+  /**
+   * Environmental niche traits (v0.3.2). preferredTemperature/preferredWater
+   * are the cell conditions this organism is best adapted to; the
+   * *Tolerance traits control how narrow or broad that adaptation is. A
+   * narrow tolerance yields a higher fitness peak right at the preferred
+   * conditions (a specialist, excelling in one niche) while a broad
+   * tolerance yields a flatter, lower peak that performs adequately across
+   * a wider range (a generalist) — see simulation/biology/environment.ts.
+   */
+  preferredTemperature: number;
+  temperatureTolerance: number;
+  preferredWater: number;
+  waterTolerance: number;
 }
 
 export type TraitName = keyof Genome;
