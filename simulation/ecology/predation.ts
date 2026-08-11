@@ -26,9 +26,26 @@ const MEAT_ENERGY_VALUE = 55;
  * Predator hunting power. Both size and speed matter — a predator needs to
  * be able to catch and subdue prey, so this is not just "biggest wins":
  * a fast, smaller predator can still out-hunt a slow, larger one.
+ * huntingSkill (v0.3.3) is a direct multiplier on top of raw physical
+ * power, representing acumen (ambush timing, tracking, coordination) that
+ * specifically evolves in response to how evasive local prey have become.
  */
 function huntingPower(o: Organism): number {
-  return o.genome.size * o.genome.speed;
+  return o.genome.size * o.genome.speed * (1 + o.genome.huntingSkill);
+}
+
+/**
+ * Prey defensive power against a hunt. Uses the same size*speed base (a
+ * bigger/faster prey is inherently harder to catch too) plus a fixed
+ * baseline evasion advantage, multiplied by the prey's own evasion trait
+ * (v0.3.3) — vigilance/agility that specifically evolves in response to
+ * how skilled local predators have become. This is the other half of the
+ * arms race: evasion directly counters huntingSkill in the same formula,
+ * so neither trait can "win" once and for all — a rise in one creates
+ * selection pressure for the other to rise too.
+ */
+function defensivePower(o: Organism): number {
+  return o.genome.size * o.genome.speed * (1.15 + o.genome.evasion);
 }
 
 function distanceWrapped(ax: number, ay: number, bx: number, by: number, planet: Planet): number {
@@ -72,25 +89,26 @@ function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, 
 
 /**
  * Runs one tick of predation. Eligible predators (carnivory above
- * CARNIVORY_HUNT_THRESHOLD, and hungry — see HUNT_HUNGER_THRESHOLD) may
- * attempt to hunt the nearest valid prey within HUNT_RADIUS. A predator
- * only targets organisms with strictly lower carnivory than itself — this
- * keeps apex carnivores from endlessly preying on each other and gives the
- * food chain a clear direction.
+ * CARNIVORY_HUNT_THRESHOLD) may attempt to hunt the nearest valid prey
+ * within HUNT_RADIUS. A predator only targets organisms with strictly
+ * lower carnivory than itself — this keeps apex carnivores from endlessly
+ * preying on each other and gives the food chain a clear direction
+ * (herbivores and lower-carnivory omnivores are what gets hunted), while
+ * still leaving room for real omnivore/omnivore interactions.
  *
  * Hunt success is probabilistic, based on relative hunting power (size ×
- * speed) between predator and prey, with a small built-in evasion
- * advantage for prey so predators do not dominate unconditionally.
- * Additionally (v0.3.1), success is reduced by local interference
- * competition: the more other eligible predators are crowded into the same
- * area relative to available prey, the harder it is for any one of them to
- * actually land a kill. This is what stops high carnivory from being a
- * free win once many individuals share it — a population that is mostly
- * predators is mostly competing with itself for a shrinking prey pool, not
- * just facing a fixed per-encounter success rate. On a successful hunt,
- * the prey dies immediately and the predator gains energy scaled by its
- * own carnivory (a partial carnivore still gets a partial benefit from a
- * kill).
+ * speed × (1 + huntingSkill)) between predator and prey defensive power
+ * (size × speed × (1.15 + evasion)) (v0.3.3) — huntingSkill and evasion are
+ * directly opposed in this formula, which is what creates a genuine
+ * coevolutionary arms race: a rise in average evasion among prey erodes
+ * predators' success rate, creating selection pressure for higher
+ * huntingSkill, which in turn erodes prey survival and re-creates pressure
+ * for more evasion. Additionally (v0.3.1), success is reduced by local
+ * interference competition: the more other eligible predators are crowded
+ * into the same area relative to available prey, the harder it is for any
+ * one of them to actually land a kill. On a successful hunt, the prey dies
+ * immediately and the predator gains energy scaled by its own carnivory (a
+ * partial carnivore still gets a partial benefit from a kill).
  *
  * Returns the number of successful kills, for statistics.
  */
@@ -132,14 +150,11 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random): nu
     predator.energy -= HUNT_ENERGY_COST;
 
     const predatorPower = huntingPower(predator);
-    const preyPower = huntingPower(target) * 1.15; // slight evasion advantage for prey
+    const preyPower = defensivePower(target);
     const baseChance = predatorPower / (predatorPower + preyPower);
 
     // Interference competition: more rival predators sharing a thinner
-    // prey pool means each individual hunt is less likely to land,
-    // regardless of raw hunting power. A lone predator among abundant prey
-    // is barely affected; a predator-crowded area with scarce prey is
-    // strongly penalized.
+    // prey pool means each individual hunt is less likely to land.
     const interference = rivalPredators / (availablePrey + 1);
     const successChance = baseChance / (1 + interference);
 
