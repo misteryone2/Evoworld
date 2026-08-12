@@ -1,6 +1,8 @@
 import type { Organism } from "../../types";
 import { Random } from "../core/random";
 import { Planet } from "../planet/planet";
+import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped } from "./spatialIndex";
+import { recordDangerMemory } from "./behavior";
 
 const MAX_ENERGY = 150;
 
@@ -48,12 +50,6 @@ function defensivePower(o: Organism): number {
   return o.genome.size * o.genome.speed * (1.15 + o.genome.evasion);
 }
 
-function distanceWrapped(ax: number, ay: number, bx: number, by: number, planet: Planet): number {
-  const dx = Math.min(Math.abs(ax - bx), planet.width - Math.abs(ax - bx));
-  const dy = Math.min(Math.abs(ay - by), planet.height - Math.abs(ay - by));
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
 /**
  * Groups living organisms into spatial buckets sized to the hunt radius, so
  * a predator only needs to scan its own bucket and its 8 neighbors instead
@@ -61,30 +57,11 @@ function distanceWrapped(ax: number, ay: number, bx: number, by: number, planet:
  * which matters once populations reach the thousands.
  */
 function buildBuckets(organisms: Organism[], bucketSize: number): Map<string, Organism[]> {
-  const buckets = new Map<string, Organism[]>();
-  for (const o of organisms) {
-    if (!o.alive) continue;
-    const bx = Math.floor(o.position.x / bucketSize);
-    const by = Math.floor(o.position.y / bucketSize);
-    const key = `${bx},${by}`;
-    const list = buckets.get(key);
-    if (list) list.push(o);
-    else buckets.set(key, [o]);
-  }
-  return buckets;
+  return buildOrganismBuckets(organisms, bucketSize);
 }
 
 function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, bucketSize: number): Organism[] {
-  const bx = Math.floor(predator.position.x / bucketSize);
-  const by = Math.floor(predator.position.y / bucketSize);
-  const candidates: Organism[] = [];
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      const list = buckets.get(`${bx + dx},${by + dy}`);
-      if (list) candidates.push(...list);
-    }
-  }
-  return candidates;
+  return nearbyOrganisms(predator.position, buckets, bucketSize);
 }
 
 /**
@@ -112,7 +89,7 @@ function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, 
  *
  * Returns the number of successful kills, for statistics.
  */
-export function huntPrey(organisms: Organism[], planet: Planet, rng: Random): number {
+export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tick = 0): number {
   const bucketSize = HUNT_RADIUS;
   const buckets = buildBuckets(organisms, bucketSize);
   let kills = 0;
@@ -163,6 +140,12 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random): nu
       predator.energy = Math.min(MAX_ENERGY, predator.energy + energyGained);
       target.alive = false;
       kills++;
+    } else {
+      // The target survives a real attempt on its life (v0.5): it remembers
+      // where this happened, which biases its future movement away from
+      // the spot — a lightweight "close call" learning signal, separate
+      // from the genetic evasion trait.
+      recordDangerMemory(target, tick);
     }
   }
 
