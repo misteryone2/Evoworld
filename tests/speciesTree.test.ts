@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { buildSpeciesTree, indexSpeciesTree } from "../lib/speciesTree";
-import type { SpeciesRecord } from "../types";
+import { TRAIT_RANGES } from "../simulation/biology/genome";
+import type { Genome, SpeciesRecord } from "../types";
+
+const baseGenome: Genome = {
+  size: TRAIT_RANGES.size.min,
+  speed: TRAIT_RANGES.speed.min,
+  metabolism: TRAIT_RANGES.metabolism.min,
+  vision: TRAIT_RANGES.vision.min,
+  fertility: TRAIT_RANGES.fertility.min,
+  lifespan: TRAIT_RANGES.lifespan.min,
+  carnivory: TRAIT_RANGES.carnivory.min,
+  preferredTemperature: TRAIT_RANGES.preferredTemperature.min,
+  temperatureTolerance: TRAIT_RANGES.temperatureTolerance.min,
+  preferredWater: TRAIT_RANGES.preferredWater.min,
+  waterTolerance: TRAIT_RANGES.waterTolerance.min,
+  evasion: TRAIT_RANGES.evasion.min,
+  huntingSkill: TRAIT_RANGES.huntingSkill.min,
+};
 
 function record(overrides: Partial<SpeciesRecord>): SpeciesRecord {
   return {
@@ -11,6 +28,7 @@ function record(overrides: Partial<SpeciesRecord>): SpeciesRecord {
     population: 10,
     alive: true,
     extinctionTick: null,
+    originGenomeSnapshot: baseGenome,
     ...overrides,
   };
 }
