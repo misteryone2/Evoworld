@@ -66,6 +66,21 @@ export interface Vector2 {
   y: number;
 }
 
+/**
+ * A single remembered location (v0.5 — comportamenti avanzati). Organisms
+ * have room for exactly one memory at a time: the most recent salient
+ * event overwrites whatever was remembered before. This is a deliberate
+ * simplification (no spatial map, no memory of multiple sites) that still
+ * lets a hungry organism return to the last good feeding ground it found,
+ * or steer clear of the last place it narrowly survived a hunt.
+ */
+export interface OrganismMemory {
+  x: number;
+  y: number;
+  tick: number;
+  kind: "food" | "danger";
+}
+
 /** A single living organism. */
 export interface Organism {
   id: number;
@@ -75,6 +90,14 @@ export interface Organism {
   age: number;
   genome: Genome;
   alive: boolean;
+  /**
+   * Fixed birth location (v0.5), used for territoriality: an organism
+   * defends the area around its own home against same-species intruders
+   * that are not themselves near their own home.
+   */
+  home: Vector2;
+  /** See OrganismMemory. null until the organism experiences something worth remembering. */
+  memory: OrganismMemory | null;
 }
 
 /**
