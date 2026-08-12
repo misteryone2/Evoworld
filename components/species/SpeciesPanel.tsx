@@ -14,12 +14,13 @@ export function SpeciesPanel({ frame }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const speciesTree = frame?.speciesTree ?? [];
 
-  const { record, parent, directChildren } = useMemo(() => {
+  const { record, parent, directChildren, genomeStats } = useMemo(() => {
     const record = speciesTree.find((r) => r.speciesId === selectedId) ?? null;
     const parent = record?.parentSpeciesId != null ? speciesTree.find((r) => r.speciesId === record.parentSpeciesId) ?? null : null;
     const directChildren = record ? speciesTree.filter((r) => r.parentSpeciesId === record.speciesId) : [];
-    return { record, parent, directChildren };
-  }, [speciesTree, selectedId]);
+    const genomeStats = frame?.speciesGenomeStats.find((s) => s.speciesId === selectedId) ?? null;
+    return { record, parent, directChildren, genomeStats };
+  }, [speciesTree, selectedId, frame]);
 
   if (!frame) {
     return <div className="species-panel">Inizializzazione del mondo…</div>;
@@ -30,7 +31,7 @@ export function SpeciesPanel({ frame }: Props) {
       <h2>Albero evolutivo</h2>
       <div className="species-panel-body">
         <SpeciesTree speciesTree={speciesTree} selectedId={selectedId} onSelect={setSelectedId} />
-        <SpeciesDetail record={record} parent={parent} directChildren={directChildren} frame={frame} />
+        <SpeciesDetail record={record} parent={parent} directChildren={directChildren} frame={frame} genomeStats={genomeStats} />
       </div>
     </div>
   );
