@@ -20,6 +20,8 @@ export function createOrganism(
     age: 0,
     genome,
     alive: true,
+    home: { x, y },
+    memory: null,
   };
 }
 
