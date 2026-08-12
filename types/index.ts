@@ -121,6 +121,46 @@ export interface SpeciesRecord {
   population: number;
   alive: boolean;
   extinctionTick: number | null;
+  /**
+   * Average genome of the founding group, captured once at the moment this
+   * species came into existence (v0.4.1). This is a frozen snapshot, never
+   * updated afterward: its only purpose is to let later analysis measure
+   * how far a lineage has drifted since its origin, even after the parent
+   * species itself has gone extinct and no living organisms of it remain
+   * to compare against.
+   */
+  originGenomeSnapshot: Genome;
+}
+
+/** Per-trait descriptive statistics across a group of organisms (v0.4.1, observability only). */
+export interface TraitStats {
+  mean: number;
+  min: number;
+  max: number;
+  stdDev: number;
+}
+
+export type GenomeStats = Record<TraitName, TraitStats>;
+
+/** Genetic distance from one currently-alive species to another, for cross-species comparison. */
+export interface SpeciesDistance {
+  speciesId: number;
+  distance: number;
+}
+
+/**
+ * Full genetic analysis for one currently-alive species (v0.4.1): current
+ * trait-by-trait statistics (mean/min/max/stdDev, i.e. internal
+ * variability), genetic distance from its parent species' origin snapshot
+ * (total drift since speciation), and genetic distance from every other
+ * currently-alive species (for cross-species comparison).
+ */
+export interface SpeciesGenomeStats {
+  speciesId: number;
+  population: number;
+  genomeStats: GenomeStats;
+  distanceFromParentOrigin: number | null;
+  distanceFromOtherSpecies: SpeciesDistance[];
 }
 
 /** Aggregated statistics computed once per tick for the UI. */
@@ -172,6 +212,9 @@ export interface RenderFrame {
   organismsSize: Float32Array;
   // Full species genealogy, small enough to send as a plain array every frame.
   speciesTree: SpeciesRecord[];
+  // Per-species genetic analysis (v0.4.1): current trait stats, drift from
+  // parent's origin snapshot, distances to other living species.
+  speciesGenomeStats: SpeciesGenomeStats[];
 }
 
 // ---- Worker <-> UI message protocol -------------------------------------
