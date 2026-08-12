@@ -13,6 +13,8 @@ import { averageGenome, randomGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { feedOrganisms } from "../ecology/feeding";
 import { huntPrey } from "../ecology/predation";
+import { buildOrganismBuckets } from "../ecology/spatialIndex";
+import { BEHAVIOR_BUCKET_SIZE } from "../ecology/behavior";
 import { reproduceOrganisms } from "../evolution/reproduction";
 import {
   attemptSpeciation,
@@ -89,19 +91,22 @@ export class World {
     // 1. environment (includes seasonal cycle and dynamic biome shifts)
     this.planet.update(this.tick);
 
-    // 2 & 3. metabolism + movement
+    // 2 & 3. metabolism + movement. Buckets are built once from
+    // pre-movement positions and shared by every organism's behavioral bias
+    // computation this tick (v0.5: flocking/fear/hunting-seek/territoriality).
+    const behaviorBuckets = buildOrganismBuckets(this.organisms, BEHAVIOR_BUCKET_SIZE);
     for (const o of this.organisms) {
       if (!o.alive) continue;
       o.age++;
       o.energy -= upkeepCost(o);
-      moveOrganism(o, this.planet, this.rng);
+      moveOrganism(o, this.planet, this.rng, behaviorBuckets, BEHAVIOR_BUCKET_SIZE, this.tick);
     }
 
     // 4. feeding (vegetation, weighted by 1 - carnivory)
     feedOrganisms(this.organisms, this.planet);
 
     // 4b. predation (v0.3): carnivorous organisms may hunt nearby prey
-    const predationKills = huntPrey(this.organisms, this.planet, this.rng);
+    const predationKills = huntPrey(this.organisms, this.planet, this.rng, this.tick);
 
     // 5. death + removal (includes organisms killed by predation above)
     let deaths = 0;
