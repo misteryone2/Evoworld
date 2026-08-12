@@ -1,15 +1,29 @@
 import type { Organism } from "../../types";
 import { Random } from "../core/random";
 import { Planet } from "../planet/planet";
+import { computeBehaviorBias, recordFoodMemory } from "./behavior";
+
+/** Relative weight of vegetation-seeking versus the combined behavioral bias (flocking/fear/hunting-seek/territoriality/memory). */
+const VEGETATION_SEEK_WEIGHT = 1;
 
 /**
- * Moves an organism by one step. Movement is simple for v0.1: a random walk
- * biased toward cells with more vegetation within the organism's vision
- * range, scaled by its speed trait. This is intentionally not a full
- * sensory/decision system (that belongs to a later roadmap version) but it
- * is enough for food-seeking behavior to matter for survival.
+ * Moves an organism by one step. The base drive (since v0.1) is a bias
+ * toward cells with more vegetation within the organism's vision range,
+ * scaled by its speed trait. Since v0.5, that vegetation-seeking direction
+ * is blended with a behavioral bias vector (see behavior.ts: flocking,
+ * fear, hunting-seek, territoriality, spatial memory) before the organism
+ * actually commits to a step — so a hungry herbivore might still veer
+ * toward the best-looking patch of grass, but a nearby predator, a remembered
+ * danger spot, or the pull of its own flock can override or bend that path.
  */
-export function moveOrganism(organism: Organism, planet: Planet, rng: Random): void {
+export function moveOrganism(
+  organism: Organism,
+  planet: Planet,
+  rng: Random,
+  buckets: Map<string, Organism[]>,
+  bucketSize: number,
+  tick: number,
+): void {
   const { x, y } = organism.position;
   const visionRadius = Math.max(1, Math.round(organism.genome.vision / 5));
   const speed = Math.max(1, Math.round(organism.genome.speed));
@@ -32,8 +46,18 @@ export function moveOrganism(organism: Organism, planet: Planet, rng: Random): v
     }
   }
 
-  const dirX = Math.sign(bestX - x) || rng.intRange(-1, 1);
-  const dirY = Math.sign(bestY - y) || rng.intRange(-1, 1);
+  const behavior = computeBehaviorBias(organism, planet, buckets, bucketSize, tick);
+
+  let dirX = Math.sign(bestX - x) * VEGETATION_SEEK_WEIGHT + behavior.dx;
+  let dirY = Math.sign(bestY - y) * VEGETATION_SEEK_WEIGHT + behavior.dy;
+
+  if (Math.abs(dirX) < 0.01 && Math.abs(dirY) < 0.01) {
+    dirX = rng.intRange(-1, 1);
+    dirY = rng.intRange(-1, 1);
+  }
+  const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+  dirX /= mag;
+  dirY /= mag;
 
   const newX = wrap(x + dirX * speed * rng.range(0.5, 1), planet.width);
   const newY = wrap(y + dirY * speed * rng.range(0.5, 1), planet.height);
@@ -48,6 +72,7 @@ export function moveOrganism(organism: Organism, planet: Planet, rng: Random): v
 
   organism.position.x = newX;
   organism.position.y = newY;
+  recordFoodMemory(organism, landingCell.vegetation, tick);
 }
 
 function wrap(value: number, max: number): number {
