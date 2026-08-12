@@ -108,16 +108,17 @@ describe("population divergence over generations", () => {
 
 describe("speciation registry", () => {
   it("initializes with a single root species", () => {
-    const registry = initializeSpeciesRegistry(1, 50);
+    const registry = initializeSpeciesRegistry(1, 50, lowGenome);
     expect(registry.size).toBe(1);
     const root = registry.get(1)!;
     expect(root.parentSpeciesId).toBeNull();
     expect(root.alive).toBe(true);
     expect(root.population).toBe(50);
+    expect(root.originGenomeSnapshot).toEqual(lowGenome);
   });
 
   it("marks a species extinct once its population drops to zero, recording the tick", () => {
-    const registry = initializeSpeciesRegistry(1, 10);
+    const registry = initializeSpeciesRegistry(1, 10, lowGenome);
     const survivors = [createOrganism(1, 1, 0, 0, lowGenome, 50)];
     survivors[0].alive = false;
 
@@ -130,7 +131,7 @@ describe("speciation registry", () => {
   });
 
   it("keeps a species alive and updates its population while members remain", () => {
-    const registry = initializeSpeciesRegistry(1, 2);
+    const registry = initializeSpeciesRegistry(1, 2, lowGenome);
     const organisms = [
       createOrganism(1, 1, 0, 0, lowGenome),
       createOrganism(2, 1, 1, 1, lowGenome),
@@ -147,7 +148,7 @@ describe("speciation registry", () => {
 
   it("creates a new species when a population splits into two geographically and genetically diverged clusters", () => {
     const rng = new Random(7);
-    const registry = initializeSpeciesRegistry(1, 0);
+    const registry = initializeSpeciesRegistry(1, 0, lowGenome);
     const organisms = [];
 
     for (let i = 0; i < MIN_SPECIATION_POPULATION + 2; i++) {
@@ -176,9 +177,34 @@ describe("speciation registry", () => {
     expect(speciesIdsUsed.size).toBe(2);
   });
 
+  it("captures the splitting cluster's average genome as the new species' originGenomeSnapshot", () => {
+    const rng = new Random(7);
+    const registry = initializeSpeciesRegistry(1, 0, lowGenome);
+    const organisms = [];
+
+    for (let i = 0; i < MIN_SPECIATION_POPULATION + 2; i++) {
+      organisms.push(createOrganism(i + 1, 1, i * 0.1, i * 0.1, { ...lowGenome }, 100));
+    }
+    for (let i = 0; i < MIN_SPECIATION_POPULATION + 2; i++) {
+      organisms.push(createOrganism(i + 100, 1, 90 + i * 0.1, 90 + i * 0.1, { ...highGenome }, 100));
+    }
+
+    let nextSpeciesId = 2;
+    const newRecords = attemptSpeciation(organisms, registry, 400, 1, rng, () => nextSpeciesId++);
+
+    expect(newRecords.length).toBeGreaterThan(0);
+    const newRecord = newRecords[0];
+    // The snapshot should closely match either the low- or high-genome
+    // cluster it split from (small deviation from exact equality is
+    // expected: k-means may not land on a perfectly pure partition).
+    const distanceToLow = geneticDistance(newRecord.originGenomeSnapshot, lowGenome);
+    const distanceToHigh = geneticDistance(newRecord.originGenomeSnapshot, highGenome);
+    expect(Math.min(distanceToLow, distanceToHigh)).toBeLessThan(0.1);
+  });
+
   it("does not speciate a population that is too small or not genetically diverged", () => {
     const rng = new Random(9);
-    const registry = initializeSpeciesRegistry(1, 0);
+    const registry = initializeSpeciesRegistry(1, 0, lowGenome);
     const organisms = [];
     for (let i = 0; i < 30; i++) {
       organisms.push(createOrganism(i + 1, 1, 50 + (i % 3), 50 + (i % 3), { ...lowGenome }, 100));
