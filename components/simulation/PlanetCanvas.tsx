@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { RenderFrame } from "../../types";
+import { speciesColor } from "../../lib/speciesColor";
 
 // Terrain codes must match simulation/core/renderFrame.ts TERRAIN_CODE.
 const TERRAIN_COLORS: Record<number, string> = {
@@ -23,8 +24,6 @@ const TERRAIN_LABELS: Record<number, string> = {
   5: "Tundra",
   6: "Savana",
 };
-
-const SPECIES_HUES = [16, 195, 300, 48, 130, 260, 0, 170];
 
 interface Props {
   frame: RenderFrame | null;
@@ -56,10 +55,9 @@ export function PlanetCanvas({ frame }: Props) {
 
     const { organismsX, organismsY, organismsSpecies, organismsSize } = frame;
     for (let i = 0; i < organismsX.length; i++) {
-      const hue = SPECIES_HUES[organismsSpecies[i] % SPECIES_HUES.length];
       const r = Math.max(1.2, organismsSize[i] * 1.6);
       ctx.beginPath();
-      ctx.fillStyle = `hsl(${hue} 85% 62%)`;
+      ctx.fillStyle = speciesColor(organismsSpecies[i]);
       ctx.arc(organismsX[i] * cellSize, organismsY[i] * cellSize, r, 0, Math.PI * 2);
       ctx.fill();
     }
