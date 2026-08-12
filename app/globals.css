@@ -286,6 +286,192 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
+/* v0.4 — albero evolutivo + osservazione */
+
+.species-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.species-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.species-panel-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+@media (max-width: 700px) {
+  .species-panel-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.species-tree,
+.species-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.species-tree ul {
+  padding-left: 1.1rem;
+  border-left: 1px solid var(--line);
+  margin-left: 0.5rem;
+}
+
+.species-tree li {
+  margin: 0.2rem 0;
+}
+
+.species-tree-empty,
+.species-detail-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
+.species-node {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  color: var(--text);
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.species-node:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.species-node.selected {
+  border-color: var(--signal-dim);
+  background: rgba(107, 255, 176, 0.08);
+}
+
+.species-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.species-swatch.large {
+  width: 16px;
+  height: 16px;
+}
+
+.species-id {
+  font-weight: 600;
+}
+
+.species-status {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.species-status.alive {
+  color: var(--signal);
+  border-color: var(--signal-dim);
+}
+
+.species-status.extinct {
+  color: var(--text-dim);
+}
+
+.species-pop {
+  color: var(--text-dim);
+}
+
+.species-descendants {
+  margin-left: auto;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.species-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.species-detail-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.species-facts {
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.species-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.species-fact dt {
+  color: var(--text-dim);
+}
+
+.species-fact dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+}
+
+.species-geo h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.species-geo-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.species-minimap {
+  width: 100%;
+  max-width: 220px;
+  aspect-ratio: 1 / 1;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  image-rendering: pixelated;
+}
+
 .season-badge {
   display: inline-flex;
   align-items: center;
@@ -298,4 +484,3 @@ body {
   padding: 0.25rem 0.7rem;
   margin-bottom: 1rem;
 }
-
