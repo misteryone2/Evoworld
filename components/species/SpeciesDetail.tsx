@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import type { RenderFrame, SpeciesRecord } from "../../types";
+import type { RenderFrame, SpeciesGenomeStats, SpeciesRecord } from "../../types";
 import { speciesColor } from "../../lib/speciesColor";
+import { SpeciesGenetics } from "./SpeciesGenetics";
 
 interface Props {
   record: SpeciesRecord | null;
   parent: SpeciesRecord | null;
   directChildren: SpeciesRecord[];
   frame: RenderFrame | null;
+  genomeStats: SpeciesGenomeStats | null;
 }
 
 /**
@@ -21,7 +23,7 @@ interface Props {
  * selected species, plus a minimap plotting just its individuals against
  * the full population as faint background dots.
  */
-export function SpeciesDetail({ record, parent, directChildren, frame }: Props) {
+export function SpeciesDetail({ record, parent, directChildren, frame, genomeStats }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const geo = useMemo(() => computeGeography(record?.speciesId ?? null, frame), [record, frame]);
@@ -95,6 +97,11 @@ export function SpeciesDetail({ record, parent, directChildren, frame }: Props) 
         ) : (
           <p className="species-geo-empty">Nessun individuo di questa specie attualmente sulla mappa.</p>
         )}
+      </div>
+
+      <div className="species-genetics-section">
+        <h4>Analisi genetica</h4>
+        <SpeciesGenetics genomeStats={genomeStats} parentSpeciesId={parent?.speciesId ?? null} />
       </div>
     </div>
   );
