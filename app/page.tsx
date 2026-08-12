@@ -4,6 +4,7 @@ import { useSimulation } from "../lib/useSimulation";
 import { PlanetCanvas } from "../components/simulation/PlanetCanvas";
 import { Controls } from "../components/ui/Controls";
 import { StatsPanel } from "../components/ui/StatsPanel";
+import { SpeciesPanel } from "../components/species/SpeciesPanel";
 
 export default function Home() {
   const { frame, speed, setSpeed, togglePause, reset, ready } = useSimulation();
@@ -19,6 +20,7 @@ export default function Home() {
         <div className="canvas-column">
           <PlanetCanvas frame={frame} />
           <Controls speed={speed} onSetSpeed={setSpeed} onTogglePause={togglePause} onReset={() => reset()} />
+          <SpeciesPanel frame={frame} />
         </div>
 
         <aside className="sidebar">
