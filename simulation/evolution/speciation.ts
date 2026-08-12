@@ -1,4 +1,4 @@
-import type { Organism, SpeciesRecord } from "../../types";
+import type { Genome, Organism, SpeciesRecord } from "../../types";
 import { Random } from "../core/random";
 import { averageGenome, geneticDistance, SPECIATION_DISTANCE_THRESHOLD } from "../biology/genome";
 
@@ -29,7 +29,11 @@ export const MIN_SPECIATION_POPULATION = 8;
 export const SPECIATION_CHECK_INTERVAL = 200;
 
 /** Creates the initial registry containing only the founding species. */
-export function initializeSpeciesRegistry(rootSpeciesId: number, population: number): Map<number, SpeciesRecord> {
+export function initializeSpeciesRegistry(
+  rootSpeciesId: number,
+  population: number,
+  originGenomeSnapshot: Genome,
+): Map<number, SpeciesRecord> {
   const registry = new Map<number, SpeciesRecord>();
   registry.set(rootSpeciesId, {
     speciesId: rootSpeciesId,
@@ -39,6 +43,7 @@ export function initializeSpeciesRegistry(rootSpeciesId: number, population: num
     population,
     alive: true,
     extinctionTick: null,
+    originGenomeSnapshot,
   });
   return registry;
 }
@@ -184,6 +189,7 @@ export function attemptSpeciation(
     // speciesId, so a species' identity persists through its majority
     // lineage rather than always being replaced.
     const splitting = clusterA.length <= clusterB.length ? clusterA : clusterB;
+    const splittingCentroid = clusterA.length <= clusterB.length ? centroidA : centroidB;
     const newId = nextSpeciesId();
     for (const o of splitting) o.speciesId = newId;
 
@@ -195,6 +201,7 @@ export function attemptSpeciation(
       population: splitting.length,
       alive: true,
       extinctionTick: null,
+      originGenomeSnapshot: splittingCentroid,
     };
     registry.set(newId, record);
     newRecords.push(record);
