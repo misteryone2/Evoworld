@@ -58,5 +58,6 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsSpecies,
     organismsSize,
     speciesTree: world.getSpeciesTree(),
+    speciesGenomeStats: world.getSpeciesGenomeStats(),
   };
 }
