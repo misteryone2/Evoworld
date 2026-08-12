@@ -471,6 +471,87 @@ body {
   border: 1px solid var(--line);
   image-rendering: pixelated;
 }
+/* v0.4.1 — analisi genetica */
+
+.species-genetics-section h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.species-genetics-empty {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
+.trait-bars {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+.trait-bar-header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+}
+
+.trait-bar-mean {
+  color: var(--signal);
+  font-weight: 600;
+}
+
+.trait-bar-range {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.trait-bar-stddev {
+  color: var(--amber);
+}
+
+.species-distances h5 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 0.75rem 0 0.4rem;
+}
+
+.species-distances ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.species-distances li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.distance-value {
+  margin-left: auto;
+  color: var(--text);
+}
+
 
 .season-badge {
   display: inline-flex;
