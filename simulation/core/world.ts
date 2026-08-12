@@ -2,13 +2,14 @@ import type {
   Organism,
   PlanetConfig,
   SimulationStats,
+  SpeciesGenomeStats,
   SpeciesRecord,
   WorldSnapshot,
 } from "../../types";
 import { Random } from "./random";
 import { Planet } from "../planet/planet";
 import { createRandomOrganism, upkeepCost, isDying } from "../biology/organism";
-import { averageGenome } from "../biology/genome";
+import { averageGenome, randomGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { feedOrganisms } from "../ecology/feeding";
 import { huntPrey } from "../ecology/predation";
@@ -19,6 +20,7 @@ import {
   updateSpeciesPopulations,
   SPECIATION_CHECK_INTERVAL,
 } from "../evolution/speciation";
+import { computeSpeciesGenomeStats } from "../evolution/speciesAnalysis";
 import { TICKS_PER_YEAR } from "./constants";
 
 /**
@@ -58,18 +60,26 @@ export class World {
     const speciesId = this.nextSpeciesId++;
     let placed = 0;
     let attempts = 0;
+    const founders: Organism[] = [];
     while (placed < count && attempts < count * 20) {
       attempts++;
       const x = this.rng.range(0, this.planet.width);
       const y = this.rng.range(0, this.planet.height);
       const cell = this.planet.getCell(Math.round(x) % this.planet.width, Math.round(y) % this.planet.height);
       if (cell.terrain === "ocean") continue;
-      this.organisms.push(
-        createRandomOrganism(this.nextOrganismId++, speciesId, x, y, this.rng),
-      );
+      const organism = createRandomOrganism(this.nextOrganismId++, speciesId, x, y, this.rng);
+      this.organisms.push(organism);
+      founders.push(organism);
       placed++;
     }
-    this.speciesRegistry = initializeSpeciesRegistry(speciesId, placed);
+    const originGenomeSnapshot = averageGenome(founders.map((o) => o.genome));
+    this.speciesRegistry = initializeSpeciesRegistry(
+      speciesId,
+      placed,
+      // founders is always non-empty in practice (initialPopulation > 0);
+      // fall back to a fresh random genome defensively rather than throw.
+      originGenomeSnapshot ?? randomGenome(this.rng),
+    );
   }
 
   /** Runs exactly one simulation tick, per the documented 8-step cycle. */
@@ -152,6 +162,11 @@ export class World {
   /** Full species genealogy (living and extinct), for the UI/albero evolutivo. */
   getSpeciesTree(): SpeciesRecord[] {
     return Array.from(this.speciesRegistry.values());
+  }
+
+  /** Per-species genetic analysis for every currently-alive species (v0.4.1). */
+  getSpeciesGenomeStats(): SpeciesGenomeStats[] {
+    return computeSpeciesGenomeStats(this.organisms, this.speciesRegistry);
   }
 
   toSnapshot(): WorldSnapshot {
