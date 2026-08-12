@@ -1,4 +1,4 @@
-import type { Genome, TraitRanges } from "../../types";
+import type { Genome, GenomeStats, TraitRanges } from "../../types";
 import { Random } from "../core/random";
 
 /**
@@ -135,6 +135,42 @@ export function averageGenome(genomes: Genome[]): Genome | null {
   const avg = {} as Genome;
   for (const trait of TRAIT_NAMES) avg[trait] = sum[trait] / genomes.length;
   return avg;
+}
+
+/**
+ * Per-trait descriptive statistics (mean, min, max, standard deviation)
+ * across a group of genomes (v0.4.1, observability only — does not affect
+ * selection, reproduction, or mutation). Standard deviation is the measure
+ * of "internal variability": a species with near-zero stdDev on a trait has
+ * essentially converged on that trait, while a high stdDev signals ongoing
+ * standing variation that could still be a substrate for future selection
+ * or speciation.
+ */
+export function genomeStats(genomes: Genome[]): GenomeStats | null {
+  if (genomes.length === 0) return null;
+  const mean = averageGenome(genomes);
+  if (!mean) return null;
+
+  const stats = {} as GenomeStats;
+  for (const trait of TRAIT_NAMES) {
+    let min = Infinity;
+    let max = -Infinity;
+    let sumSquaredDiff = 0;
+    for (const g of genomes) {
+      const value = g[trait];
+      if (value < min) min = value;
+      if (value > max) max = value;
+      const diff = value - mean[trait];
+      sumSquaredDiff += diff * diff;
+    }
+    stats[trait] = {
+      mean: mean[trait],
+      min,
+      max,
+      stdDev: Math.sqrt(sumSquaredDiff / genomes.length),
+    };
+  }
+  return stats;
 }
 
 /**
