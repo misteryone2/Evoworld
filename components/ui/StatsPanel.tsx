@@ -1,20 +1,11 @@
 "use client";
 
-import type { SimulationStats } from "../../types";
+import type { SimulationStats, TraitName } from "../../types";
+import { TRAIT_LABELS } from "../../lib/traitLabels";
 
 interface Props {
   stats: SimulationStats | null;
 }
-
-const TRAIT_LABELS: Record<string, string> = {
-  size: "Dimensione",
-  speed: "Velocità",
-  metabolism: "Metabolismo",
-  vision: "Vista",
-  fertility: "Fertilità",
-  lifespan: "Longevità",
-  carnivory: "Carnivoria",
-};
 
 const SEASON_ICONS: Record<string, string> = {
   primavera: "🌱",
@@ -52,7 +43,7 @@ export function StatsPanel({ stats }: Props) {
           <ul className="genome-list">
             {Object.entries(stats.averageGenome).map(([trait, value]) => (
               <li key={trait}>
-                <span>{TRAIT_LABELS[trait] ?? trait}</span>
+                <span>{TRAIT_LABELS[trait as TraitName] ?? trait}</span>
                 <span>{(value as number).toFixed(2)}</span>
               </li>
             ))}
