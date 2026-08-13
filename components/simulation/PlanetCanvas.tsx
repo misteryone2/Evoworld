@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import type { RenderFrame } from "../../types";
 import { speciesColor } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
+import { terrainColorCSS } from "../../lib/terrainColor";
 import { drawCreature } from "./drawCreature";
 
 // Terrain codes must match simulation/core/renderFrame.ts TERRAIN_CODE.
@@ -50,7 +51,7 @@ export function PlanetCanvas({ frame }: Props) {
         const idx = y * planetWidth + x;
         const t = terrain[idx];
         const veg = vegetation[idx];
-        ctx.fillStyle = shadeTerrain(t, veg);
+        ctx.fillStyle = terrainColorCSS(t, veg);
         ctx.fillRect(x * cellSize, y * cellSize, cellSize + 0.5, cellSize + 0.5);
       }
     }
@@ -105,31 +106,4 @@ export function PlanetCanvas({ frame }: Props) {
       </ul>
     </div>
   );
-}
-
-function shadeTerrain(terrainCode: number, vegetation: number): string {
-  // ocean, mountain, tundra: fixed color, not vegetation-blended.
-  if (terrainCode === 0 || terrainCode === 3 || terrainCode === 5) {
-    return TERRAIN_COLORS[terrainCode];
-  }
-  if (terrainCode === 2) {
-    // desert lightly greens with vegetation
-    const g = Math.round(140 + vegetation * 40);
-    return `rgb(${194 - vegetation * 60}, ${g}, 90)`;
-  }
-  if (terrainCode === 4) {
-    // forest: darker and richer with more vegetation
-    const g = Math.round(70 + vegetation * 70);
-    return `rgb(${20 + (1 - vegetation) * 30}, ${g}, ${40 + (1 - vegetation) * 20})`;
-  }
-  if (terrainCode === 6) {
-    // savanna: warm tan blended slightly with green
-    const g = Math.round(120 + vegetation * 40);
-    return `rgb(${168 - vegetation * 30}, ${g}, 60)`;
-  }
-  // plains: interpolate from dry tan to lush green based on vegetation
-  const r = Math.round(120 - vegetation * 50);
-  const g = Math.round(110 + vegetation * 70);
-  const b = Math.round(70 - vegetation * 20);
-  return `rgb(${r}, ${g}, ${b})`;
 }
