@@ -233,6 +233,14 @@ export interface RenderFrame {
   organismsY: Float32Array;
   organismsSpecies: Uint16Array;
   organismsSize: Float32Array;
+  // Additional per-organism traits (v0.6), sent alongside size so the
+  // renderer can draw a genuinely procedural creature per individual
+  // instead of a plain colored circle — see lib/creatureShape.ts.
+  organismsSpeed: Float32Array;
+  organismsCarnivory: Float32Array;
+  organismsVision: Float32Array;
+  organismsEvasion: Float32Array;
+  organismsHuntingSkill: Float32Array;
   // Full species genealogy, small enough to send as a plain array every frame.
   speciesTree: SpeciesRecord[];
   // Per-species genetic analysis (v0.4.1): current trait stats, drift from
