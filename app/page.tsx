@@ -1,7 +1,7 @@
 "use client";
 
 import { useSimulation } from "../lib/useSimulation";
-import { PlanetCanvas } from "../components/simulation/PlanetCanvas";
+import { Planet3DView } from "../components/simulation/Planet3DView";
 import { Controls } from "../components/ui/Controls";
 import { StatsPanel } from "../components/ui/StatsPanel";
 import { SpeciesPanel } from "../components/species/SpeciesPanel";
@@ -18,7 +18,7 @@ export default function Home() {
 
       <section className="workspace">
         <div className="canvas-column">
-          <PlanetCanvas frame={frame} />
+          <Planet3DView frame={frame} />
           <Controls speed={speed} onSetSpeed={setSpeed} onTogglePause={togglePause} onReset={() => reset()} />
           <SpeciesPanel frame={frame} />
         </div>
