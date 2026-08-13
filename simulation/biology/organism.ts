@@ -1,6 +1,7 @@
 import type { Genome, Organism } from "../../types";
 import { Random } from "../core/random";
 import { randomGenome } from "./genome";
+import { BRAIN_SIZE, randomBrain } from "./brain";
 
 const STARTING_ENERGY = 50;
 
@@ -11,6 +12,12 @@ export function createOrganism(
   y: number,
   genome: Genome,
   energy: number = STARTING_ENERGY,
+  // Deterministic all-zero default (not a random brain — that would
+  // require an rng and break reproducibility from a seed for any caller
+  // that doesn't explicitly care about brains, e.g. most tests). Every
+  // real gameplay path (seedPopulation in world.ts, reproduceOrganisms)
+  // always passes an explicit, properly-seeded brain.
+  brain: Float32Array = new Float32Array(BRAIN_SIZE),
 ): Organism {
   return {
     id,
@@ -22,6 +29,7 @@ export function createOrganism(
     alive: true,
     home: { x, y },
     memory: null,
+    brain,
   };
 }
 
@@ -32,7 +40,7 @@ export function createRandomOrganism(
   y: number,
   rng: Random,
 ): Organism {
-  return createOrganism(id, speciesId, x, y, randomGenome(rng));
+  return createOrganism(id, speciesId, x, y, randomGenome(rng), undefined, randomBrain(rng));
 }
 
 /**
