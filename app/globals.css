@@ -576,3 +576,23 @@ body {
   padding: 0.25rem 0.7rem;
   margin-bottom: 1rem;
 }
+
+
+/* v0.7 — mondo 3D */
+
+.planet-canvas-3d {
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.planet-canvas-3d:active {
+  cursor: grabbing;
+}
+
+.planet-canvas-3d canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
