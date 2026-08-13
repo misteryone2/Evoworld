@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Planet } from "../simulation/planet/planet";
 import { createOrganism } from "../simulation/biology/organism";
 import { buildOrganismBuckets } from "../simulation/ecology/spatialIndex";
-import { computeBehaviorBias, recordFoodMemory, recordDangerMemory, BEHAVIOR_BUCKET_SIZE } from "../simulation/ecology/behavior";
+import { computeSensoryChannels, recordFoodMemory, recordDangerMemory, BEHAVIOR_BUCKET_SIZE } from "../simulation/ecology/behavior";
 import type { Genome } from "../types";
 
 const baseGenome: Genome = {
@@ -21,133 +21,133 @@ const baseGenome: Genome = {
   huntingSkill: 0.2,
 };
 
-function bias(organisms: ReturnType<typeof createOrganism>[], planet: Planet, self: ReturnType<typeof createOrganism>, tick = 0) {
+function sense(organisms: ReturnType<typeof createOrganism>[], planet: Planet, self: ReturnType<typeof createOrganism>, tick = 0) {
   const buckets = buildOrganismBuckets(organisms, BEHAVIOR_BUCKET_SIZE);
-  return computeBehaviorBias(self, planet, buckets, BEHAVIOR_BUCKET_SIZE, tick);
+  return computeSensoryChannels(self, planet, buckets, BEHAVIOR_BUCKET_SIZE, tick);
 }
 
-describe("computeBehaviorBias — flocking", () => {
-  it("cohesion pulls an organism toward a same-species neighbor at moderate distance", () => {
+describe("computeSensoryChannels — energy", () => {
+  it("reports energy normalized to roughly [0, 1]", () => {
+    const planet = new Planet({ width: 40, height: 40, seed: 1 });
+    const self = createOrganism(1, 1, 20, 20, { ...baseGenome }, 75);
+    const result = sense([self], planet, self);
+    expect(result.energyNorm).toBeCloseTo(0.5, 1); // 75 / MAX_ENERGY(150)
+  });
+});
+
+describe("computeSensoryChannels — flocking", () => {
+  it("flock channel points toward a same-species neighbor at moderate distance (cohesion)", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
     const neighbor = createOrganism(2, 1, 20, 24, { ...baseGenome }); // 4 cells away, above separation radius
-    const result = bias([self, neighbor], planet, self);
-    expect(result.dy).toBeGreaterThan(0); // neighbor is below (higher y), bias should point toward it
+    const result = sense([self, neighbor], planet, self);
+    expect(result.flockY).toBeGreaterThan(0);
   });
 
-  it("separation pushes an organism away from a same-species neighbor that is too close", () => {
+  it("flock channel points away from a same-species neighbor that is too close (separation)", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
-    const neighbor = createOrganism(2, 1, 20, 20.5, { ...baseGenome }); // well within FLOCK_SEPARATION_RADIUS
-    const result = bias([self, neighbor], planet, self);
-    expect(result.dy).toBeLessThan(0); // neighbor is below; net bias should point away (up)
+    const neighbor = createOrganism(2, 1, 20, 20.5, { ...baseGenome }); // well within separation radius
+    const result = sense([self, neighbor], planet, self);
+    expect(result.flockY).toBeLessThan(0);
   });
 
-  it("produces zero bias with no neighbors at all", () => {
+  it("is all-zero with no neighbors at all", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
-    const result = bias([self], planet, self);
-    expect(result.dx).toBe(0);
-    expect(result.dy).toBe(0);
+    const result = sense([self], planet, self);
+    expect(result.flockX).toBe(0);
+    expect(result.flockY).toBe(0);
+    expect(result.fearX).toBe(0);
+    expect(result.huntX).toBe(0);
+    expect(result.territoryX).toBe(0);
   });
 });
 
-describe("computeBehaviorBias — fear", () => {
-  it("biases away from a nearby organism that could hunt it (higher carnivory, above threshold)", () => {
+describe("computeSensoryChannels — fear", () => {
+  it("fear channel points away from a nearby organism that could hunt it (higher carnivory, above threshold)", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const prey = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0 });
     const predator = createOrganism(2, 2, 20, 24, { ...baseGenome, carnivory: 0.8 });
-    const result = bias([prey, predator], planet, prey);
-    expect(result.dy).toBeLessThan(0); // predator is below; prey should flee upward (away)
+    const result = sense([prey, predator], planet, prey);
+    expect(result.fearY).toBeLessThan(0);
   });
 
-  it("does not flee from a same-or-lower-carnivory organism", () => {
+  it("stays zero for a same-or-lower-carnivory organism", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     // High energy (well-fed) so self is not itself an eligible hunter here —
-    // isolates the fear check from hunting-seek firing on the same pair.
+    // isolates the fear check from the hunt channel firing on the same pair.
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0.5 }, 149);
     const other = createOrganism(2, 2, 20, 24, { ...baseGenome, carnivory: 0.3 });
-    const result = bias([self, other], planet, self);
-    expect(result.dx).toBe(0);
-    expect(result.dy).toBe(0);
+    const result = sense([self, other], planet, self);
+    expect(result.fearX).toBe(0);
+    expect(result.fearY).toBe(0);
   });
 });
 
-describe("computeBehaviorBias — hunting-seek", () => {
-  it("a hungry, sufficiently carnivorous organism biases toward nearby weaker prey", () => {
+describe("computeSensoryChannels — hunting", () => {
+  it("hunt channel points toward nearby weaker prey for a hungry, sufficiently carnivorous organism", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const predator = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0.8 }, 50); // low energy = hungry
     const prey = createOrganism(2, 2, 20, 24, { ...baseGenome, carnivory: 0.1 });
-    const result = bias([predator, prey], planet, predator);
-    expect(result.dy).toBeGreaterThan(0); // prey is below; predator should move toward it
+    const result = sense([predator, prey], planet, predator);
+    expect(result.huntY).toBeGreaterThan(0);
   });
 
-  it("a well-fed carnivore (energy above hunger threshold) does not seek prey", () => {
+  it("stays zero for a well-fed carnivore (energy above hunger threshold)", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
-    const predator = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0.8 }, 149); // near max energy
+    const predator = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0.8 }, 149);
     const prey = createOrganism(2, 2, 20, 24, { ...baseGenome, carnivory: 0.1 });
-    const result = bias([predator, prey], planet, predator);
-    expect(result.dx).toBe(0);
-    expect(result.dy).toBe(0);
+    const result = sense([predator, prey], planet, predator);
+    expect(result.huntX).toBe(0);
+    expect(result.huntY).toBe(0);
   });
 
-  it("an herbivore (carnivory below threshold) never seeks prey even if hungry", () => {
+  it("stays zero for an herbivore (carnivory below threshold) even if hungry", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const herbivore = createOrganism(1, 1, 20, 20, { ...baseGenome, carnivory: 0 }, 30);
     const other = createOrganism(2, 2, 20, 24, { ...baseGenome, carnivory: 0 });
-    const result = bias([herbivore, other], planet, herbivore);
-    expect(result.dx).toBe(0);
-    expect(result.dy).toBe(0);
+    const result = sense([herbivore, other], planet, herbivore);
+    expect(result.huntX).toBe(0);
+    expect(result.huntY).toBe(0);
   });
 });
 
-describe("computeBehaviorBias — territoriality", () => {
-  it("repels an intruder away from a same-species neighbor's home when the neighbor is defending it", () => {
+describe("computeSensoryChannels — territoriality", () => {
+  it("territory channel repels an intruder away from a same-species neighbor's defended home", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
-    // Defender is at its own home (20,20); intruder is nearby but far from its own home.
     const defender = createOrganism(1, 1, 20, 20, { ...baseGenome });
     const intruder = createOrganism(2, 1, 23, 20, { ...baseGenome });
     intruder.home = { x: 0, y: 0 }; // intruder's home is far away, so it's not defending here
-    const result = bias([defender, intruder], planet, intruder);
-    expect(result.dx).toBeGreaterThan(0); // intruder at x=23 relative to defender's home at x=20: pushed further away (+x)
-  });
-
-  it("does not repel an organism that is currently near its own home, even if also near another's", () => {
-    const planet = new Planet({ width: 40, height: 40, seed: 1 });
-    const defender = createOrganism(1, 1, 20, 20, { ...baseGenome });
-    const resident = createOrganism(2, 1, 21, 20, { ...baseGenome }); // also near its own home
-    resident.home = { x: 21, y: 20 };
-    const result = bias([defender, resident], planet, resident);
-    // resident is near its own home, so territoriality should not apply to it (though flocking may still contribute).
-    // Isolate by checking the intruder case above produces a *stronger* +x push than this one.
-    expect(Number.isFinite(result.dx)).toBe(true);
+    const result = sense([defender, intruder], planet, intruder);
+    expect(result.territoryX).toBeGreaterThan(0); // intruder at x=23 relative to defender's home at x=20: pushed further away (+x)
   });
 });
 
-describe("computeBehaviorBias — spatial memory", () => {
-  it("attracts toward a fresh food memory", () => {
+describe("computeSensoryChannels — spatial memory", () => {
+  it("memory channel attracts toward a fresh food memory", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
     self.memory = { x: 20, y: 25, tick: 100, kind: "food" };
-    const result = bias([self], planet, self, 105);
-    expect(result.dy).toBeGreaterThan(0);
+    const result = sense([self], planet, self, 105);
+    expect(result.memoryY).toBeGreaterThan(0);
   });
 
-  it("repels from a fresh danger memory", () => {
+  it("memory channel repels from a fresh danger memory", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
     self.memory = { x: 20, y: 25, tick: 100, kind: "danger" };
-    const result = bias([self], planet, self, 105);
-    expect(result.dy).toBeLessThan(0);
+    const result = sense([self], planet, self, 105);
+    expect(result.memoryY).toBeLessThan(0);
   });
 
   it("clears and ignores memory once it exceeds the decay window", () => {
     const planet = new Planet({ width: 40, height: 40, seed: 1 });
     const self = createOrganism(1, 1, 20, 20, { ...baseGenome });
     self.memory = { x: 20, y: 25, tick: 0, kind: "food" };
-    const result = bias([self], planet, self, 10000); // far beyond MEMORY_DECAY_TICKS
-    expect(result.dx).toBe(0);
-    expect(result.dy).toBe(0);
+    const result = sense([self], planet, self, 10000); // far beyond MEMORY_DECAY_TICKS
+    expect(result.memoryX).toBe(0);
+    expect(result.memoryY).toBe(0);
     expect(self.memory).toBeNull();
   });
 });
