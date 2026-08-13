@@ -35,12 +35,22 @@ export function buildRenderFrame(world: World): RenderFrame {
   const organismsY = new Float32Array(n);
   const organismsSpecies = new Uint16Array(n);
   const organismsSize = new Float32Array(n);
+  const organismsSpeed = new Float32Array(n);
+  const organismsCarnivory = new Float32Array(n);
+  const organismsVision = new Float32Array(n);
+  const organismsEvasion = new Float32Array(n);
+  const organismsHuntingSkill = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const o = organisms[i];
     organismsX[i] = o.position.x;
     organismsY[i] = o.position.y;
     organismsSpecies[i] = o.speciesId % 65535;
     organismsSize[i] = o.genome.size;
+    organismsSpeed[i] = o.genome.speed;
+    organismsCarnivory[i] = o.genome.carnivory;
+    organismsVision[i] = o.genome.vision;
+    organismsEvasion[i] = o.genome.evasion;
+    organismsHuntingSkill[i] = o.genome.huntingSkill;
   }
 
   const stats = world.getStats();
@@ -57,6 +67,11 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsY,
     organismsSpecies,
     organismsSize,
+    organismsSpeed,
+    organismsCarnivory,
+    organismsVision,
+    organismsEvasion,
+    organismsHuntingSkill,
     speciesTree: world.getSpeciesTree(),
     speciesGenomeStats: world.getSpeciesGenomeStats(),
   };
