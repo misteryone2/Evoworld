@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import type { RenderFrame } from "../../types";
 import { speciesColor } from "../../lib/speciesColor";
+import { computeCreatureShape } from "../../lib/creatureShape";
+import { drawCreature } from "./drawCreature";
 
 // Terrain codes must match simulation/core/renderFrame.ts TERRAIN_CODE.
 const TERRAIN_COLORS: Record<number, string> = {
@@ -53,13 +55,33 @@ export function PlanetCanvas({ frame }: Props) {
       }
     }
 
-    const { organismsX, organismsY, organismsSpecies, organismsSize } = frame;
+    const { organismsX, organismsY, organismsSpecies, organismsSize, organismsSpeed, organismsCarnivory, organismsVision, organismsEvasion, organismsHuntingSkill } = frame;
     for (let i = 0; i < organismsX.length; i++) {
       const r = Math.max(1.2, organismsSize[i] * 1.6);
-      ctx.beginPath();
-      ctx.fillStyle = speciesColor(organismsSpecies[i]);
-      ctx.arc(organismsX[i] * cellSize, organismsY[i] * cellSize, r, 0, Math.PI * 2);
-      ctx.fill();
+      const color = speciesColor(organismsSpecies[i]);
+      const px = organismsX[i] * cellSize;
+      const py = organismsY[i] * cellSize;
+
+      // LOD: below ~3px radius a procedural body plan (fangs, spikes, eye)
+      // is imperceptible anyway and not worth the extra draw calls when
+      // populations reach the thousands — a plain dot reads identically at
+      // that size and keeps the frame rate up.
+      if (r < 3) {
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+
+      const shape = computeCreatureShape({
+        speed: organismsSpeed[i],
+        carnivory: organismsCarnivory[i],
+        vision: organismsVision[i],
+        evasion: organismsEvasion[i],
+        huntingSkill: organismsHuntingSkill[i],
+      });
+      drawCreature(ctx, px, py, r, shape, color);
     }
   }, [frame]);
 
