@@ -98,6 +98,15 @@ export interface Organism {
   home: Vector2;
   /** See OrganismMemory. null until the organism experiences something worth remembering. */
   memory: OrganismMemory | null;
+  /**
+   * The organism's evolved decision-making network (v0.8), a flat array of
+   * BRAIN_SIZE weights — see simulation/biology/brain.ts. Heritable and
+   * mutable like a genome trait, but kept separate from Genome so the
+   * existing genome-wide analysis (genomeStats, geneticDistance, the
+   * species genetic-analysis panel) is entirely unaffected: none of that
+   * code needs to know brains exist.
+   */
+  brain: Float32Array;
 }
 
 /**
