@@ -423,6 +423,17 @@ body {
   font-size: 1rem;
 }
 
+/* v0.6 — creature procedurali */
+
+.species-portrait {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--void-2);
+}
+
 .species-facts {
   margin: 0 0 1rem;
   display: flex;
