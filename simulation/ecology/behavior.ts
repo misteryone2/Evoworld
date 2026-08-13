@@ -11,76 +11,98 @@ import { nearbyOrganisms, distanceWrapped } from "./spatialIndex";
  */
 const CARNIVORY_HUNT_THRESHOLD = 0.35;
 const HUNT_HUNGER_THRESHOLD = 110;
+/** Same value as MAX_ENERGY in predation.ts, duplicated for the same reason above — used only to normalize the energy sensory input to roughly [0, 1]. */
+const MAX_ENERGY = 150;
 
 /** Bucket size for the shared spatial index used by movement/behavior each tick. */
 export const BEHAVIOR_BUCKET_SIZE = 4;
 
 const FLOCK_SEPARATION_RADIUS = 1.5;
+/**
+ * These two constants control the *internal* balance between cohesion and
+ * separation when aggregating multiple same-species neighbors into one
+ * "flock" sensory channel — i.e. how raw stimuli get combined into a
+ * single signal, closer to fixed sensory physiology than to a behavioral
+ * decision. What to actually DO with that combined signal (how much to
+ * care about it at all, relative to fear/hunting/territory/memory) is the
+ * part left to the evolved brain (v0.8) — see brain.ts.
+ */
 const FLOCK_COHESION_WEIGHT = 0.35;
 const FLOCK_SEPARATION_WEIGHT = 1.1;
 
-const FEAR_WEIGHT = 1.3;
-const HUNT_SEEK_WEIGHT = 0.9;
-
 /** Radius (grid cells) an organism defends around its home against same-species intruders. */
 const TERRITORY_RADIUS = 6;
-const TERRITORY_WEIGHT = 0.7;
 
 /** How lush a cell has to be before an organism bothers remembering it as a good feeding spot. */
 const MEMORY_FOOD_VEGETATION_THRESHOLD = 0.5;
 /** Ticks after which a memory (food or danger) is forgotten. */
 const MEMORY_DECAY_TICKS = 300;
-const MEMORY_ATTRACT_WEIGHT = 0.6;
-const MEMORY_AVOID_WEIGHT = 1.1;
 
 /** Detection radius for flocking/fear/hunting-seek/territoriality, scaled by the organism's own vision trait. */
 function socialRadius(o: Organism): number {
   return Math.max(2, o.genome.vision);
 }
 
-export interface BehaviorBias {
-  dx: number;
-  dy: number;
+/**
+ * Raw sensed signals for one organism (v0.8), each an (x, y) direction —
+ * NOT yet combined into a single movement decision. Up through v0.5 these
+ * were summed with fixed hand-picked weights right here in behavior.ts;
+ * from v0.8 on, that combination is instead the job of the organism's
+ * evolved brain (see simulation/biology/brain.ts and movement.ts, which
+ * assembles these channels plus energy and vegetation-direction into the
+ * network's input vector). This function only does sensing, never
+ * decides.
+ */
+export interface SensoryChannels {
+  /** Current energy, normalized to roughly [0, 1]. */
+  energyNorm: number;
+  /** Same-species cohesion+separation, aggregated (see FLOCK_*_WEIGHT above for why this part stays fixed). */
+  flockX: number;
+  flockY: number;
+  /** Direction away from the nearest organism that could hunt this one, scaled by proximity and this organism's own evasion trait. */
+  fearX: number;
+  fearY: number;
+  /** Direction toward the nearest valid prey, only nonzero while this organism is itself a hungry, eligible hunter; scaled by proximity and its own huntingSkill trait. */
+  huntX: number;
+  huntY: number;
+  /** Direction away from a same-species neighbor's defended home range, when this organism is intruding on it. */
+  territoryX: number;
+  territoryY: number;
+  /** Direction toward a remembered food location, or away from a remembered danger location; fades linearly over MEMORY_DECAY_TICKS. */
+  memoryX: number;
+  memoryY: number;
 }
 
+const EMPTY_CHANNELS: SensoryChannels = {
+  energyNorm: 0,
+  flockX: 0,
+  flockY: 0,
+  fearX: 0,
+  fearY: 0,
+  huntX: 0,
+  huntY: 0,
+  territoryX: 0,
+  territoryY: 0,
+  memoryX: 0,
+  memoryY: 0,
+};
+
 /**
- * Computes a single blended movement-bias vector for one organism (v0.5),
- * layered on top of the existing vegetation-seeking movement in
- * movement.ts. Four independent behavioral pressures, plus spatial memory:
- *
- *  - flocking: same-species cohesion (drift toward nearby kin) and
- *    separation (don't crowd them) — a small boids-style pair of forces
- *    that produces loose group movement with no central coordination;
- *  - fear: bias away from the nearest organism that could hunt this one
- *    (higher carnivory, above the hunting threshold), strengthened by this
- *    organism's own evasion trait;
- *  - hunting-seek: a hungry, sufficiently carnivorous organism biases
- *    toward the nearest valid prey within sight, strengthened by its own
- *    huntingSkill trait. This does not replace the probabilistic
- *    contact-hunt in predation.ts — it only makes a hungry predator more
- *    likely to actually get within hunting range of prey in the first
- *    place;
- *  - territoriality: a same-species organism currently near its own home
- *    repels intruders (other same-species organisms not currently near
- *    their own home) that wander into its territory;
- *  - memory: an organism with a remembered food location is attracted
- *    toward it; one with a remembered danger location is repelled from it.
- *    Only the single most recent salient event is remembered (see
- *    OrganismMemory) and it fades linearly over MEMORY_DECAY_TICKS.
- *
- * None of this changes selection, reproduction, or mutation directly: it
- * only changes *where* an organism ends up, which then feeds into the
- * existing feeding/predation/reproduction mechanics exactly as before.
+ * Senses the local environment for one organism and returns each signal
+ * separately (v0.8) — see SensoryChannels. Nothing here decides how much
+ * any of this should matter; that combination happens in the organism's
+ * evolved brain (movement.ts assembles these into the network's input
+ * vector and calls evaluateBrain).
  */
-export function computeBehaviorBias(
+export function computeSensoryChannels(
   organism: Organism,
   planet: Planet,
   buckets: Map<string, Organism[]>,
   bucketSize: number,
   tick: number,
-): BehaviorBias {
-  let dx = 0;
-  let dy = 0;
+): SensoryChannels {
+  const channels: SensoryChannels = { ...EMPTY_CHANNELS };
+  channels.energyNorm = Math.max(0, Math.min(1.2, organism.energy / MAX_ENERGY));
 
   const vision = socialRadius(organism);
   const candidates = nearbyOrganisms(organism.position, buckets, bucketSize);
@@ -110,8 +132,8 @@ export function computeBehaviorBias(
 
       if (d < FLOCK_SEPARATION_RADIUS) {
         const push = (FLOCK_SEPARATION_RADIUS - d) / FLOCK_SEPARATION_RADIUS;
-        dx -= ((other.position.x - organism.position.x) / d) * push * FLOCK_SEPARATION_WEIGHT;
-        dy -= ((other.position.y - organism.position.y) / d) * push * FLOCK_SEPARATION_WEIGHT;
+        channels.flockX -= ((other.position.x - organism.position.x) / d) * push * FLOCK_SEPARATION_WEIGHT;
+        channels.flockY -= ((other.position.y - organism.position.y) / d) * push * FLOCK_SEPARATION_WEIGHT;
       }
 
       // Territoriality: `other` is a same-species neighbor defending its
@@ -125,9 +147,9 @@ export function computeBehaviorBias(
           const dirX = organism.position.x - other.home.x;
           const dirY = organism.position.y - other.home.y;
           const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-          const strength = ((TERRITORY_RADIUS - distFromOtherHome) / TERRITORY_RADIUS) * TERRITORY_WEIGHT;
-          dx += (dirX / mag) * strength;
-          dy += (dirY / mag) * strength;
+          const strength = (TERRITORY_RADIUS - distFromOtherHome) / TERRITORY_RADIUS;
+          channels.territoryX += (dirX / mag) * strength;
+          channels.territoryY += (dirY / mag) * strength;
         }
       }
     } else {
@@ -143,26 +165,26 @@ export function computeBehaviorBias(
   }
 
   if (cohesionCount > 0) {
-    dx += (cohesionX / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
-    dy += (cohesionY / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
+    channels.flockX += (cohesionX / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
+    channels.flockY += (cohesionY / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
   }
 
   if (nearestThreat) {
     const dirX = organism.position.x - nearestThreat.position.x;
     const dirY = organism.position.y - nearestThreat.position.y;
     const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-    const strength = (1 + organism.genome.evasion) * FEAR_WEIGHT * (1 - nearestThreatDist / vision);
-    dx += (dirX / mag) * strength;
-    dy += (dirY / mag) * strength;
+    const strength = (1 + organism.genome.evasion) * (1 - nearestThreatDist / vision);
+    channels.fearX = (dirX / mag) * strength;
+    channels.fearY = (dirY / mag) * strength;
   }
 
   if (nearestPrey) {
     const dirX = nearestPrey.position.x - organism.position.x;
     const dirY = nearestPrey.position.y - organism.position.y;
     const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-    const strength = (1 + organism.genome.huntingSkill) * HUNT_SEEK_WEIGHT * (1 - nearestPreyDist / vision);
-    dx += (dirX / mag) * strength;
-    dy += (dirY / mag) * strength;
+    const strength = (1 + organism.genome.huntingSkill) * (1 - nearestPreyDist / vision);
+    channels.huntX = (dirX / mag) * strength;
+    channels.huntY = (dirY / mag) * strength;
   }
 
   if (organism.memory) {
@@ -174,13 +196,13 @@ export function computeBehaviorBias(
       const dirY = organism.memory.y - organism.position.y;
       const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
       const freshness = 1 - age / MEMORY_DECAY_TICKS;
-      const weight = (organism.memory.kind === "food" ? MEMORY_ATTRACT_WEIGHT : -MEMORY_AVOID_WEIGHT) * freshness;
-      dx += (dirX / mag) * weight;
-      dy += (dirY / mag) * weight;
+      const sign = organism.memory.kind === "food" ? 1 : -1;
+      channels.memoryX = (dirX / mag) * sign * freshness;
+      channels.memoryY = (dirY / mag) * sign * freshness;
     }
   }
 
-  return { dx, dy };
+  return channels;
 }
 
 /** Records the current location as a good feeding spot if it clears the "worth remembering" threshold. Overwrites any existing memory (only the most recent salient event is kept). */
