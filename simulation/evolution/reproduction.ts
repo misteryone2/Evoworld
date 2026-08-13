@@ -1,6 +1,7 @@
 import type { Organism } from "../../types";
 import { Random } from "../core/random";
 import { inheritGenome, cloneWithMutation, areGeneticallyCompatible } from "../biology/genome";
+import { inheritBrain, cloneBrainWithMutation } from "../biology/brain";
 import { createOrganism } from "../biology/organism";
 import { Planet } from "../planet/planet";
 
@@ -53,10 +54,12 @@ export function reproduceOrganisms(
     );
 
     let childGenome;
+    let childBrain;
     if (mate) {
       paired.add(organism.id);
       paired.add(mate.id);
       childGenome = inheritGenome(organism.genome, mate.genome, rng);
+      childBrain = inheritBrain(organism.brain, mate.brain, rng);
       mate.energy -= REPRODUCTION_ENERGY_COST;
     } else {
       // Asexual fallback so isolated populations are not permanently stuck,
@@ -65,6 +68,7 @@ export function reproduceOrganisms(
       if (!rng.chance(0.15)) continue;
       paired.add(organism.id);
       childGenome = cloneWithMutation(organism.genome, rng);
+      childBrain = cloneBrainWithMutation(organism.brain, rng);
     }
 
     organism.energy -= REPRODUCTION_ENERGY_COST;
@@ -75,6 +79,8 @@ export function reproduceOrganisms(
       organism.position.x,
       organism.position.y,
       childGenome,
+      undefined,
+      childBrain,
     );
     offspring.push(child);
   }
