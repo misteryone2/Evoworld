@@ -562,6 +562,145 @@ body {
   margin-left: auto;
   color: var(--text);
 }
+/* v0.9 — pianeti multipli */
+
+.view-toggle {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.view-toggle-btn {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.82rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+}
+
+.view-toggle-btn.active {
+  border-color: var(--signal-dim);
+  color: var(--signal);
+  background: rgba(107, 255, 176, 0.08);
+}
+
+.planet-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.planet-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+
+.planet-tab.active {
+  border-color: var(--signal-dim);
+  color: var(--signal);
+}
+
+.planet-tab-name {
+  font-weight: 600;
+}
+
+.planet-tab-pop {
+  color: var(--text-dim);
+}
+
+.planet-tab-remove {
+  color: var(--text-dim);
+  padding: 0 0.2rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.planet-tab-remove:hover {
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+.planet-tab-add {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+}
+
+.planet-tab-add:hover {
+  color: var(--signal);
+  border-color: var(--signal-dim);
+}
+
+.planet-comparison {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.comparison-note {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin: 0 0 1rem;
+  max-width: 60ch;
+}
+
+.comparison-empty {
+  color: var(--text-dim);
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
+.comparison-table-wrap {
+  overflow-x: auto;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.comparison-table th,
+.comparison-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.comparison-table th {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+
+.comparison-table td {
+  color: var(--text);
+}
+
+.comparison-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
 
 
 .season-badge {
