@@ -1,13 +1,22 @@
 "use client";
 
-import { useSimulation } from "../lib/useSimulation";
+import { useState } from "react";
+import { useMultiverse } from "../lib/useMultiverse";
 import { Planet3DView } from "../components/simulation/Planet3DView";
 import { Controls } from "../components/ui/Controls";
 import { StatsPanel } from "../components/ui/StatsPanel";
 import { SpeciesPanel } from "../components/species/SpeciesPanel";
+import { PlanetSelector } from "../components/multiverse/PlanetSelector";
+import { PlanetComparison } from "../components/multiverse/PlanetComparison";
+
+type ViewMode = "planet" | "confronto";
 
 export default function Home() {
-  const { frame, speed, setSpeed, togglePause, reset, ready } = useSimulation();
+  const { planets, activeId, setActiveId, spawnPlanet, removePlanet, setSpeed, togglePause, resetPlanet } =
+    useMultiverse();
+  const [view, setView] = useState<ViewMode>("planet");
+
+  const activePlanet = planets.find((p) => p.id === activeId) ?? null;
 
   return (
     <main className="page">
@@ -16,18 +25,58 @@ export default function Home() {
         <p className="tagline">Crea le regole. Avvia la simulazione. Osserva l&apos;evoluzione.</p>
       </header>
 
-      <section className="workspace">
-        <div className="canvas-column">
-          <Planet3DView frame={frame} />
-          <Controls speed={speed} onSetSpeed={setSpeed} onTogglePause={togglePause} onReset={() => reset()} />
-          <SpeciesPanel frame={frame} />
-        </div>
+      <div className="view-toggle" role="tablist" aria-label="Modalità di visualizzazione">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "planet"}
+          className={`view-toggle-btn${view === "planet" ? " active" : ""}`}
+          onClick={() => setView("planet")}
+        >
+          Vista pianeta
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "confronto"}
+          className={`view-toggle-btn${view === "confronto" ? " active" : ""}`}
+          onClick={() => setView("confronto")}
+        >
+          Confronto pianeti
+        </button>
+      </div>
 
-        <aside className="sidebar">
-          <StatsPanel stats={frame?.stats ?? null} />
-          {!ready && <p className="loading">Avvio del motore di simulazione…</p>}
-        </aside>
-      </section>
+      <PlanetSelector
+        planets={planets}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onAdd={() => spawnPlanet()}
+        onRemove={removePlanet}
+      />
+
+      {view === "confronto" ? (
+        <PlanetComparison planets={planets} />
+      ) : (
+        <section className="workspace">
+          <div className="canvas-column">
+            <Planet3DView frame={activePlanet?.frame ?? null} />
+            {activePlanet && (
+              <Controls
+                speed={activePlanet.speed}
+                onSetSpeed={(s) => setSpeed(activePlanet.id, s)}
+                onTogglePause={() => togglePause(activePlanet.id)}
+                onReset={() => resetPlanet(activePlanet.id)}
+              />
+            )}
+            <SpeciesPanel frame={activePlanet?.frame ?? null} />
+          </div>
+
+          <aside className="sidebar">
+            <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
+            {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
+          </aside>
+        </section>
+      )}
     </main>
   );
 }
