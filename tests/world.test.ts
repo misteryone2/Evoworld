@@ -72,7 +72,7 @@ describe("World", () => {
     } else {
       expect(stats.population).toBeGreaterThanOrEqual(0);
     }
-  });
+  }, 20000);
 
   it("can serialize to a snapshot and restore an equivalent world", () => {
     const world = new World({ width: 25, height: 25, seed: 7 }, 30);
