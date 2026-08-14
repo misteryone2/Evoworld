@@ -269,3 +269,20 @@ export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
   | { type: "ready" }
   | { type: "snapshot"; snapshot: WorldSnapshot };
+
+/**
+ * UI-only bookkeeping for one running planet (v0.9 — pianeti multipli).
+ * Each planet is its own independent World running in its own Web Worker;
+ * this struct is how the multiverse hook (lib/useMultiverse.ts) and its
+ * consumer components track them. Not used anywhere under simulation/ —
+ * the engine itself has no concept of "multiple planets", it only ever
+ * knows about the single World it's running.
+ */
+export interface PlanetInstance {
+  id: string;
+  name: string;
+  seed: number;
+  frame: RenderFrame | null;
+  speed: SimulationSpeed;
+  ready: boolean;
+}
