@@ -62,6 +62,16 @@ self.onmessage = (event: MessageEvent<WorkerCommand>) => {
       if (world) post({ type: "snapshot", snapshot: world.toSnapshot() });
       break;
     }
+    case "loadSnapshot": {
+      // v1.0.1 — Persistenza: resumes a previously saved World exactly as
+      // it was (same organisms, species registry, tick, RNG state — see
+      // World.fromSnapshot), rather than generating a fresh random one.
+      world = World.fromSnapshot(command.snapshot);
+      clock.setSpeed(1);
+      startLoop();
+      post({ type: "frame", frame: buildRenderFrame(world) });
+      break;
+    }
   }
 };
 
