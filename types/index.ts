@@ -263,7 +263,8 @@ export type WorkerCommand =
   | { type: "init"; config: PlanetConfig; initialPopulation: number }
   | { type: "setSpeed"; speed: SimulationSpeed }
   | { type: "reset"; config: PlanetConfig; initialPopulation: number }
-  | { type: "requestSnapshot" };
+  | { type: "requestSnapshot" }
+  | { type: "loadSnapshot"; snapshot: WorldSnapshot };
 
 export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
@@ -285,4 +286,34 @@ export interface PlanetInstance {
   frame: RenderFrame | null;
   speed: SimulationSpeed;
   ready: boolean;
+}
+
+/**
+ * v1.0.1 — Persistenza. A saved planet is just its worker-side World
+ * snapshot (already existed since v0.1's WorldSnapshot/requestSnapshot
+ * protocol) plus the small bits of UI-only bookkeeping needed to recreate
+ * its PlanetInstance/PlanetSelector entry on load.
+ */
+export interface SavedPlanet {
+  id: string;
+  name: string;
+  seed: number;
+  snapshot: WorldSnapshot;
+}
+
+/** A full saved session: every planet that was running at save time, plus which one was active. */
+export interface SavedSession {
+  id: string;
+  label: string;
+  savedAt: number;
+  activePlanetId: string | null;
+  planets: SavedPlanet[];
+}
+
+/** Lightweight listing entry (no snapshots — those can be large), for showing a "load a save" picker without pulling every full session into memory. */
+export interface SavedSessionSummary {
+  id: string;
+  label: string;
+  savedAt: number;
+  planetCount: number;
 }
