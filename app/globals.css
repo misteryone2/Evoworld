@@ -701,6 +701,107 @@ body {
 .comparison-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.03);
 }
+/* v1.0.1 — persistenza */
+
+.save-load-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.save-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.save-label-input {
+  flex: 1;
+  min-width: 200px;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.85rem;
+  background: var(--void-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 0.5rem 0.7rem;
+}
+
+.save-label-input:focus {
+  outline: none;
+  border-color: var(--signal-dim);
+}
+
+.save-error {
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin: 0 0 1rem;
+}
+
+.save-status {
+  color: var(--signal);
+  font-size: 0.82rem;
+  margin: 0 0 1rem;
+}
+
+.save-load-panel h3 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.75rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.save-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.save-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.save-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+}
+
+.save-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.save-item-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.save-item-meta {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.save-item-actions {
+  display: flex;
+  gap: 0.5rem;
+}
 
 
 .season-badge {
