@@ -8,12 +8,23 @@ import { StatsPanel } from "../components/ui/StatsPanel";
 import { SpeciesPanel } from "../components/species/SpeciesPanel";
 import { PlanetSelector } from "../components/multiverse/PlanetSelector";
 import { PlanetComparison } from "../components/multiverse/PlanetComparison";
+import { SaveLoadPanel } from "../components/persistence/SaveLoadPanel";
 
-type ViewMode = "planet" | "confronto";
+type ViewMode = "planet" | "confronto" | "salvataggi";
 
 export default function Home() {
-  const { planets, activeId, setActiveId, spawnPlanet, removePlanet, setSpeed, togglePause, resetPlanet } =
-    useMultiverse();
+  const {
+    planets,
+    activeId,
+    setActiveId,
+    spawnPlanet,
+    removePlanet,
+    setSpeed,
+    togglePause,
+    resetPlanet,
+    saveSession,
+    loadSession,
+  } = useMultiverse();
   const [view, setView] = useState<ViewMode>("planet");
 
   const activePlanet = planets.find((p) => p.id === activeId) ?? null;
@@ -44,6 +55,15 @@ export default function Home() {
         >
           Confronto pianeti
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "salvataggi"}
+          className={`view-toggle-btn${view === "salvataggi" ? " active" : ""}`}
+          onClick={() => setView("salvataggi")}
+        >
+          Salvataggi
+        </button>
       </div>
 
       <PlanetSelector
@@ -54,9 +74,11 @@ export default function Home() {
         onRemove={removePlanet}
       />
 
-      {view === "confronto" ? (
-        <PlanetComparison planets={planets} />
-      ) : (
+      {view === "confronto" && <PlanetComparison planets={planets} />}
+
+      {view === "salvataggi" && <SaveLoadPanel onSave={saveSession} onLoad={loadSession} />}
+
+      {view === "planet" && (
         <section className="workspace">
           <div className="canvas-column">
             <Planet3DView frame={activePlanet?.frame ?? null} />
