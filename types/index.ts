@@ -269,7 +269,8 @@ export type WorkerCommand =
 export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
   | { type: "ready" }
-  | { type: "snapshot"; snapshot: WorldSnapshot };
+  | { type: "snapshot"; snapshot: WorldSnapshot }
+  | { type: "error"; message: string };
 
 /**
  * UI-only bookkeeping for one running planet (v0.9 — pianeti multipli).
@@ -286,6 +287,15 @@ export interface PlanetInstance {
   frame: RenderFrame | null;
   speed: SimulationSpeed;
   ready: boolean;
+  /**
+   * v1.0.2 — set when this planet's worker reports an internal error (see
+   * WorkerEvent's "error" case). Non-null means the simulation loop for
+   * this planet has stopped; the person can restart it fresh with
+   * useMultiverse's recoverPlanet. The last frame received before the
+   * error is kept (not cleared), so the UI can still show what the world
+   * looked like when it happened.
+   */
+  error: string | null;
 }
 
 /**
