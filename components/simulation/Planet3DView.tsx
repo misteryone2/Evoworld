@@ -8,18 +8,25 @@ import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
 import { terrainColorRGB } from "../../lib/terrainColor";
 import { projectToSphere } from "../../lib/sphereProjection";
+import { computeRenderStride } from "../../lib/renderSampling";
 
 const PLANET_RADIUS = 5;
 /**
- * Hard cap on how many organisms get an instanced mesh on the sphere.
- * Instanced-mesh buffers are pre-allocated at this size once, at mount, so
- * this bounds GPU/CPU memory regardless of how large the population grows.
- * Same LOD philosophy as v0.6's 2D "below 3px, draw a dot" cutoff: past a
- * point, individual bodyplans stop being usefully perceivable at this
- * scale anyway, so it's a reasonable place to cap fidelity rather than
- * risk the frame rate collapsing at very large populations.
+ * Buffer capacity for the instanced meshes — how many organisms could ever
+ * get a rendered instance in one frame, worst case. Kept comfortably above
+ * RENDER_TARGET_COUNT (below) since striding leaves a small remainder.
  */
-const MAX_CREATURE_INSTANCES = 20000;
+const MAX_CREATURE_INSTANCES = 6000;
+/**
+ * v1.0.2 — LOD adattivo. Above this many organisms, the renderer stops
+ * trying to give every single one an instance and instead draws a
+ * deterministic stride-sampled subset (see lib/renderSampling.ts), keeping
+ * the per-frame CPU cost of writing instance matrices roughly constant
+ * even as the simulation itself scales to far larger populations. The
+ * simulation engine has no population cap and never will; this only
+ * bounds what gets drawn.
+ */
+const RENDER_TARGET_COUNT = 4000;
 /** Below this normalized evasion value, no spike ornament is drawn at all (matches the 2D drawCreature threshold). */
 const SPIKINESS_VISIBLE_THRESHOLD = 0.2;
 /** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
@@ -91,6 +98,13 @@ const tmpColor = new THREE.Color();
  * feature type regardless of population size); jaw and eye detail are
  * reserved for the still-2D SpeciesPortrait, where only one creature is
  * ever drawn at a time and per-organism instancing doesn't apply.
+ *
+ * v1.0.2 — LOD adattivo: once the population exceeds RENDER_TARGET_COUNT,
+ * only a deterministic stride-sampled subset actually gets a rendered
+ * instance each frame (see lib/renderSampling.ts), keeping this
+ * component's per-frame CPU cost roughly constant regardless of how large
+ * the simulation itself grows. The engine has no population cap; only the
+ * rendered detail is capped.
  */
 export function Planet3DView({ frame }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -274,11 +288,11 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
     planetHeight,
   } = frame;
 
-  const n = Math.min(organismsX.length, MAX_CREATURE_INSTANCES);
-  refs.bodyMesh.count = n;
-  refs.spikeMesh.count = n;
+  const population = organismsX.length;
+  const stride = computeRenderStride(population, RENDER_TARGET_COUNT);
 
-  for (let i = 0; i < n; i++) {
+  let writeIndex = 0;
+  for (let i = 0; i < population && writeIndex < MAX_CREATURE_INSTANCES; i += stride) {
     const point = projectToSphere(organismsX[i], organismsY[i], planetWidth, planetHeight, PLANET_RADIUS + 0.02);
     tmpPosition.set(point.x, point.y, point.z);
     tmpNormal.set(point.normalX, point.normalY, point.normalZ);
@@ -295,27 +309,32 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
     const baseScale = Math.max(0.05, organismsSize[i] * 0.12);
     tmpScale.set(baseScale * (0.85 + shape.elongation * 0.5), baseScale * (0.85 - shape.elongation * 0.2), baseScale);
     tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-    refs.bodyMesh.setMatrixAt(i, tmpMatrix);
+    refs.bodyMesh.setMatrixAt(writeIndex, tmpMatrix);
 
     tmpColor.setHSL(speciesHue(organismsSpecies[i]) / 360, 0.85, 0.62);
     if (shape.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
       tmpColor.lerp(AGGRO_TINT, shape.aggression * 0.35);
     }
-    refs.bodyMesh.setColorAt(i, tmpColor);
+    refs.bodyMesh.setColorAt(writeIndex, tmpColor);
 
     if (shape.spikiness > SPIKINESS_VISIBLE_THRESHOLD) {
       const spikeLength = baseScale * (1 + shape.spikiness * 2.5);
       tmpPosition.addScaledVector(tmpNormal, baseScale * 0.6);
       tmpScale.set(baseScale * 0.4, spikeLength, baseScale * 0.4);
       tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-      refs.spikeMesh.setMatrixAt(i, tmpMatrix);
-      refs.spikeMesh.setColorAt(i, tmpColor);
+      refs.spikeMesh.setMatrixAt(writeIndex, tmpMatrix);
+      refs.spikeMesh.setColorAt(writeIndex, tmpColor);
     } else {
       tmpScale.set(0, 0, 0);
       tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-      refs.spikeMesh.setMatrixAt(i, tmpMatrix);
+      refs.spikeMesh.setMatrixAt(writeIndex, tmpMatrix);
     }
+
+    writeIndex++;
   }
+
+  refs.bodyMesh.count = writeIndex;
+  refs.spikeMesh.count = writeIndex;
 
   refs.bodyMesh.instanceMatrix.needsUpdate = true;
   refs.bodyMesh.instanceColor!.needsUpdate = true;
