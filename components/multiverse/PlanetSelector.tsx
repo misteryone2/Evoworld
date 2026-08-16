@@ -13,7 +13,8 @@ interface Props {
 /**
  * Horizontal tab strip for switching between running planets (v0.9). Each
  * tab shows the planet's name, its current population once its first
- * frame arrives, and a small pulse indicator while paused/running.
+ * frame arrives, and (v1.0.2) a warning marker if that planet's worker
+ * reported an error and stopped.
  * Removing the last remaining planet is not allowed from here — the "×"
  * only appears when there's more than one planet, so the person always
  * has at least one running world.
@@ -27,9 +28,14 @@ export function PlanetSelector({ planets, activeId, onSelect, onAdd, onRemove }:
           type="button"
           role="tab"
           aria-selected={planet.id === activeId}
-          className={`planet-tab${planet.id === activeId ? " active" : ""}`}
+          className={`planet-tab${planet.id === activeId ? " active" : ""}${planet.error ? " has-error" : ""}`}
           onClick={() => onSelect(planet.id)}
         >
+          {planet.error && (
+            <span className="planet-tab-warning" aria-label="Questo pianeta ha smesso di rispondere" title={planet.error}>
+              ⚠
+            </span>
+          )}
           <span className="planet-tab-name">{planet.name}</span>
           <span className="planet-tab-pop">
             {planet.frame ? planet.frame.stats.population.toLocaleString("it-IT") : "…"}
