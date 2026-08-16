@@ -46,14 +46,20 @@ interface PendingSnapshot {
  * lightweight stats, not its 3D scene, so it works across all planets at
  * once without that constraint.
  *
- * v1.0.1 adds session persistence: saveSession asks every running
- * planet's worker for its current WorldSnapshot (the same
- * requestSnapshot/snapshot protocol that has existed since the worker was
- * first written) and writes them all to IndexedDB together; loadSession
- * tears down every currently running planet and rebuilds each one from a
- * saved WorldSnapshot via the new "loadSnapshot" worker command, resuming
- * exactly where it left off — same organisms, species registry, tick, and
- * RNG state.
+ * v1.0.1 added session persistence: saveSession asks every running
+ * planet's worker for its current WorldSnapshot and writes them all to
+ * IndexedDB together; loadSession tears down every currently running
+ * planet and rebuilds each one from a saved WorldSnapshot, resuming
+ * exactly where it left off.
+ *
+ * v1.0.2 adds error recovery: if a planet's worker reports an internal
+ * error (see WorkerEvent's "error" case, and the try/catch boundaries in
+ * simulation.worker.ts itself), that planet's `error` field is set and its
+ * simulation loop has stopped; recoverPlanet terminates the broken worker
+ * and starts a fresh one with the same seed. This is an honest restart
+ * (the exact organisms/tick at the moment of failure are not recoverable
+ * without a live snapshot — see v1.0.1's manual save for that), not a
+ * silent resume, and the UI says so.
  */
 export function useMultiverse() {
   const [planets, setPlanets] = useState<PlanetInstance[]>([]);
@@ -61,16 +67,21 @@ export function useMultiverse() {
   const workersRef = useRef<Map<string, Worker>>(new Map());
   const nextIndexRef = useRef(1);
   const pendingSnapshotsRef = useRef<Map<string, PendingSnapshot>>(new Map());
+  const planetsRef = useRef<PlanetInstance[]>([]);
 
-  /** Wires up a worker's message handling, shared by both the "start fresh" and "resume from snapshot" spawn paths. */
+  useEffect(() => {
+    planetsRef.current = planets;
+  }, [planets]);
+
+  /** Wires up a worker's message handling, shared by every spawn path (fresh, resumed from snapshot, or recovered after an error). */
   const attachWorker = useCallback((id: string, worker: Worker, onReady: () => void) => {
     worker.onmessage = (event: MessageEvent<WorkerEvent>) => {
       const msg = event.data;
       if (msg.type === "ready") {
         onReady();
-        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, ready: true } : p)));
+        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, ready: true, error: null } : p)));
       } else if (msg.type === "frame") {
-        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, frame: msg.frame } : p)));
+        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, frame: msg.frame, error: null } : p)));
       } else if (msg.type === "snapshot") {
         const pending = pendingSnapshotsRef.current.get(id);
         if (pending) {
@@ -78,14 +89,24 @@ export function useMultiverse() {
           pendingSnapshotsRef.current.delete(id);
           pending.resolve(msg.snapshot);
         }
+      } else if (msg.type === "error") {
+        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, error: msg.message } : p)));
+        const pending = pendingSnapshotsRef.current.get(id);
+        if (pending) {
+          clearTimeout(pending.timeoutId);
+          pendingSnapshotsRef.current.delete(id);
+          pending.reject(new Error(msg.message));
+        }
       }
     };
     worker.onerror = () => {
+      const message = `Il worker del pianeta ${id} ha smesso di rispondere.`;
+      setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, error: message } : p)));
       const pending = pendingSnapshotsRef.current.get(id);
       if (pending) {
         clearTimeout(pending.timeoutId);
         pendingSnapshotsRef.current.delete(id);
-        pending.reject(new Error(`Il worker del pianeta ${id} ha smesso di rispondere.`));
+        pending.reject(new Error(message));
       }
     };
   }, []);
@@ -103,7 +124,7 @@ export function useMultiverse() {
         worker.postMessage({ type: "init", config, initialPopulation: DEFAULT_POPULATION } satisfies WorkerCommand);
       });
 
-      setPlanets((prev) => [...prev, { id, name, seed: finalSeed, frame: null, speed: 1, ready: false }]);
+      setPlanets((prev) => [...prev, { id, name, seed: finalSeed, frame: null, speed: 1, ready: false, error: null }]);
       setActiveId((current) => current ?? id);
       return id;
     },
@@ -145,8 +166,36 @@ export function useMultiverse() {
       config,
       initialPopulation: DEFAULT_POPULATION,
     } satisfies WorkerCommand);
-    setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, seed: finalSeed, speed: 1, frame: null } : p)));
+    setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, seed: finalSeed, speed: 1, frame: null, error: null } : p)));
   }, []);
+
+  /**
+   * Recovers a planet whose worker reported an error (v1.0.2): terminates
+   * the broken worker and starts a fresh one with the same seed. This is
+   * an honest fresh restart, not a resume of the exact state at the
+   * moment of failure — that would require a live snapshot kept
+   * continuously up to date, which isn't done automatically (see v1.0.1's
+   * manual "Salva sessione" for point-in-time saves the person controls).
+   */
+  const recoverPlanet = useCallback(
+    (id: string) => {
+      const planet = planetsRef.current.find((p) => p.id === id);
+      if (!planet) return;
+
+      workersRef.current.get(id)?.terminate();
+      pendingSnapshotsRef.current.delete(id);
+
+      const config: PlanetConfig = { width: PLANET_WIDTH, height: PLANET_HEIGHT, seed: planet.seed };
+      const worker = new Worker(new URL("../workers/simulation.worker.ts", import.meta.url));
+      workersRef.current.set(id, worker);
+      attachWorker(id, worker, () => {
+        worker.postMessage({ type: "init", config, initialPopulation: DEFAULT_POPULATION } satisfies WorkerCommand);
+      });
+
+      setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, error: null, ready: false, frame: null } : p)));
+    },
+    [attachWorker],
+  );
 
   /** Asks one planet's worker for its current WorldSnapshot. Rejects if it doesn't respond within SNAPSHOT_TIMEOUT_MS. */
   const requestPlanetSnapshot = useCallback((id: string): Promise<WorldSnapshot> => {
@@ -202,6 +251,7 @@ export function useMultiverse() {
         frame: null,
         speed: 1,
         ready: false,
+        error: null,
       }));
       setPlanets(restored);
       setActiveId(session.activePlanetId ?? session.planets[0]?.id ?? null);
@@ -240,6 +290,7 @@ export function useMultiverse() {
     setSpeed,
     togglePause,
     resetPlanet,
+    recoverPlanet,
     saveSession,
     loadSession,
   };
