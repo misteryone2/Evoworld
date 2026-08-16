@@ -22,6 +22,7 @@ export default function Home() {
     setSpeed,
     togglePause,
     resetPlanet,
+    recoverPlanet,
     saveSession,
     loadSession,
   } = useMultiverse();
@@ -81,6 +82,16 @@ export default function Home() {
       {view === "planet" && (
         <section className="workspace">
           <div className="canvas-column">
+            {activePlanet?.error && (
+              <div className="worker-error-banner">
+                <span>
+                  Il pianeta &quot;{activePlanet.name}&quot; ha smesso di rispondere: {activePlanet.error}
+                </span>
+                <button type="button" className="btn btn-primary" onClick={() => recoverPlanet(activePlanet.id)}>
+                  Riavvia pianeta (stesso seed, da zero)
+                </button>
+              </div>
+            )}
             <Planet3DView frame={activePlanet?.frame ?? null} />
             {activePlanet && (
               <Controls
