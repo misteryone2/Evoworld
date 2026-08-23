@@ -97,6 +97,17 @@ self.onmessage = (event: MessageEvent<WorkerCommand>) => {
         if (world) post({ type: "snapshot", snapshot: world.toSnapshot() });
         break;
       }
+      case "requestOrganismDetail": {
+        // v1.0.4 — Esplorazione individuale: full detail for one specific
+        // organism, requested by id after the person selects it in the 3D
+        // view. RenderFrame only carries the handful of visual traits
+        // needed to draw a creature, not its full genome/brain/memory —
+        // this is a separate, on-demand fetch so per-frame bandwidth stays
+        // small regardless of how large the population is.
+        const organism = world ? world.findOrganismById(command.organismId) : null;
+        post({ type: "organismDetail", organismId: command.organismId, organism });
+        break;
+      }
       case "loadSnapshot": {
         // v1.0.1 — Persistenza: resumes a previously saved World exactly as
         // it was (same organisms, species registry, tick, RNG state — see
