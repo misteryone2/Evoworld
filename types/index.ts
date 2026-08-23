@@ -250,6 +250,9 @@ export interface RenderFrame {
   organismsVision: Float32Array;
   organismsEvasion: Float32Array;
   organismsHuntingSkill: Float32Array;
+  // Per-organism id (v1.0.4), needed to identify which specific organism
+  // was clicked/tapped in the 3D view and request its full detail.
+  organismsId: Uint32Array;
   // Full species genealogy, small enough to send as a plain array every frame.
   speciesTree: SpeciesRecord[];
   // Per-species genetic analysis (v0.4.1): current trait stats, drift from
@@ -264,13 +267,35 @@ export type WorkerCommand =
   | { type: "setSpeed"; speed: SimulationSpeed }
   | { type: "reset"; config: PlanetConfig; initialPopulation: number }
   | { type: "requestSnapshot" }
-  | { type: "loadSnapshot"; snapshot: WorldSnapshot };
+  | { type: "loadSnapshot"; snapshot: WorldSnapshot }
+  | { type: "requestOrganismDetail"; organismId: number };
 
 export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
   | { type: "ready" }
   | { type: "snapshot"; snapshot: WorldSnapshot }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "organismDetail"; organismId: number; organism: Organism | null };
+
+/**
+ * v1.0.3 — Osservazione storica. One sampled point in a planet's history,
+ * taken periodically (not every tick — see useMultiverse) so the array
+ * stays a reasonable size even over very long runs. Everything here is
+ * derived from data already present in a RenderFrame; nothing new is
+ * computed by the engine.
+ */
+export interface HistoryPoint {
+  tick: number;
+  year: number;
+  population: number;
+  speciesAlive: number;
+  /** Shannon diversity index (see lib/biodiversity.ts) at this point in time. */
+  biodiversity: number;
+  avgCarnivory: number;
+  avgSize: number;
+  /** Average vegetation across the whole grid — the closest thing to a single "climate" number available without new engine instrumentation. */
+  avgVegetation: number;
+}
 
 /**
  * UI-only bookkeeping for one running planet (v0.9 — pianeti multipli).
@@ -296,6 +321,8 @@ export interface PlanetInstance {
    * looked like when it happened.
    */
   error: string | null;
+  /** v1.0.3 — sampled history for charts, oldest first. */
+  history: HistoryPoint[];
 }
 
 /**
@@ -309,6 +336,8 @@ export interface SavedPlanet {
   name: string;
   seed: number;
   snapshot: WorldSnapshot;
+  /** v1.0.3 — carries the planet's chart history along with the save, so a resumed simulation keeps its historical record instead of starting the charts over from a blank slate. */
+  history: HistoryPoint[];
 }
 
 /** A full saved session: every planet that was running at save time, plus which one was active. */
