@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMultiverse } from "../lib/useMultiverse";
 import { Planet3DView } from "../components/simulation/Planet3DView";
 import { Controls } from "../components/ui/Controls";
@@ -9,8 +9,13 @@ import { SpeciesPanel } from "../components/species/SpeciesPanel";
 import { PlanetSelector } from "../components/multiverse/PlanetSelector";
 import { PlanetComparison } from "../components/multiverse/PlanetComparison";
 import { SaveLoadPanel } from "../components/persistence/SaveLoadPanel";
+import { HistoryPanel } from "../components/history/HistoryPanel";
+import { EventTimeline } from "../components/history/EventTimeline";
+import { OrganismInspector } from "../components/organism/OrganismInspector";
+import { StartScreen } from "../components/start/StartScreen";
+import type { Organism, SavedSession } from "../types";
 
-type ViewMode = "planet" | "confronto" | "salvataggi";
+type ViewMode = "planet" | "confronto" | "salvataggi" | "storico";
 
 export default function Home() {
   const {
@@ -25,10 +30,61 @@ export default function Home() {
     recoverPlanet,
     saveSession,
     loadSession,
+    requestOrganismDetail,
   } = useMultiverse();
   const [view, setView] = useState<ViewMode>("planet");
+  const [selectedOrganismId, setSelectedOrganismId] = useState<number | null>(null);
+  const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
+  const [organismLoading, setOrganismLoading] = useState(false);
+  // v1.0.5 — the start screen is shown until the person explicitly chooses
+  // a new world or a saved session to resume; nothing spawns automatically.
+  const [started, setStarted] = useState(false);
 
   const activePlanet = planets.find((p) => p.id === activeId) ?? null;
+
+  // v1.0.4 — whenever the selection changes (or the active planet
+  // changes), fetch full detail for the selected organism. Re-fetches on
+  // every new frame while a selection is active too, so the inspector
+  // shows live-updating energy/age/position rather than a stale snapshot.
+  useEffect(() => {
+    if (selectedOrganismId === null || !activePlanet) {
+      setSelectedOrganism(null);
+      return;
+    }
+    let cancelled = false;
+    setOrganismLoading(true);
+    requestOrganismDetail(activePlanet.id, selectedOrganismId)
+      .then((organism) => {
+        if (!cancelled) setSelectedOrganism(organism);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedOrganism(null);
+      })
+      .finally(() => {
+        if (!cancelled) setOrganismLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Re-runs on every new frame (activePlanet.frame reference changes each
+    // tick) so the inspector stays live while a creature is selected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrganismId, activePlanet?.id, activePlanet?.frame]);
+
+  if (!started) {
+    return (
+      <StartScreen
+        onNewWorld={(options) => {
+          spawnPlanet(options);
+          setStarted(true);
+        }}
+        onContinue={(session: SavedSession) => {
+          loadSession(session);
+          setStarted(true);
+        }}
+      />
+    );
+  }
 
   return (
     <main className="page">
@@ -65,6 +121,15 @@ export default function Home() {
         >
           Salvataggi
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "storico"}
+          className={`view-toggle-btn${view === "storico" ? " active" : ""}`}
+          onClick={() => setView("storico")}
+        >
+          Storico
+        </button>
       </div>
 
       <PlanetSelector
@@ -79,6 +144,16 @@ export default function Home() {
 
       {view === "salvataggi" && <SaveLoadPanel onSave={saveSession} onLoad={loadSession} />}
 
+      {view === "storico" && (
+        <div className="history-view">
+          <HistoryPanel history={activePlanet?.history ?? []} />
+          <div className="history-timeline-section">
+            <h3>Cronologia eventi</h3>
+            <EventTimeline speciesTree={activePlanet?.frame?.speciesTree ?? []} />
+          </div>
+        </div>
+      )}
+
       {view === "planet" && (
         <section className="workspace">
           <div className="canvas-column">
@@ -92,7 +167,11 @@ export default function Home() {
                 </button>
               </div>
             )}
-            <Planet3DView frame={activePlanet?.frame ?? null} />
+            <Planet3DView
+              frame={activePlanet?.frame ?? null}
+              selectedOrganismId={selectedOrganismId}
+              onSelectOrganism={setSelectedOrganismId}
+            />
             {activePlanet && (
               <Controls
                 speed={activePlanet.speed}
@@ -105,6 +184,12 @@ export default function Home() {
           </div>
 
           <aside className="sidebar">
+            <OrganismInspector
+              organismId={selectedOrganismId}
+              organism={selectedOrganism}
+              loading={organismLoading}
+              onClose={() => setSelectedOrganismId(null)}
+            />
             <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
             {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
           </aside>
