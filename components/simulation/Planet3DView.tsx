@@ -31,6 +31,8 @@ const RENDER_TARGET_COUNT = 4000;
 const SPIKINESS_VISIBLE_THRESHOLD = 0.2;
 /** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
+/** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
+const TAP_MOVEMENT_THRESHOLD_PX = 6;
 
 const TERRAIN_LABELS: Record<number, string> = {
   0: "Oceano",
@@ -54,6 +56,10 @@ const TERRAIN_SWATCHES: Record<number, string> = {
 
 interface Props {
   frame: RenderFrame | null;
+  /** v1.0.4 — currently selected organism id, if any; used to position the highlight ring. */
+  selectedOrganismId?: number | null;
+  /** v1.0.4 — called with an organism id when the person taps/clicks a creature, or null when they tap empty space (deselecting). */
+  onSelectOrganism?: (organismId: number | null) => void;
 }
 
 interface SceneRefs {
@@ -66,6 +72,9 @@ interface SceneRefs {
   textureData: Uint8Array;
   bodyMesh: THREE.InstancedMesh;
   spikeMesh: THREE.InstancedMesh;
+  selectionRing: THREE.Mesh;
+  /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
+  instanceOrganismId: Uint32Array;
 }
 
 // Reused scratch objects for the per-frame instance update loop, to avoid
@@ -105,11 +114,31 @@ const tmpColor = new THREE.Color();
  * component's per-frame CPU cost roughly constant regardless of how large
  * the simulation itself grows. The engine has no population cap; only the
  * rendered detail is capped.
+ *
+ * v1.0.4 — Esplorazione individuale: tapping/clicking a creature raycasts
+ * against the body InstancedMesh; the hit's instanceId is mapped back to
+ * the underlying organism's id via instanceOrganismId and reported through
+ * onSelectOrganism. A pointerdown/pointerup distance check keeps a
+ * drag-to-rotate gesture from being misread as a tap. The currently
+ * selected organism (if still present in the current frame) gets a bright
+ * ring highlight positioned at its live location every frame — note that
+ * under heavy LOD sampling the selected organism might not be part of the
+ * rendered creature subset, so its position is looked up independently
+ * from the full (unsampled) organismsId array, not from the LOD loop.
  */
-export function Planet3DView({ frame }: Props) {
+export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganism }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
   const lastPlanetSize = useRef<{ width: number; height: number } | null>(null);
+  const onSelectRef = useRef(onSelectOrganism);
+  const selectedIdRef = useRef(selectedOrganismId);
+
+  useEffect(() => {
+    onSelectRef.current = onSelectOrganism;
+  }, [onSelectOrganism]);
+  useEffect(() => {
+    selectedIdRef.current = selectedOrganismId;
+  }, [selectedOrganismId]);
 
   // Mount-only: build the renderer, scene, camera, controls, and the
   // pre-allocated meshes once. Per-frame updates (below) only ever mutate
@@ -175,6 +204,13 @@ export function Planet3DView({ frame }: Props) {
     spikeMesh.count = 0;
     scene.add(spikeMesh);
 
+    // v1.0.4 — highlight ring for the selected organism, hidden by default.
+    const ringGeometry = new THREE.TorusGeometry(1, 0.12, 8, 28);
+    const ringMaterial = new THREE.MeshBasicMaterial({ color: 0x6bffb0, transparent: true, opacity: 0.9 });
+    const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
+    selectionRing.visible = false;
+    scene.add(selectionRing);
+
     let animationFrameId = 0;
     const renderLoop = () => {
       controls.update();
@@ -193,11 +229,58 @@ export function Planet3DView({ frame }: Props) {
     });
     resizeObserver.observe(container);
 
-    sceneRef.current = { renderer, scene, camera, controls, planetMesh, planetTexture, textureData: placeholderData, bodyMesh, spikeMesh };
+    sceneRef.current = {
+      renderer,
+      scene,
+      camera,
+      controls,
+      planetMesh,
+      planetTexture,
+      textureData: placeholderData,
+      bodyMesh,
+      spikeMesh,
+      selectionRing,
+      instanceOrganismId: new Uint32Array(MAX_CREATURE_INSTANCES),
+    };
+
+    // v1.0.4 — tap/click selection. A pointerdown/pointerup pair is only
+    // treated as a tap (not a drag-to-rotate) if the pointer barely moved.
+    let pointerDownPos: { x: number; y: number } | null = null;
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
+
+    const handlePointerDown = (e: PointerEvent) => {
+      pointerDownPos = { x: e.clientX, y: e.clientY };
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (!pointerDownPos) return;
+      const dx = e.clientX - pointerDownPos.x;
+      const dy = e.clientY - pointerDownPos.y;
+      pointerDownPos = null;
+      if (Math.sqrt(dx * dx + dy * dy) > TAP_MOVEMENT_THRESHOLD_PX) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObject(bodyMesh);
+      if (hits.length > 0 && hits[0].instanceId !== undefined && sceneRef.current) {
+        const organismId = sceneRef.current.instanceOrganismId[hits[0].instanceId];
+        onSelectRef.current?.(organismId);
+      } else {
+        onSelectRef.current?.(null);
+      }
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       controls.dispose();
       planetGeometry.dispose();
       planetMaterial.dispose();
@@ -206,6 +289,8 @@ export function Planet3DView({ frame }: Props) {
       bodyMaterial.dispose();
       spikeGeometry.dispose();
       spikeMaterial.dispose();
+      ringGeometry.dispose();
+      ringMaterial.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -217,8 +302,9 @@ export function Planet3DView({ frame }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Per-frame: repaint the planet texture and update creature instances
-  // from the latest RenderFrame, without rebuilding any Three.js objects.
+  // Per-frame: repaint the planet texture, update creature instances, and
+  // reposition the selection ring, from the latest RenderFrame — without
+  // rebuilding any Three.js objects.
   useEffect(() => {
     const refs = sceneRef.current;
     if (!refs || !frame) return;
@@ -251,6 +337,7 @@ export function Planet3DView({ frame }: Props) {
     refs.planetTexture.needsUpdate = true;
 
     updateCreatureInstances(refs, frame);
+    updateSelectionRing(refs, frame, selectedIdRef.current);
   }, [frame]);
 
   return (
@@ -259,7 +346,7 @@ export function Planet3DView({ frame }: Props) {
         ref={containerRef}
         className="planet-canvas planet-canvas-3d"
         role="img"
-        aria-label="Visualizzazione 3D del pianeta simulato — trascina per ruotare"
+        aria-label="Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
       />
       <ul className="biome-legend" aria-label="Legenda dei biomi">
         {Object.entries(TERRAIN_LABELS).map(([code, label]) => (
@@ -284,6 +371,7 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
     organismsVision,
     organismsEvasion,
     organismsHuntingSkill,
+    organismsId,
     planetWidth,
     planetHeight,
   } = frame;
@@ -330,6 +418,7 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
       refs.spikeMesh.setMatrixAt(writeIndex, tmpMatrix);
     }
 
+    refs.instanceOrganismId[writeIndex] = organismsId[i];
     writeIndex++;
   }
 
@@ -340,4 +429,42 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
   refs.bodyMesh.instanceColor!.needsUpdate = true;
   refs.spikeMesh.instanceMatrix.needsUpdate = true;
   refs.spikeMesh.instanceColor!.needsUpdate = true;
+}
+
+/**
+ * Positions (or hides) the selection ring for the currently selected
+ * organism, if any. Searches the full (unsampled) organismsId array rather
+ * than relying on the LOD-strided instance loop above, since the selected
+ * organism might not have been included in this frame's rendered subset.
+ */
+function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: number | null): void {
+  if (selectedId === null) {
+    refs.selectionRing.visible = false;
+    return;
+  }
+
+  const { organismsId, organismsX, organismsY, organismsSize, planetWidth, planetHeight } = frame;
+  let index = -1;
+  for (let i = 0; i < organismsId.length; i++) {
+    if (organismsId[i] === selectedId) {
+      index = i;
+      break;
+    }
+  }
+
+  if (index === -1) {
+    refs.selectionRing.visible = false;
+    return;
+  }
+
+  const point = projectToSphere(organismsX[index], organismsY[index], planetWidth, planetHeight, PLANET_RADIUS + 0.05);
+  const normal = new THREE.Vector3(point.normalX, point.normalY, point.normalZ);
+  refs.selectionRing.position.set(point.x, point.y, point.z);
+  refs.selectionRing.quaternion.setFromUnitVectors(UP, normal);
+  refs.selectionRing.rotateX(Math.PI / 2); // torus is authored flat on XY; align its face with the surface normal
+
+  const baseScale = Math.max(0.05, organismsSize[index] * 0.12);
+  const ringScale = baseScale * 2.2;
+  refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
+  refs.selectionRing.visible = true;
 }
