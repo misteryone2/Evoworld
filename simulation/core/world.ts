@@ -174,6 +174,11 @@ export class World {
     return computeSpeciesGenomeStats(this.organisms, this.speciesRegistry);
   }
 
+  /** Finds a single living organism by id (v1.0.4 — esplorazione individuale), or null if it's no longer alive/present. */
+  findOrganismById(id: number): Organism | null {
+    return this.organisms.find((o) => o.id === id) ?? null;
+  }
+
   toSnapshot(): WorldSnapshot {
     return {
       tick: this.tick,
