@@ -55,7 +55,7 @@ function fakeSession(id: string, overrides: Partial<SavedSession> = {}): SavedSe
     label: "Sessione di prova",
     savedAt: Date.now(),
     activePlanetId: "planet-1",
-    planets: [{ id: "planet-1", name: "Pianeta 1", seed: 1, snapshot: fakeSnapshot() }],
+    planets: [{ id: "planet-1", name: "Pianeta 1", seed: 1, snapshot: fakeSnapshot(), history: [] }],
     ...overrides,
   };
 }
@@ -124,8 +124,8 @@ describe("persistence", () => {
   it("supports multiple planets within one session", async () => {
     const session = fakeSession("s1", {
       planets: [
-        { id: "planet-1", name: "Pianeta 1", seed: 1, snapshot: fakeSnapshot({ tick: 100 }) },
-        { id: "planet-2", name: "Pianeta 2", seed: 2, snapshot: fakeSnapshot({ tick: 200 }) },
+        { id: "planet-1", name: "Pianeta 1", seed: 1, snapshot: fakeSnapshot({ tick: 100 }), history: [] },
+        { id: "planet-2", name: "Pianeta 2", seed: 2, snapshot: fakeSnapshot({ tick: 200 }), history: [] },
       ],
     });
     await saveSession(session);
