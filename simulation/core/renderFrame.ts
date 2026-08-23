@@ -40,6 +40,7 @@ export function buildRenderFrame(world: World): RenderFrame {
   const organismsVision = new Float32Array(n);
   const organismsEvasion = new Float32Array(n);
   const organismsHuntingSkill = new Float32Array(n);
+  const organismsId = new Uint32Array(n);
   for (let i = 0; i < n; i++) {
     const o = organisms[i];
     organismsX[i] = o.position.x;
@@ -51,6 +52,7 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsVision[i] = o.genome.vision;
     organismsEvasion[i] = o.genome.evasion;
     organismsHuntingSkill[i] = o.genome.huntingSkill;
+    organismsId[i] = o.id;
   }
 
   const stats = world.getStats();
@@ -72,6 +74,7 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsVision,
     organismsEvasion,
     organismsHuntingSkill,
+    organismsId,
     speciesTree: world.getSpeciesTree(),
     speciesGenomeStats: world.getSpeciesGenomeStats(),
   };
