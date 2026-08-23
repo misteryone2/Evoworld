@@ -1033,3 +1033,67 @@ body {
   font-size: 0.75rem;
   margin: 0.75rem 0 0;
 }
+
+/* v1.0.4 — esplorazione individuale */
+
+.organism-inspector {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.organism-inspector-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.organism-inspector-loading {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
+.organism-inspector-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.organism-inspector-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.organism-species-tag {
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.organism-inspector-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+}
+
+.organism-inspector-close:hover {
+  color: var(--danger);
+}
+
+.organism-inspector h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
