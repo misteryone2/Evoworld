@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMultiverse } from "../lib/useMultiverse";
+import { useViewport } from "../lib/useViewport";
 import { Planet3DView } from "../components/simulation/Planet3DView";
 import { Controls } from "../components/ui/Controls";
 import { StatsPanel } from "../components/ui/StatsPanel";
@@ -40,6 +41,13 @@ export default function Home() {
   // a new world or a saved session to resume; nothing spawns automatically.
   const [started, setStarted] = useState(false);
 
+  // v1.0.6 — on narrow screens the inspector/stats sidebar becomes a
+  // slide-up bottom sheet instead of a column stacked under a tall square
+  // 3D canvas, so it stays reachable with a thumb without endless scrolling.
+  const viewport = useViewport();
+  const isMobileLayout = viewport.breakpoint === "mobile";
+  const [sheetOpen, setSheetOpen] = useState(false);
+
   const activePlanet = planets.find((p) => p.id === activeId) ?? null;
 
   // v1.0.4 — whenever the selection changes (or the active planet
@@ -70,6 +78,14 @@ export default function Home() {
     // tick) so the inspector stays live while a creature is selected.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrganismId, activePlanet?.id, activePlanet?.frame]);
+
+  // v1.0.6 — selecting a creature on mobile should reveal the inspector
+  // automatically, since it lives in a closed-by-default bottom sheet there.
+  useEffect(() => {
+    if (isMobileLayout && selectedOrganismId !== null) {
+      setSheetOpen(true);
+    }
+  }, [isMobileLayout, selectedOrganismId]);
 
   if (!started) {
     return (
@@ -183,16 +199,47 @@ export default function Home() {
             <SpeciesPanel frame={activePlanet?.frame ?? null} />
           </div>
 
-          <aside className="sidebar">
-            <OrganismInspector
-              organismId={selectedOrganismId}
-              organism={selectedOrganism}
-              loading={organismLoading}
-              onClose={() => setSelectedOrganismId(null)}
-            />
-            <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
-            {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
-          </aside>
+          {isMobileLayout ? (
+            <>
+              <button
+                type="button"
+                className="mobile-sheet-toggle"
+                aria-expanded={sheetOpen}
+                aria-controls="mobile-sidebar-sheet"
+                onClick={() => setSheetOpen((open) => !open)}
+              >
+                📊 Statistiche e specie {sheetOpen ? "▾" : "▴"}
+              </button>
+              {sheetOpen && (
+                <div className="sheet-backdrop" onClick={() => setSheetOpen(false)} aria-hidden="true" />
+              )}
+              <aside
+                id="mobile-sidebar-sheet"
+                className={`sidebar mobile-sheet${sheetOpen ? " open" : ""}`}
+              >
+                <div className="sheet-handle" aria-hidden="true" />
+                <OrganismInspector
+                  organismId={selectedOrganismId}
+                  organism={selectedOrganism}
+                  loading={organismLoading}
+                  onClose={() => setSelectedOrganismId(null)}
+                />
+                <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
+                {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
+              </aside>
+            </>
+          ) : (
+            <aside className="sidebar">
+              <OrganismInspector
+                organismId={selectedOrganismId}
+                organism={selectedOrganism}
+                loading={organismLoading}
+                onClose={() => setSelectedOrganismId(null)}
+              />
+              <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
+              {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
+            </aside>
+          )}
         </section>
       )}
     </main>
