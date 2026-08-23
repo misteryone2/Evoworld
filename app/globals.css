@@ -1,4 +1,4 @@
-/*
+//*
   EvoWorld — visual identity
   Design idea: a night observation deck for a living planet. The palette is
   built from a deep space void, a bioluminescent signal green (the "life"
@@ -1204,4 +1204,182 @@ body {
 .start-field select:focus {
   outline: none;
   border-color: var(--signal-dim);
+}
+
+/* ==========================================================================
+   v1.0.6 — Adaptive UI & Device Optimization
+   Non tocca la logica di simulazione: solo layout, spaziature, dimensioni
+   dei touch target e leggibilità su smartphone/tablet/desktop, ritratto e
+   paesaggio. Le regole precedenti (breakpoint 900px/700px) restano valide;
+   qui si affinano i casi che restavano scomodi su schermi piccoli.
+   ========================================================================== */
+
+/* Spaziatura di pagina fluida invece di un padding fisso identico su ogni
+   dispositivo: si restringe sugli schermi piccoli, cresce leggermente su
+   quelli grandi. */
+.page {
+  padding: clamp(1rem, 4vw, 2.5rem) clamp(0.75rem, 4vw, 1.5rem) clamp(2rem, 8vw, 4rem);
+}
+
+@media (max-width: 640px) {
+  .page-header {
+    margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+  }
+
+  .workspace {
+    gap: 1rem;
+  }
+
+  .canvas-column {
+    gap: 0.75rem;
+  }
+}
+
+/* Il selettore di vista (tab) può contenere più etichette di quante ne
+   entrino su uno smartphone stretto: invece di andare a capo in modo
+   disordinato, scorre orizzontalmente come una barra di tab nativa. */
+@media (max-width: 640px) {
+  .view-toggle {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 0.15rem;
+    margin-left: -0.25rem;
+    margin-right: -0.25rem;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+  }
+
+  .view-toggle::-webkit-scrollbar {
+    display: none;
+  }
+
+  .view-toggle-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+/* Su schermi in paesaggio molto bassi (telefono ruotato) una sfera 3D con
+   aspect-ratio 1:1 e larghezza 100% diventerebbe più alta dello spazio
+   verticale disponibile, spingendo i controlli fuori dallo schermo. In
+   questo caso si vincola l'altezza e si lascia che la larghezza si adatti. */
+@media (max-height: 480px) and (orientation: landscape) {
+  .planet-canvas {
+    aspect-ratio: auto;
+    width: min(100%, 70vh);
+    height: 70vh;
+    margin: 0 auto;
+  }
+}
+
+/* Target touch: su puntatori "grossolani" (dita, non mouse) i controlli
+   devono rispettare l'area minima consigliata di ~44px, altrimenti diventano
+   difficili da premere con precisione mentre si osserva la simulazione. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+  }
+
+  .view-toggle-btn {
+    min-height: 40px;
+    padding: 0.55rem 1.1rem;
+  }
+
+  .species-node {
+    min-height: 40px;
+    padding: 0.45rem 0.6rem;
+  }
+
+  .planet-tab {
+    min-height: 40px;
+  }
+}
+
+/* ---- Sidebar → bottom sheet su smartphone (< 641px) --------------------
+   Su schermi piccoli l'ispettore individuo e il pannello statistiche non
+   restano più impilati sotto una sfera 3D già alta quanto lo schermo:
+   diventano un pannello a comparsa dal basso, richiamabile con un pulsante
+   fisso, così restano raggiungibili col pollice senza scroll infinito. */
+.mobile-sheet-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .mobile-sheet-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    width: 100%;
+    min-height: 48px;
+    font-family: "EvoMono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.65rem 1rem;
+    cursor: pointer;
+    position: sticky;
+    bottom: 0.75rem;
+    z-index: 20;
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+  }
+
+  .mobile-sheet-toggle:focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 2px;
+  }
+
+  .sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(3, 5, 7, 0.6);
+    z-index: 30;
+  }
+
+  .sidebar.mobile-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    max-height: 78vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--void-2);
+    border: 1px solid var(--line);
+    border-bottom: none;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -20px 60px -20px rgba(0, 0, 0, 0.75);
+    padding: 0.6rem 1.1rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+  }
+
+  .sidebar.mobile-sheet.open {
+    transform: translateY(0);
+  }
+
+  .sheet-handle {
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line);
+    margin: 0.35rem auto 0.85rem;
+  }
+}
+
+/* Su schermi molto stretti la griglia statistiche 2 colonne resta leggibile
+   fino a circa 360px; sotto quella soglia (dispositivi molto piccoli o
+   split-screen) passa a una sola colonna per evitare testo compresso. */
+@media (max-width: 360px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
 }
