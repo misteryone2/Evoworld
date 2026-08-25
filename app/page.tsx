@@ -32,6 +32,7 @@ export default function Home() {
     saveSession,
     loadSession,
     requestOrganismDetail,
+    requestViewport,
   } = useMultiverse();
   const [view, setView] = useState<ViewMode>("planet");
   const [selectedOrganismId, setSelectedOrganismId] = useState<number | null>(null);
@@ -185,6 +186,8 @@ export default function Home() {
             )}
             <Planet3DView
               frame={activePlanet?.frame ?? null}
+              viewportFrame={activePlanet?.viewportFrame ?? null}
+              onRequestViewport={activePlanet ? (request) => requestViewport(activePlanet.id, request) : undefined}
               selectedOrganismId={selectedOrganismId}
               onSelectOrganism={setSelectedOrganismId}
             />
