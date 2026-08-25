@@ -136,6 +136,17 @@ export interface PlanetConfig {
   width: number;
   height: number;
   seed: number;
+  /**
+   * v1.1 — World Scale. Side length (in cells) of one square terrain
+   * chunk. The planet is generated and simulated lazily per chunk rather
+   * than as one dense width*height grid, so a world's *declared* size can
+   * grow far beyond what fits comfortably in memory or a per-tick full
+   * scan — memory and CPU cost track how much of the world has actually
+   * been explored/populated, not its nominal size. Optional and defaults
+   * to DEFAULT_CHUNK_SIZE (see simulation/core/constants.ts) so existing
+   * configs/tests that omit it keep working unchanged.
+   */
+  chunkSize?: number;
 }
 
 /**
@@ -213,18 +224,83 @@ export interface SimulationStats {
 
 export type SimulationSpeed = 0 | 1 | 10 | 100 | 1000;
 
+/**
+ * v1.1 — one materialized terrain chunk as stored in a snapshot: only
+ * chunks the simulation has actually touched (generated and/or actively
+ * updated) are ever saved — an unpopulated corner of a huge world costs
+ * nothing in a save file. `cells` is row-major within the chunk
+ * (length = chunkSize * chunkSize). `lastActiveTick` lets a restored
+ * world correctly catch up vegetation/climate for this chunk the next
+ * time it reactivates, exactly as if the save/load had never happened.
+ */
+export interface PlanetChunkSnapshot {
+  key: string; // "cx,cy"
+  cells: Cell[];
+  lastActiveTick: number;
+}
+
 /** Full serializable snapshot of a running simulation. */
 export interface WorldSnapshot {
   tick: number;
   planet: {
     config: PlanetConfig;
-    cells: Cell[]; // flattened, row-major, length = width * height
+    /**
+     * v1.1 — sparse, chunk-based terrain storage. Present on every
+     * snapshot saved from v1.1 onward.
+     */
+    chunks?: PlanetChunkSnapshot[];
+    /**
+     * Legacy (pre-v1.1) dense storage: the *entire* width*height grid,
+     * flattened row-major. Only ever present on saves made before v1.1;
+     * new snapshots never populate this field. Kept so old saves keep
+     * loading correctly — see Planet.fromLegacyDenseCells, used by
+     * World.fromSnapshot as a one-time migration on load.
+     */
+    cells?: Cell[];
   };
   organisms: Organism[];
   nextOrganismId: number;
   nextSpeciesId: number;
   randomState: number;
   speciesRegistry: SpeciesRecord[];
+}
+
+/**
+ * v1.1 — one requested view of the terrain (World Scale). The 3D view
+ * always frames the whole globe (there is no "flying over unbounded
+ * terrain" camera mode yet), so centerX/Y + radiusX/Y currently always
+ * span the full planet; they exist as real fields — not hardcoded — so a
+ * future closer-flyover camera can request a sub-region through this same
+ * protocol without another redesign. maxWidth/maxHeight caps the
+ * returned texel resolution, letting the UI ask for a coarse overview
+ * when the camera is far away and a sharper one when it's close, entirely
+ * independent of how large the underlying world actually is.
+ */
+export interface ViewportRequest {
+  centerX: number;
+  centerY: number;
+  radiusX: number;
+  radiusY: number;
+  maxWidth: number;
+  maxHeight: number;
+}
+
+/**
+ * v1.1 — terrain/vegetation payload for one requested viewport, sent only
+ * on demand (see ViewportRequest) rather than every tick. Resolution is
+ * capped by the request, never by the world's actual size, which is what
+ * lets the render cost stay flat as the simulated world grows.
+ */
+export interface ViewportFrame {
+  tick: number;
+  originX: number;
+  originY: number;
+  cellsWidth: number;
+  cellsHeight: number;
+  texWidth: number;
+  texHeight: number;
+  vegetation: Float32Array; // texWidth * texHeight
+  terrain: Uint8Array; // texWidth * texHeight
 }
 
 /** Lightweight payload sent from the worker to the UI every rendered frame. */
@@ -234,9 +310,6 @@ export interface RenderFrame {
   stats: SimulationStats;
   planetWidth: number;
   planetHeight: number;
-  // Flattened per-cell vegetation (0..1) and terrain code, for fast canvas draw.
-  vegetation: Float32Array;
-  terrain: Uint8Array;
   // Flattened organism data for drawing: x, y, speciesId, size (repeated per organism).
   organismsX: Float32Array;
   organismsY: Float32Array;
@@ -258,6 +331,14 @@ export interface RenderFrame {
   // Per-species genetic analysis (v0.4.1): current trait stats, drift from
   // parent's origin snapshot, distances to other living species.
   speciesGenomeStats: SpeciesGenomeStats[];
+  /**
+   * v1.1 — cheap, world-size-independent estimate of average vegetation
+   * across the whole planet (fixed-resolution sample grid, computed
+   * worker-side — see simulation/core/renderFrame.ts). Replaces the
+   * pre-v1.1 client-side average over the full per-cell vegetation array,
+   * which no longer exists on this frame.
+   */
+  avgVegetation: number;
 }
 
 // ---- Worker <-> UI message protocol -------------------------------------
@@ -268,14 +349,18 @@ export type WorkerCommand =
   | { type: "reset"; config: PlanetConfig; initialPopulation: number }
   | { type: "requestSnapshot" }
   | { type: "loadSnapshot"; snapshot: WorldSnapshot }
-  | { type: "requestOrganismDetail"; organismId: number };
+  | { type: "requestOrganismDetail"; organismId: number }
+  // v1.1 — requested on demand by the 3D view (camera move / zoom-level
+  // change / periodic refresh), never on a per-tick cadence.
+  | { type: "requestViewport"; request: ViewportRequest };
 
 export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
   | { type: "ready" }
   | { type: "snapshot"; snapshot: WorldSnapshot }
   | { type: "error"; message: string }
-  | { type: "organismDetail"; organismId: number; organism: Organism | null };
+  | { type: "organismDetail"; organismId: number; organism: Organism | null }
+  | { type: "viewportFrame"; frame: ViewportFrame };
 
 /**
  * v1.0.3 — Osservazione storica. One sampled point in a planet's history,
@@ -309,7 +394,21 @@ export interface PlanetInstance {
   id: string;
   name: string;
   seed: number;
+  /**
+   * v1.1 — the full planet configuration (width/height/chunkSize) this
+   * instance was created with, so resetPlanet/recoverPlanet can rebuild
+   * it at the *same* size instead of silently falling back to a default
+   * (that was a latent bug pre-v1.1, invisible only because every planet
+   * used to be the same fixed size anyway).
+   */
+  config: PlanetConfig;
   frame: RenderFrame | null;
+  /**
+   * v1.1 — latest on-demand terrain/vegetation viewport payload (see
+   * ViewportRequest/ViewportFrame), independent of `frame`'s per-tick
+   * cadence. Null until the first requestViewport response arrives.
+   */
+  viewportFrame: ViewportFrame | null;
   speed: SimulationSpeed;
   ready: boolean;
   /**
