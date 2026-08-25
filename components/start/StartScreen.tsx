@@ -17,9 +17,14 @@ interface Props {
 }
 
 const SIZE_PRESETS = {
-  small: { label: "Piccolo", width: 60, height: 60 },
-  medium: { label: "Medio", width: 100, height: 100 },
-  large: { label: "Grande", width: 150, height: 150 },
+  // v1.1 — World Scale. Presets scaled up massively (from 60/100/150) now
+  // that terrain is chunked/lazily generated rather than one dense grid
+  // (see simulation/planet/planet.ts): even "Grande" costs roughly what
+  // the old presets did, as long as the population stays clustered — see
+  // the v1.1 benchmark notes in HANDOFF.md.
+  small: { label: "Piccolo", width: 512, height: 512 },
+  medium: { label: "Medio", width: 1024, height: 1024 },
+  large: { label: "Grande", width: 2048, height: 2048 },
 } as const;
 
 const POPULATION_PRESETS = {
