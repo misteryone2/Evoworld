@@ -4,6 +4,7 @@ import type { WorkerCommand, WorkerEvent } from "../types";
 import { World } from "../simulation/core/world";
 import { SimulationClock } from "../simulation/core/clock";
 import { buildRenderFrame } from "../simulation/core/renderFrame";
+import { buildViewportFrame } from "../simulation/core/viewportFrame";
 
 const DEFAULT_INITIAL_POPULATION = 150;
 // Cap ticks processed per animation frame so a huge speed multiplier (x1000)
@@ -116,6 +117,15 @@ self.onmessage = (event: MessageEvent<WorkerCommand>) => {
         clock.setSpeed(1);
         startLoop();
         post({ type: "frame", frame: buildRenderFrame(world) });
+        break;
+      }
+      case "requestViewport": {
+        // v1.1 — on-demand terrain/vegetation texture for the 3D view,
+        // decoupled from the per-tick frame loop entirely (see
+        // simulation/core/viewportFrame.ts). Computed synchronously since
+        // it's bounded by the request's own resolution cap, not by the
+        // planet's actual size.
+        if (world) post({ type: "viewportFrame", frame: buildViewportFrame(world, command.request) });
         break;
       }
     }
