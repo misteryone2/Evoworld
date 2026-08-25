@@ -1,4 +1,4 @@
-import type { Organism } from "../../types";
+import type { Cell, Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { environmentalFitness } from "../biology/environment";
 
@@ -21,20 +21,25 @@ const ENERGY_PER_VEGETATION = 40;
  * broad tolerance at the cost of never excelling anywhere.
  */
 export function feedOrganisms(organisms: Organism[], planet: Planet): void {
-  // Group living organisms by the cell they currently occupy.
-  const byCell = new Map<number, Organism[]>();
+  // Group living organisms by the cell they currently occupy. v1.1 — the
+  // cell itself (not just an index) is captured alongside its occupants:
+  // with terrain now lazily chunked (see simulation/planet/planet.ts),
+  // there is no dense planet.cells array to index into afterward, so the
+  // live Cell reference (via planet.getCell, which materializes/caches
+  // the owning chunk) is looked up once here and reused for every
+  // occupant of that cell.
+  const byCell = new Map<number, { cell: Cell; occupants: Organism[] }>();
   for (const o of organisms) {
     if (!o.alive) continue;
     const cx = Math.round(o.position.x) % planet.width;
     const cy = Math.round(o.position.y) % planet.height;
     const idx = planet.index(cx, cy);
-    const list = byCell.get(idx);
-    if (list) list.push(o);
-    else byCell.set(idx, [o]);
+    const entry = byCell.get(idx);
+    if (entry) entry.occupants.push(o);
+    else byCell.set(idx, { cell: planet.getCell(cx, cy), occupants: [o] });
   }
 
-  for (const [idx, occupants] of byCell) {
-    const cell = planet.cells[idx];
+  for (const { cell, occupants } of byCell.values()) {
     if (cell.terrain === "ocean" || cell.vegetation <= 0) continue;
 
     // Larger, more herbivorous organisms need (and take) proportionally
