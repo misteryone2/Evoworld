@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { RenderFrame } from "../../types";
+import type { RenderFrame, ViewportFrame } from "../../types";
 import { speciesColor } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
 import { terrainColorCSS } from "../../lib/terrainColor";
@@ -30,9 +30,19 @@ const TERRAIN_LABELS: Record<number, string> = {
 
 interface Props {
   frame: RenderFrame | null;
+  /**
+   * v1.1 — World Scale: RenderFrame no longer carries the full per-cell
+   * terrain/vegetation grid (see simulation/core/renderFrame.ts). This
+   * still-unused legacy 2D view (superseded by Planet3DView since v0.7)
+   * now draws from an on-demand ViewportFrame instead, when one is
+   * provided; without it, only organisms are drawn, over a flat
+   * background — kept simple since nothing in the app currently wires a
+   * viewport request up to this component.
+   */
+  viewportFrame?: ViewportFrame | null;
 }
 
-export function PlanetCanvas({ frame }: Props) {
+export function PlanetCanvas({ frame, viewportFrame = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -41,18 +51,27 @@ export function PlanetCanvas({ frame }: Props) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const { planetWidth, planetHeight, vegetation, terrain } = frame;
+    const { planetWidth, planetHeight } = frame;
     const cellSize = canvas.width / planetWidth;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#05070a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    for (let y = 0; y < planetHeight; y++) {
-      for (let x = 0; x < planetWidth; x++) {
-        const idx = y * planetWidth + x;
-        const t = terrain[idx];
-        const veg = vegetation[idx];
-        ctx.fillStyle = terrainColorCSS(t, veg);
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize + 0.5, cellSize + 0.5);
+    if (viewportFrame) {
+      const { texWidth, texHeight, cellsWidth, cellsHeight, vegetation, terrain } = viewportFrame;
+      const texToWorldX = cellsWidth / texWidth;
+      const texToWorldY = cellsHeight / texHeight;
+      for (let ty = 0; ty < texHeight; ty++) {
+        for (let tx = 0; tx < texWidth; tx++) {
+          const idx = ty * texWidth + tx;
+          ctx.fillStyle = terrainColorCSS(terrain[idx], vegetation[idx]);
+          ctx.fillRect(
+            tx * texToWorldX * cellSize,
+            ty * texToWorldY * cellSize,
+            texToWorldX * cellSize + 0.5,
+            texToWorldY * cellSize + 0.5,
+          );
+        }
       }
     }
 
@@ -84,7 +103,7 @@ export function PlanetCanvas({ frame }: Props) {
       });
       drawCreature(ctx, px, py, r, shape, color);
     }
-  }, [frame]);
+  }, [frame, viewportFrame]);
 
   return (
     <div className="canvas-wrap">
