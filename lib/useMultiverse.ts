@@ -7,6 +7,7 @@ import type {
   PlanetInstance,
   SavedSession,
   SimulationSpeed,
+  ViewportRequest,
   WorkerCommand,
   WorkerEvent,
   WorldSnapshot,
@@ -14,9 +15,19 @@ import type {
 import { saveSession as persistSession } from "./persistence";
 import { maybeAppendHistory } from "./historyAccumulation";
 
-const PLANET_WIDTH = 100;
-const PLANET_HEIGHT = 100;
 const DEFAULT_POPULATION = 150;
+/**
+ * v1.1 — World Scale. Fixed size presets, replacing the old flat 100x100
+ * default. Kept as constants here (not just in StartScreen) because
+ * resetPlanet/recoverPlanet need a fallback size too, when a planet's own
+ * config isn't available for some reason.
+ */
+export const WORLD_SIZE_PRESETS = {
+  small: { width: 512, height: 512 },
+  medium: { width: 1024, height: 1024 },
+  large: { width: 2048, height: 2048 },
+} as const;
+const DEFAULT_PLANET_CONFIG = WORLD_SIZE_PRESETS.medium;
 /** How long to wait for a worker to respond to a snapshot request before giving up (e.g. a stuck or terminated worker) — see saveSession. */
 const SNAPSHOT_TIMEOUT_MS = 8000;
 /** Same idea as SNAPSHOT_TIMEOUT_MS, for a single organism detail request (v1.0.4). */
@@ -100,6 +111,10 @@ export function useMultiverse() {
         setPlanets((prev) =>
           prev.map((p) => (p.id === id ? { ...p, frame: msg.frame, error: null, history: maybeAppendHistory(p.history, msg.frame) } : p)),
         );
+      } else if (msg.type === "viewportFrame") {
+        // v1.1 — on-demand terrain payload, independent of the per-tick
+        // frame; simply stored as the latest one for this planet.
+        setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, viewportFrame: msg.frame } : p)));
       } else if (msg.type === "snapshot") {
         const pending = pendingSnapshotsRef.current.get(id);
         if (pending) {
@@ -154,8 +169,8 @@ export function useMultiverse() {
       const name = `Pianeta ${nextIndexRef.current++}`;
       const finalSeed = options?.seed ?? randomSeed();
       const config: PlanetConfig = {
-        width: options?.width ?? PLANET_WIDTH,
-        height: options?.height ?? PLANET_HEIGHT,
+        width: options?.width ?? DEFAULT_PLANET_CONFIG.width,
+        height: options?.height ?? DEFAULT_PLANET_CONFIG.height,
         seed: finalSeed,
       };
       const population = options?.population ?? DEFAULT_POPULATION;
@@ -168,7 +183,7 @@ export function useMultiverse() {
 
       setPlanets((prev) => [
         ...prev,
-        { id, name, seed: finalSeed, frame: null, speed: 1, ready: false, error: null, history: [] },
+        { id, name, seed: finalSeed, config, frame: null, viewportFrame: null, speed: 1, ready: false, error: null, history: [] },
       ]);
       setActiveId((current) => current ?? id);
       return id;
@@ -204,16 +219,27 @@ export function useMultiverse() {
     );
   }, []);
 
+  /**
+   * v1.1 — resets at the planet's *own* previously configured size (kept
+   * on PlanetInstance.config), not a hardcoded default: pre-v1.1 this
+   * silently reset every planet back to a fixed 100x100 regardless of
+   * what size it had actually been created at, a latent bug that was
+   * invisible only because every planet used to be that same fixed size.
+   */
   const resetPlanet = useCallback((id: string, seed?: number) => {
     const finalSeed = seed ?? randomSeed();
-    const config: PlanetConfig = { width: PLANET_WIDTH, height: PLANET_HEIGHT, seed: finalSeed };
+    const previous = planetsRef.current.find((p) => p.id === id);
+    const size = previous?.config ?? DEFAULT_PLANET_CONFIG;
+    const config: PlanetConfig = { width: size.width, height: size.height, seed: finalSeed };
     workersRef.current.get(id)?.postMessage({
       type: "reset",
       config,
       initialPopulation: DEFAULT_POPULATION,
     } satisfies WorkerCommand);
     setPlanets((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, seed: finalSeed, speed: 1, frame: null, error: null, history: [] } : p)),
+      prev.map((p) =>
+        p.id === id ? { ...p, seed: finalSeed, config, speed: 1, frame: null, viewportFrame: null, error: null, history: [] } : p,
+      ),
     );
   }, []);
 
@@ -226,6 +252,9 @@ export function useMultiverse() {
    * manual "Salva sessione" for point-in-time saves the person controls).
    * The planet's chart history is kept (not reset), so recovering doesn't
    * erase what had already been observed.
+   *
+   * v1.1 — restarts at the planet's own config.width/height (same fix as
+   * resetPlanet above), not a hardcoded size.
    */
   const recoverPlanet = useCallback(
     (id: string) => {
@@ -235,17 +264,30 @@ export function useMultiverse() {
       workersRef.current.get(id)?.terminate();
       pendingSnapshotsRef.current.delete(id);
 
-      const config: PlanetConfig = { width: PLANET_WIDTH, height: PLANET_HEIGHT, seed: planet.seed };
+      const config: PlanetConfig = { width: planet.config.width, height: planet.config.height, seed: planet.seed };
       const worker = new Worker(new URL("../workers/simulation.worker.ts", import.meta.url));
       workersRef.current.set(id, worker);
       attachWorker(id, worker, () => {
         worker.postMessage({ type: "init", config, initialPopulation: DEFAULT_POPULATION } satisfies WorkerCommand);
       });
 
-      setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, error: null, ready: false, frame: null } : p)));
+      setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, config, error: null, ready: false, frame: null, viewportFrame: null } : p)));
     },
     [attachWorker],
   );
+
+  /**
+   * v1.1 — requests a terrain/vegetation texture for the given viewport
+   * (see ViewportRequest/ViewportFrame), on demand — not tied to the
+   * per-tick frame loop. Fire-and-forget from the caller's perspective:
+   * the response arrives asynchronously as a "viewportFrame" worker
+   * event, delivered via onViewportFrame's subscription below rather than
+   * a promise, since the UI only ever cares about the *latest* one, not
+   * about matching responses to individual requests.
+   */
+  const requestViewport = useCallback((id: string, request: ViewportRequest) => {
+    workersRef.current.get(id)?.postMessage({ type: "requestViewport", request } satisfies WorkerCommand);
+  }, []);
 
   /** Asks one planet's worker for its current WorldSnapshot. Rejects if it doesn't respond within SNAPSHOT_TIMEOUT_MS. */
   const requestPlanetSnapshot = useCallback((id: string): Promise<WorldSnapshot> => {
@@ -319,7 +361,12 @@ export function useMultiverse() {
         id: sp.id,
         name: sp.name,
         seed: sp.seed,
+        // v1.1 — the saved snapshot carries the planet's real config
+        // (including its size); a resumed session keeps the same world
+        // size it was saved at, same fix as resetPlanet/recoverPlanet.
+        config: sp.snapshot.planet.config,
         frame: null,
+        viewportFrame: null,
         speed: 1,
         ready: false,
         error: null,
@@ -367,5 +414,6 @@ export function useMultiverse() {
     saveSession,
     loadSession,
     requestOrganismDetail,
+    requestViewport,
   };
 }
