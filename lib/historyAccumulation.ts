@@ -8,9 +8,6 @@ export const HISTORY_MAX_POINTS = 2000;
 
 /** Builds one history sample from a RenderFrame — pure aggregation of data already sent every frame, no new engine computation (v1.0.3). */
 export function sampleHistoryPoint(frame: RenderFrame): HistoryPoint {
-  let vegSum = 0;
-  for (let i = 0; i < frame.vegetation.length; i++) vegSum += frame.vegetation[i];
-
   return {
     tick: frame.tick,
     year: frame.year,
@@ -19,7 +16,11 @@ export function sampleHistoryPoint(frame: RenderFrame): HistoryPoint {
     biodiversity: shannonDiversityIndex(frame.speciesGenomeStats.map((s) => s.population)),
     avgCarnivory: frame.stats.averageGenome?.carnivory ?? 0,
     avgSize: frame.stats.averageGenome?.size ?? 0,
-    avgVegetation: frame.vegetation.length > 0 ? vegSum / frame.vegetation.length : 0,
+    // v1.1 — computed worker-side on a fixed-size sample grid, independent
+    // of the planet's actual size (see simulation/core/renderFrame.ts);
+    // the frame no longer carries a full per-cell vegetation array to
+    // average client-side.
+    avgVegetation: frame.avgVegetation,
   };
 }
 
