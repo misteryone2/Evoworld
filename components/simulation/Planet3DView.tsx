@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { RenderFrame } from "../../types";
+import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
 import { terrainColorRGB } from "../../lib/terrainColor";
@@ -34,6 +34,33 @@ const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
 
+/**
+ * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
+ * from the planet (in units of PLANET_RADIUS). Farther away requests a
+ * coarser overview; closer requests sharper detail — but the *maximum*
+ * resolution is fixed regardless of how large the simulated world
+ * actually is (512x512 vs 2048x2048 request the exact same tiers), which
+ * is what keeps render cost flat as the world scales up. See
+ * ViewportRequest/ViewportFrame and simulation/core/viewportFrame.ts.
+ */
+const TERRAIN_LOD_TIERS: { minDistanceFactor: number; maxWidth: number; maxHeight: number }[] = [
+  { minDistanceFactor: 4, maxWidth: 320, maxHeight: 160 },
+  { minDistanceFactor: 2.2, maxWidth: 640, maxHeight: 320 },
+  { minDistanceFactor: 0, maxWidth: 1024, maxHeight: 512 },
+];
+/** How often (ms) the terrain texture is refreshed even without a zoom-level change, to reflect ongoing vegetation drift — not every tick, deliberately. */
+const TERRAIN_REFRESH_INTERVAL_MS = 4000;
+/** How often (ms) camera distance is polled to decide whether a new terrain LOD tier should be requested. */
+const TERRAIN_LOD_CHECK_INTERVAL_MS = 500;
+
+function pickTerrainLodTier(distance: number): { maxWidth: number; maxHeight: number } {
+  const factor = distance / PLANET_RADIUS;
+  for (const tier of TERRAIN_LOD_TIERS) {
+    if (factor >= tier.minDistanceFactor) return tier;
+  }
+  return TERRAIN_LOD_TIERS[TERRAIN_LOD_TIERS.length - 1];
+}
+
 const TERRAIN_LABELS: Record<number, string> = {
   0: "Oceano",
   1: "Pianura",
@@ -56,6 +83,10 @@ const TERRAIN_SWATCHES: Record<number, string> = {
 
 interface Props {
   frame: RenderFrame | null;
+  /** v1.1 — on-demand terrain/vegetation payload (see ViewportRequest/ViewportFrame), independent of frame's per-tick cadence. */
+  viewportFrame?: ViewportFrame | null;
+  /** v1.1 — called to request a (re)painted terrain texture at a given resolution/region; see the LOD-tier logic driving this from camera distance below. */
+  onRequestViewport?: (request: ViewportRequest) => void;
   /** v1.0.4 — currently selected organism id, if any; used to position the highlight ring. */
   selectedOrganismId?: number | null;
   /** v1.0.4 — called with an organism id when the person taps/clicks a creature, or null when they tap empty space (deselecting). */
@@ -125,13 +156,28 @@ const tmpColor = new THREE.Color();
  * under heavy LOD sampling the selected organism might not be part of the
  * rendered creature subset, so its position is looked up independently
  * from the full (unsampled) organismsId array, not from the LOD loop.
+ *
+ * v1.1 — World Scale: the terrain/vegetation texture painted onto the
+ * sphere is no longer derived from the per-tick RenderFrame (which no
+ * longer carries a full per-cell grid at all — see
+ * simulation/core/renderFrame.ts). Instead it's requested on demand via
+ * onRequestViewport, driven by camera distance (see TERRAIN_LOD_TIERS)
+ * and a periodic refresh, and painted only when a new ViewportFrame
+ * arrives (see the effect keyed on [viewportFrame] below). Because the
+ * sphere always shows the whole globe at once (there's no "fly close over
+ * unbounded terrain" camera mode), the requested region always spans the
+ * full planet; only the *resolution* changes with zoom — this is what
+ * keeps a much larger simulated world costing exactly the same to render
+ * here as a small one.
  */
-export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganism }: Props) {
+export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
-  const lastPlanetSize = useRef<{ width: number; height: number } | null>(null);
+  const lastTextureSize = useRef<{ width: number; height: number } | null>(null);
   const onSelectRef = useRef(onSelectOrganism);
   const selectedIdRef = useRef(selectedOrganismId);
+  const frameRef = useRef(frame);
+  const onRequestViewportRef = useRef(onRequestViewport);
 
   useEffect(() => {
     onSelectRef.current = onSelectOrganism;
@@ -139,6 +185,12 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
   useEffect(() => {
     selectedIdRef.current = selectedOrganismId;
   }, [selectedOrganismId]);
+  useEffect(() => {
+    frameRef.current = frame;
+  }, [frame]);
+  useEffect(() => {
+    onRequestViewportRef.current = onRequestViewport;
+  }, [onRequestViewport]);
 
   // Mount-only: build the renderer, scene, camera, controls, and the
   // pre-allocated meshes once. Per-frame updates (below) only ever mutate
@@ -219,6 +271,37 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
     };
     animationFrameId = requestAnimationFrame(renderLoop);
 
+    // v1.1 — World Scale: periodically decide whether the terrain texture
+    // needs a (re)paint, either because the camera crossed into a
+    // different LOD tier (zoomed meaningfully in/out) or because enough
+    // time has passed that a periodic refresh is worthwhile (vegetation
+    // keeps changing near active populations). Deliberately NOT tied to
+    // the render loop's per-frame cadence or to the simulation's per-tick
+    // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS/TERRAIN_REFRESH_INTERVAL_MS.
+    let lastTierKey = "";
+    let lastRequestAt = 0;
+    const maybeRequestViewport = (force: boolean) => {
+      const f = frameRef.current;
+      if (!f || !onRequestViewportRef.current) return;
+      const distance = controls.getDistance();
+      const tier = pickTerrainLodTier(distance);
+      const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
+      const now = Date.now();
+      const dueForRefresh = now - lastRequestAt >= TERRAIN_REFRESH_INTERVAL_MS;
+      if (!force && tierKey === lastTierKey && !dueForRefresh) return;
+      lastTierKey = tierKey;
+      lastRequestAt = now;
+      onRequestViewportRef.current({
+        centerX: f.planetWidth / 2,
+        centerY: f.planetHeight / 2,
+        radiusX: f.planetWidth / 2,
+        radiusY: f.planetHeight / 2,
+        maxWidth: tier.maxWidth,
+        maxHeight: tier.maxHeight,
+      });
+    };
+    const lodCheckHandle = setInterval(() => maybeRequestViewport(false), TERRAIN_LOD_CHECK_INTERVAL_MS);
+
     const resizeObserver = new ResizeObserver(() => {
       const w = container.clientWidth;
       const h = container.clientHeight;
@@ -278,6 +361,7 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
 
     return () => {
       cancelAnimationFrame(animationFrameId);
+      clearInterval(lodCheckHandle);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
@@ -302,20 +386,34 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Per-frame: repaint the planet texture, update creature instances, and
-  // reposition the selection ring, from the latest RenderFrame — without
-  // rebuilding any Three.js objects.
+  // Per-frame: update creature instances and reposition the selection
+  // ring from the latest RenderFrame — without rebuilding any Three.js
+  // objects. v1.1 — no longer repaints the terrain texture here (that's
+  // driven by viewportFrame below, on its own on-demand cadence).
   useEffect(() => {
     const refs = sceneRef.current;
     if (!refs || !frame) return;
 
-    const { planetWidth, planetHeight, vegetation, terrain } = frame;
+    updateCreatureInstances(refs, frame);
+    updateSelectionRing(refs, frame, selectedIdRef.current);
+  }, [frame]);
 
-    const sizeChanged =
-      lastPlanetSize.current?.width !== planetWidth || lastPlanetSize.current?.height !== planetHeight;
+  // v1.1 — repaints the terrain texture only when a new ViewportFrame
+  // arrives (on LOD-tier change or periodic refresh — see the mount
+  // effect above), never on the simulation's per-tick cadence. The
+  // texture's resolution matches the ViewportFrame's own (bounded, fixed
+  // LOD-tier) size, not the planet's actual width/height, so a much
+  // larger world costs exactly the same to paint here.
+  useEffect(() => {
+    const refs = sceneRef.current;
+    if (!refs || !viewportFrame) return;
+
+    const { texWidth, texHeight, vegetation, terrain } = viewportFrame;
+
+    const sizeChanged = lastTextureSize.current?.width !== texWidth || lastTextureSize.current?.height !== texHeight;
     if (sizeChanged) {
-      const newData = new Uint8Array(planetWidth * planetHeight * 4);
-      const newTexture = new THREE.DataTexture(newData, planetWidth, planetHeight, THREE.RGBAFormat);
+      const newData = new Uint8Array(texWidth * texHeight * 4);
+      const newTexture = new THREE.DataTexture(newData, texWidth, texHeight, THREE.RGBAFormat);
       newTexture.flipY = false;
       const material = refs.planetMesh.material as THREE.MeshStandardMaterial;
       material.map = newTexture;
@@ -323,11 +421,11 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
       refs.planetTexture.dispose();
       refs.planetTexture = newTexture;
       refs.textureData = newData;
-      lastPlanetSize.current = { width: planetWidth, height: planetHeight };
+      lastTextureSize.current = { width: texWidth, height: texHeight };
     }
 
     const data = refs.textureData;
-    for (let i = 0; i < planetWidth * planetHeight; i++) {
+    for (let i = 0; i < texWidth * texHeight; i++) {
       const [r, g, b] = terrainColorRGB(terrain[i], vegetation[i]);
       data[i * 4] = r;
       data[i * 4 + 1] = g;
@@ -335,10 +433,7 @@ export function Planet3DView({ frame, selectedOrganismId = null, onSelectOrganis
       data[i * 4 + 3] = 255;
     }
     refs.planetTexture.needsUpdate = true;
-
-    updateCreatureInstances(refs, frame);
-    updateSelectionRing(refs, frame, selectedIdRef.current);
-  }, [frame]);
+  }, [viewportFrame]);
 
   return (
     <div className="canvas-wrap">
