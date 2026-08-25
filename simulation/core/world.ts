@@ -23,7 +23,8 @@ import {
   SPECIATION_CHECK_INTERVAL,
 } from "../evolution/speciation";
 import { computeSpeciesGenomeStats } from "../evolution/speciesAnalysis";
-import { TICKS_PER_YEAR } from "./constants";
+import { TICKS_PER_YEAR, CHUNK_ACTIVATION_HALO } from "./constants";
+import { computeActiveChunkKeys } from "../planet/chunkActivity";
 
 /**
  * World is the top-level simulation object. It owns the planet, the
@@ -88,8 +89,18 @@ export class World {
   step(): void {
     this.tick++;
 
-    // 1. environment (includes seasonal cycle and dynamic biome shifts)
-    this.planet.update(this.tick);
+    // 1. environment (includes seasonal cycle and dynamic biome shifts).
+    // v1.1 — only chunks near a living organism (plus a small halo) are
+    // actually simulated this tick; see computeActiveChunkKeys and
+    // Planet.update's class doc for the full rationale.
+    const activeChunks = computeActiveChunkKeys(
+      this.organisms,
+      this.planet.width,
+      this.planet.height,
+      this.planet.chunkSize,
+      CHUNK_ACTIVATION_HALO,
+    );
+    this.planet.update(this.tick, activeChunks);
 
     // 2 & 3. metabolism + movement. Buckets are built once from
     // pre-movement positions and shared by every organism's behavioral bias
@@ -182,7 +193,7 @@ export class World {
   toSnapshot(): WorldSnapshot {
     return {
       tick: this.tick,
-      planet: { config: this.planet.config, cells: this.planet.cells },
+      planet: { config: this.planet.config, chunks: this.planet.getMaterializedChunks() },
       organisms: this.organisms,
       nextOrganismId: this.nextOrganismId,
       nextSpeciesId: this.nextSpeciesId,
@@ -193,7 +204,12 @@ export class World {
 
   static fromSnapshot(snapshot: WorldSnapshot): World {
     const world = Object.create(World.prototype) as World;
-    world.planet = new Planet(snapshot.planet.config, snapshot.planet.cells);
+    // v1.1 — new saves carry chunks; saves made before v1.1 instead carry
+    // a legacy dense cells array, migrated once here (see
+    // Planet.fromLegacyDenseCells for what that migration does).
+    world.planet = snapshot.planet.chunks
+      ? Planet.fromChunkSnapshot(snapshot.planet.config, snapshot.planet.chunks)
+      : Planet.fromLegacyDenseCells(snapshot.planet.config, snapshot.planet.cells ?? []);
     world.organisms = snapshot.organisms;
     world.tick = snapshot.tick;
     world.nextOrganismId = snapshot.nextOrganismId;
