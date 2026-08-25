@@ -36,8 +36,10 @@ function fakeFrame(overrides: Partial<RenderFrame> = {}): RenderFrame {
     },
     planetWidth: 2,
     planetHeight: 2,
-    vegetation: new Float32Array([0.2, 0.4, 0.6, 0.8]), // avg = 0.5
-    terrain: new Uint8Array(4),
+    // v1.1 — RenderFrame no longer carries the full per-cell vegetation
+    // grid (see simulation/core/renderFrame.ts); avgVegetation is now
+    // computed worker-side and sent as a plain scalar.
+    avgVegetation: 0.5,
     organismsX: new Float32Array(0),
     organismsY: new Float32Array(0),
     organismsSpecies: new Uint16Array(0),
