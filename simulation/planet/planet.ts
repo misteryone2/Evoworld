@@ -1,14 +1,5 @@
 import type { Cell, PlanetChunkSnapshot, PlanetConfig, Season, TerrainType } from "../../types";
-import { Random } from "../core/random";
 import { TICKS_PER_YEAR, DEFAULT_CHUNK_SIZE } from "../core/constants";
-
-/** A deterministic point source used by the layered-noise terrain generator (elevation/water fields). */
-interface FieldPoint {
-  x: number;
-  y: number;
-  strength: number;
-  radius: number;
-}
 
 /** Wraps a coordinate into [0, max). */
 function wrapCoord(value: number, max: number): number {
@@ -41,6 +32,76 @@ function hashNoise(seed: number, x: number, y: number): number {
   return u * 2 - 1;
 }
 
+/** Smoothstep (Hermite) easing — avoids axis-aligned blocky artifacts in the interpolated noise below. */
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** Wraps a lattice index into [0, count) — same torus-wraparound principle as wrapCoord, applied to a coarser noise lattice so each octave tiles seamlessly at the world's edges instead of showing a seam. */
+function wrapLattice(v: number, count: number): number {
+  let w = v % count;
+  if (w < 0) w += count;
+  return w;
+}
+
+/**
+ * v1.2.1 — smooth 2D "value noise": deterministic, order-independent
+ * (same function-of-coordinates contract as hashNoise), continuous
+ * between lattice points via bilinear interpolation with smoothstep
+ * easing. `frequency` is the lattice spacing in world cells — a large
+ * frequency gives slowly-varying, continent-scale structure; a small one
+ * gives high-frequency local roughness. This single primitive, evaluated
+ * at different frequencies/amplitudes and summed (see fbm2D), is what
+ * replaces the old handful-of-random-blobs field: unlike a handful of
+ * blobs, arbitrarily many octaves compose into genuine multi-scale
+ * structure without ever needing more than a few number-crunching steps
+ * per cell — still O(1) per cell, still zero precomputation.
+ */
+function valueNoise2D(seed: number, x: number, y: number, frequency: number, worldWidth: number, worldHeight: number): number {
+  const latticeCountX = Math.max(1, Math.round(worldWidth / frequency));
+  const latticeCountY = Math.max(1, Math.round(worldHeight / frequency));
+  const fx = (x / worldWidth) * latticeCountX;
+  const fy = (y / worldHeight) * latticeCountY;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const tx = smoothstep(fx - x0);
+  const ty = smoothstep(fy - y0);
+  const lx0 = wrapLattice(x0, latticeCountX);
+  const lx1 = wrapLattice(x0 + 1, latticeCountX);
+  const ly0 = wrapLattice(y0, latticeCountY);
+  const ly1 = wrapLattice(y0 + 1, latticeCountY);
+  const v00 = hashNoise(seed, lx0, ly0);
+  const v10 = hashNoise(seed, lx1, ly0);
+  const v01 = hashNoise(seed, lx0, ly1);
+  const v11 = hashNoise(seed, lx1, ly1);
+  const a = v00 + (v10 - v00) * tx;
+  const b = v01 + (v11 - v01) * tx;
+  return a + (b - a) * ty; // still in [-1, 1]
+}
+
+/**
+ * v1.2.1 — fractal Brownian motion: sums valueNoise2D at progressively
+ * higher frequencies (lacunarity) and lower amplitudes (persistence).
+ * Each octave uses a distinct seed offset (large arbitrary primes) so
+ * octaves are statistically independent rather than correlated repeats
+ * of the same pattern at different scales. Result is NOT re-normalized
+ * here — callers combine multiple fBm calls (continental shape, ridged
+ * mountains, detail) with their own weights before normalizing once.
+ */
+function fbm2D(seed: number, x: number, y: number, worldWidth: number, worldHeight: number, octaves: number, baseFrequency: number, lacunarity: number, persistence: number, seedOffset: number): number {
+  let sum = 0;
+  let amplitude = 1;
+  let frequency = baseFrequency;
+  let maxAmplitude = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += valueNoise2D(seed + seedOffset + i * 104729, x, y, frequency, worldWidth, worldHeight) * amplitude;
+    maxAmplitude += amplitude;
+    amplitude *= persistence;
+    frequency /= lacunarity;
+  }
+  return sum / maxAmplitude; // back to [-1, 1]
+}
+
 /** "cx,cy" chunk map key. */
 function chunkKeyOf(cx: number, cy: number): string {
   return `${cx},${cy}`;
@@ -64,6 +125,9 @@ function growthFactorForTick(tick: number): number {
 
 /** Average of growthFactorForTick over a full year — the closed-form limit catch-up uses for long dormancy spans (>= one year). */
 const YEARLY_AVG_GROWTH_FACTOR = (1 + 1.6 + 1 + 0.3) / 4; // primavera + estate + autunno + inverno
+
+/** v1.2.1 — power curve applied to normalized elevation to sharpen ocean/continent contrast (>1 widens flat lowlands/ocean basins, steepens rise near landmass cores). */
+const ELEVATION_REDISTRIBUTION_POWER = 1.35;
 
 /**
  * Planet owns the world's terrain as a lazily-generated, chunked grid of
@@ -99,17 +163,15 @@ export class Planet {
 
   private chunks = new Map<string, Cell[]>();
   private chunkLastActiveTick = new Map<string, number>();
-  private readonly elevationPoints: FieldPoint[];
-  private readonly waterPoints: FieldPoint[];
 
   constructor(config: PlanetConfig) {
     this.config = config;
     this.chunkSize = config.chunkSize ?? DEFAULT_CHUNK_SIZE;
-    // Only ~11 points total, generated once regardless of world size —
-    // this is what previously ran inside the eager Planet.generate().
-    const rng = new Random(config.seed);
-    this.elevationPoints = Planet.randomFieldPoints(rng, 6, config.width, config.height);
-    this.waterPoints = Planet.randomFieldPoints(rng, 5, config.width, config.height);
+    // v1.2.1 — terrain generation is now purely hash/noise-based (see
+    // fbm2D/valueNoise2D above), a pure function of (seed, x, y) with no
+    // state to precompute at all — not even the ~11 field points v1.1
+    // used to seed once here. One fewer moving part, and one fewer thing
+    // that would need to be serialized to stay reproducible.
   }
 
   get width(): number {
@@ -133,25 +195,59 @@ export class Planet {
     return y * this.config.width + x;
   }
 
-  private static randomFieldPoints(rng: Random, count: number, width: number, height: number): FieldPoint[] {
-    return Array.from({ length: count }, () => ({
-      x: rng.range(0, width),
-      y: rng.range(0, height),
-      strength: rng.range(0.5, 1),
-      radius: rng.range(width * 0.2, width * 0.5),
-    }));
+  /**
+   * v1.2.1 — continent/ocean/mountain-scale elevation, replacing the old
+   * flat sum of ~6 random "blobs" (which gave plausible-looking but
+   * structurally shallow noise — no real macro-scale landmasses, no
+   * ridge-like mountain ranges). Three fBm layers, each with a distinct
+   * role, matching the spec's low/mid/high-frequency breakdown:
+   *
+   *  - continental (low frequency, large amplitude): the dominant term —
+   *    where the large landmasses and ocean basins actually are.
+   *  - ridged (mid frequency, `1 - |noise|` transform): produces
+   *    ridge-line structure instead of smooth bumps, i.e. actual mountain
+   *    *ranges* rather than isolated random peaks. Weighted by a smooth
+   *    land mask derived from the continental layer, so ranges form
+   *    preferentially on already-elevated land — mountains emerging from
+   *    continents, not scattered mid-ocean, the way real orogeny works.
+   *  - detail (high frequency, small amplitude): local roughness on top.
+   *
+   * The weighted sum is redistributed through a mild power curve (see
+   * ELEVATION_REDISTRIBUTION_POWER) to sharpen the ocean/continent
+   * contrast — wide, mostly-flat ocean basins and mostly-flat lowlands,
+   * with elevation rising more steeply near landmass cores — a common,
+   * well-understood fBm terrain technique, not a hand-authored shape.
+   */
+  private computeElevation(x: number, y: number): number {
+    const { width, height, seed } = this.config;
+    const continental = fbm2D(seed, x, y, width, height, 4, width * 0.35, 2, 0.5, 0);
+    const ridgedRaw = fbm2D(seed, x, y, width, height, 4, width * 0.09, 2.2, 0.5, 9973);
+    const ridged = 1 - Math.abs(ridgedRaw); // ridge lines instead of smooth bumps
+    const detail = fbm2D(seed, x, y, width, height, 3, width * 0.02, 2, 0.5, 40009);
+
+    const landMask = Math.max(0, Math.min(1, smoothstep((continental + 0.15) / 0.4)));
+
+    const combined = continental * 0.62 + (ridged * 2 - 1) * 0.28 * landMask + detail * 0.1;
+    const normalized = Math.max(0, Math.min(1, (combined + 1) / 2));
+    return Math.pow(normalized, ELEVATION_REDISTRIBUTION_POWER);
   }
 
-  private fieldValue(points: FieldPoint[], x: number, y: number): number {
-    const { width, height } = this.config;
-    let total = 0;
-    for (const p of points) {
-      const dx = Math.min(Math.abs(x - p.x), width - Math.abs(x - p.x));
-      const dy = Math.min(Math.abs(y - p.y), height - Math.abs(y - p.y));
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      total += p.strength * Math.max(0, 1 - dist / p.radius);
-    }
-    return Math.max(0, Math.min(1, total / points.length + 0.3));
+  /**
+   * v1.2.1 — water field. Still primarily its own noise layer at this
+   * stage (full geographic coupling to actual oceans/rivers/lakes is
+   * v1.2.4's job, deliberately not done here — see that version's plan),
+   * but no longer *entirely* decoupled from elevation as the old blob
+   * field was: low-lying terrain gets a mild wetness bias (basins collect
+   * water, peaks don't), which is the minimal, honest first step the
+   * v1.2.1 brief asked for ("prepara una base coerente con la futura
+   * integrazione geografica") without overreaching into v1.2.4's scope.
+   */
+  private computeWater(x: number, y: number, elevation: number): number {
+    const { width, height, seed } = this.config;
+    const noise = fbm2D(seed, x, y, width, height, 4, width * 0.28, 2, 0.55, 70211);
+    const noiseComponent = (noise + 1) / 2;
+    const elevationBias = 1 - elevation; // lower ground trends wetter, higher ground trends drier
+    return Math.max(0, Math.min(1, noiseComponent * 0.75 + elevationBias * 0.25));
   }
 
   /** Structural classification from elevation/water — fixed for the planet's lifetime. */
@@ -179,9 +275,9 @@ export class Planet {
    * shown in an overview render).
    */
   private computeCellBaseline(x: number, y: number): Cell {
-    const { width, height, seed } = this.config;
-    const elevation = this.fieldValue(this.elevationPoints, x, y);
-    const water = this.fieldValue(this.waterPoints, x, y);
+    const { height, seed } = this.config;
+    const elevation = this.computeElevation(x, y);
+    const water = this.computeWater(x, y, elevation);
     const latitude = Math.abs(y / height - 0.5) * 2; // 0 at equator, 1 at poles
     const temperature = 32 - latitude * 40 - elevation * 10 + hashNoise(seed, x, y) * 2;
 
@@ -191,7 +287,6 @@ export class Planet {
       : Math.max(0, Math.min(1, (1 - Math.abs(temperature - 22) / 40) * (1 - Math.abs(water - 0.4))));
 
     const terrain: TerrainType = base ?? Planet.classifyBiome(temperature, water, vegetation);
-    // width/height referenced only for the latitude formula above.
     return { elevation, temperature, water, vegetation, terrain };
   }
 
