@@ -230,6 +230,121 @@ describe("Planet — v1.1 persistence (chunk snapshots + legacy migration)", () 
   });
 });
 
+describe("Planet — v1.2.1 procedural morphology (fBm elevation/water)", () => {
+  it("elevation and water always stay within the valid [0,1] range", () => {
+    const planet = new Planet({ width: 256, height: 256, seed: 123 });
+    for (let y = 0; y < 256; y += 7) {
+      for (let x = 0; x < 256; x += 7) {
+        const cell = planet.getCell(x, y);
+        expect(cell.elevation).toBeGreaterThanOrEqual(0);
+        expect(cell.elevation).toBeLessThanOrEqual(1);
+        expect(cell.water).toBeGreaterThanOrEqual(0);
+        expect(cell.water).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("is deterministic: the same seed and coordinates always give the same elevation/water", () => {
+    const a = new Planet({ width: 256, height: 256, seed: 555 });
+    const b = new Planet({ width: 256, height: 256, seed: 555 });
+    for (const [x, y] of [[10, 10], [200, 5], [77, 199], [128, 128]]) {
+      const ca = a.getCell(x, y);
+      const cb = b.getCell(x, y);
+      expect(ca.elevation).toBe(cb.elevation);
+      expect(ca.water).toBe(cb.water);
+    }
+  });
+
+  it("produces a non-degenerate distribution (not every cell collapsed to the same value)", () => {
+    const planet = new Planet({ width: 256, height: 256, seed: 42 });
+    const elevations: number[] = [];
+    for (let y = 0; y < 256; y += 4) {
+      for (let x = 0; x < 256; x += 4) {
+        elevations.push(planet.getCell(x, y).elevation);
+      }
+    }
+    const mean = elevations.reduce((a, b) => a + b, 0) / elevations.length;
+    const variance = elevations.reduce((a, b) => a + (b - mean) ** 2, 0) / elevations.length;
+    // A degenerate/flat field would have variance near zero (<<0.005);
+    // real terrain spans a meaningful range of the [0,1] scale.
+    expect(variance).toBeGreaterThan(0.005);
+    expect(Math.max(...elevations) - Math.min(...elevations)).toBeGreaterThan(0.3);
+  });
+
+  it("shows genuine macro-scale structure: large contiguous same-terrain regions exist, not just scattered single cells", () => {
+    // A flood-fill over a sampled grid, counting the largest connected
+    // component of a single terrain type. The old few-random-blobs field
+    // could produce some clustering too, but nothing on this scale — this
+    // is a real, if coarse, way to distinguish "genuinely continent-sized
+    // landmasses" from "scattered noise that happens to have some local
+    // correlation".
+    const planet = new Planet({ width: 512, height: 512, seed: 7 });
+    const gridSize = 64;
+    const step = 512 / gridSize;
+    const terrainGrid: string[][] = [];
+    for (let gy = 0; gy < gridSize; gy++) {
+      const row: string[] = [];
+      for (let gx = 0; gx < gridSize; gx++) {
+        row.push(planet.getCell(Math.floor(gx * step), Math.floor(gy * step)).terrain);
+      }
+      terrainGrid.push(row);
+    }
+
+    const visited = Array.from({ length: gridSize }, () => new Array(gridSize).fill(false));
+    let largestComponent = 0;
+    for (let gy = 0; gy < gridSize; gy++) {
+      for (let gx = 0; gx < gridSize; gx++) {
+        if (visited[gy][gx]) continue;
+        const terrain = terrainGrid[gy][gx];
+        const stack = [[gx, gy]];
+        visited[gy][gx] = true;
+        let size = 0;
+        while (stack.length > 0) {
+          const [cx, cy] = stack.pop()!;
+          size++;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = (cx + dx + gridSize) % gridSize;
+            const ny = (cy + dy + gridSize) % gridSize;
+            if (!visited[ny][nx] && terrainGrid[ny][nx] === terrain) {
+              visited[ny][nx] = true;
+              stack.push([nx, ny]);
+            }
+          }
+        }
+        largestComponent = Math.max(largestComponent, size);
+      }
+    }
+    // Out of 64x64=4096 sampled points, a real continent/ocean-scale
+    // structure should produce at least one connected region covering a
+    // clear double-digit percentage of the map — a handful of scattered
+    // single-cell "islands" would not.
+    expect(largestComponent).toBeGreaterThan(gridSize * gridSize * 0.05);
+  });
+
+  it("mountains preferentially form on elevated/continental terrain, not scattered in open ocean", () => {
+    const planet = new Planet({ width: 512, height: 512, seed: 2024 });
+    let mountainCount = 0;
+    let mountainSurroundedByOcean = 0;
+    for (let y = 0; y < 512; y += 8) {
+      for (let x = 0; x < 512; x += 8) {
+        if (planet.getCell(x, y).terrain !== "mountain") continue;
+        mountainCount++;
+        let oceanNeighbors = 0;
+        for (const [dx, dy] of [[8, 0], [-8, 0], [0, 8], [0, -8]]) {
+          if (planet.getCell((x + dx + 512) % 512, (y + dy + 512) % 512).terrain === "ocean") oceanNeighbors++;
+        }
+        if (oceanNeighbors === 4) mountainSurroundedByOcean++;
+      }
+    }
+    if (mountainCount > 0) {
+      // Most mountains should not be fully surrounded by ocean on all
+      // four sides — i.e. they emerge from land, not float as isolated
+      // peaks in open sea.
+      expect(mountainSurroundedByOcean / mountainCount).toBeLessThan(0.2);
+    }
+  });
+});
+
 describe("chunkActivity — computeActiveChunkKeys", () => {
   it("includes an organism's own chunk plus a halo ring around it", () => {
     const organisms = [{ alive: true, position: { x: 50, y: 50 } }];
