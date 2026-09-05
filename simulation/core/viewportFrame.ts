@@ -3,12 +3,12 @@ import { World } from "./world";
 import { TERRAIN_CODE } from "./renderFrame";
 
 /**
- * v1.1 — World Scale. Builds a terrain/vegetation texture payload for one
- * requested viewport, on demand — never as part of the per-tick
- * RenderFrame (see renderFrame.ts's doc comment for why). Resolution is
- * capped by the request (request.maxWidth/maxHeight), never by the
- * planet's actual size: a 512x512 world and a 2048x2048 world produce a
- * ViewportFrame of exactly the same cost for the same request.
+ * v1.1 — World Scale. Builds a terrain/vegetation/elevation texture
+ * payload for one requested viewport, on demand — never as part of the
+ * per-tick RenderFrame (see renderFrame.ts's doc comment for why).
+ * Resolution is capped by the request (request.maxWidth/maxHeight), never
+ * by the planet's actual size: a 512x512 world and a 2048x2048 world
+ * produce a ViewportFrame of exactly the same cost for the same request.
  *
  * Deliberately uses only Planet.peekCell (read-only, no chunk
  * materialization) and Planet.sampleBaseline (stateless, no chunk
@@ -40,6 +40,12 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
 
   const vegetation = new Float32Array(texWidth * texHeight);
   const terrain = new Uint8Array(texWidth * texHeight);
+  // v1.2.2 — Real 3D Surface: elevation sampled in the exact same loop,
+  // at the exact same bounded resolution, via the exact same read-only
+  // accessors as every other channel here — see this function's own doc
+  // comment above for why that matters (never materializes a chunk from
+  // rendering, payload size tracks viewport resolution only).
+  const elevation = new Float32Array(texWidth * texHeight);
 
   for (let ty = 0; ty < texHeight; ty++) {
     const wy = Math.floor(originY + ((ty + 0.5) / texHeight) * cellsHeight);
@@ -49,6 +55,7 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
       const i = ty * texWidth + tx;
       vegetation[i] = cell.vegetation;
       terrain[i] = TERRAIN_CODE[cell.terrain] ?? 1;
+      elevation[i] = cell.elevation;
     }
   }
 
@@ -62,5 +69,6 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
     texHeight,
     vegetation,
     terrain,
+    elevation,
   };
 }
