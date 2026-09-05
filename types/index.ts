@@ -301,6 +301,16 @@ export interface ViewportFrame {
   texHeight: number;
   vegetation: Float32Array; // texWidth * texHeight
   terrain: Uint8Array; // texWidth * texHeight
+  /**
+   * v1.2.2 — Real 3D Surface. Elevation (0..1, same units/semantics as
+   * Cell.elevation) at the same bounded texWidth*texHeight resolution as
+   * every other viewport channel — the payload still depends only on the
+   * requested viewport resolution, never on the planet's declared size.
+   * Used client-side to displace the sphere mesh's vertices and to rest
+   * creatures on the terrain surface (see lib/sphereProjection.ts); never
+   * sent per-tick on RenderFrame.
+   */
+  elevation: Float32Array; // texWidth * texHeight
 }
 
 /** Lightweight payload sent from the worker to the UI every rendered frame. */
