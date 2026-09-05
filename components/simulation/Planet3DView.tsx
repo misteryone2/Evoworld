@@ -7,7 +7,7 @@ import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
 import { terrainColorRGB } from "../../lib/terrainColor";
-import { projectToSphere } from "../../lib/sphereProjection";
+import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
 
 const PLANET_RADIUS = 5;
@@ -42,18 +42,24 @@ const TAP_MOVEMENT_THRESHOLD_PX = 6;
  * actually is (512x512 vs 2048x2048 request the exact same tiers), which
  * is what keeps render cost flat as the world scales up. See
  * ViewportRequest/ViewportFrame and simulation/core/viewportFrame.ts.
+ *
+ * v1.2.2 — each tier also now specifies a mesh tessellation
+ * (segmentsWidth/segmentsHeight for the sphere's own widthSegments/
+ * heightSegments): geometry only gets as detailed as the camera distance
+ * actually warrants, same principle as the texture resolution, reusing
+ * the exact same tier list rather than a second, independent LOD system.
  */
-const TERRAIN_LOD_TIERS: { minDistanceFactor: number; maxWidth: number; maxHeight: number }[] = [
-  { minDistanceFactor: 4, maxWidth: 320, maxHeight: 160 },
-  { minDistanceFactor: 2.2, maxWidth: 640, maxHeight: 320 },
-  { minDistanceFactor: 0, maxWidth: 1024, maxHeight: 512 },
+const TERRAIN_LOD_TIERS: { minDistanceFactor: number; maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number }[] = [
+  { minDistanceFactor: 4, maxWidth: 320, maxHeight: 160, segmentsWidth: 64, segmentsHeight: 48 },
+  { minDistanceFactor: 2.2, maxWidth: 640, maxHeight: 320, segmentsWidth: 96, segmentsHeight: 64 },
+  { minDistanceFactor: 0, maxWidth: 1024, maxHeight: 512, segmentsWidth: 160, segmentsHeight: 112 },
 ];
 /** How often (ms) the terrain texture is refreshed even without a zoom-level change, to reflect ongoing vegetation drift — not every tick, deliberately. */
 const TERRAIN_REFRESH_INTERVAL_MS = 4000;
 /** How often (ms) camera distance is polled to decide whether a new terrain LOD tier should be requested. */
 const TERRAIN_LOD_CHECK_INTERVAL_MS = 500;
 
-function pickTerrainLodTier(distance: number): { maxWidth: number; maxHeight: number } {
+function pickTerrainLodTier(distance: number): { maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number } {
   const factor = distance / PLANET_RADIUS;
   for (const tier of TERRAIN_LOD_TIERS) {
     if (factor >= tier.minDistanceFactor) return tier;
@@ -93,6 +99,17 @@ interface Props {
   onSelectOrganism?: (organismId: number | null) => void;
 }
 
+interface HeightmapSample {
+  elevation: Float32Array;
+  terrain: Uint8Array;
+  originX: number;
+  originY: number;
+  cellsWidth: number;
+  cellsHeight: number;
+  texWidth: number;
+  texHeight: number;
+}
+
 interface SceneRefs {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -101,6 +118,12 @@ interface SceneRefs {
   planetMesh: THREE.Mesh;
   planetTexture: THREE.DataTexture;
   textureData: Uint8Array;
+  /** v1.2.2 — pristine, undisplaced unit-sphere vertex positions (direction * PLANET_RADIUS) for the CURRENT geometry, captured fresh whenever the geometry is (re)built at a new LOD tessellation. Displacement is always computed from this, never from the previous frame's already-displaced positions, so repeated updates don't compound. */
+  basePositions: Float32Array;
+  /** v1.2.2 — tessellation (segmentsWidth) the current planetMesh.geometry was built at, to detect when a LOD tier change requires rebuilding the geometry rather than just re-displacing it. */
+  currentSegmentsWidth: number;
+  /** v1.2.2 — latest viewport elevation/terrain sample, shared so creature positioning (updateCreatureInstances) can rest organisms on the same displaced surface without any per-tick RenderFrame payload growth. */
+  heightmap: HeightmapSample | null;
   bodyMesh: THREE.InstancedMesh;
   spikeMesh: THREE.InstancedMesh;
   selectionRing: THREE.Mesh;
@@ -163,12 +186,17 @@ const tmpColor = new THREE.Color();
  * simulation/core/renderFrame.ts). Instead it's requested on demand via
  * onRequestViewport, driven by camera distance (see TERRAIN_LOD_TIERS)
  * and a periodic refresh, and painted only when a new ViewportFrame
- * arrives (see the effect keyed on [viewportFrame] below). Because the
- * sphere always shows the whole globe at once (there's no "fly close over
- * unbounded terrain" camera mode), the requested region always spans the
- * full planet; only the *resolution* changes with zoom — this is what
- * keeps a much larger simulated world costing exactly the same to render
- * here as a small one.
+ * arrives (see the effect keyed on [viewportFrame] below).
+ *
+ * v1.2.2 — Real 3D Surface: that same effect now also displaces the
+ * sphere geometry's own vertices from Cell.elevation (via the viewport's
+ * new elevation channel), so mountains/valleys are genuine 3D relief, not
+ * just a flat-shaded texture — see elevationDisplacement in
+ * lib/sphereProjection.ts. Mesh tessellation is tied to the same
+ * camera-distance LOD tiers already used for texture resolution.
+ * Creatures and the selection ring rest on this same displaced surface,
+ * sampled client-side from the on-demand viewport heightmap — never from
+ * a per-tick simulation query, so RenderFrame's payload is unchanged.
  */
 export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -237,10 +265,16 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     planetTexture.flipY = false;
     planetTexture.needsUpdate = true;
 
-    const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, 96, 64);
+    const initialTier = TERRAIN_LOD_TIERS[TERRAIN_LOD_TIERS.length - 1];
+    const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, initialTier.segmentsWidth, initialTier.segmentsHeight);
     const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughness: 0.9, metalness: 0.05 });
     const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
     scene.add(planetMesh);
+    // v1.2.2 — pristine copy of the freshly-built sphere's vertex
+    // positions, before any displacement is ever applied — see
+    // SceneRefs.basePositions's doc comment for why this must never be
+    // overwritten with already-displaced data.
+    const initialBasePositions = new Float32Array((planetGeometry.attributes.position as THREE.BufferAttribute).array as Float32Array);
 
     const bodyGeometry = new THREE.SphereGeometry(1, 8, 6);
     const bodyMaterial = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.1 });
@@ -320,6 +354,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       planetMesh,
       planetTexture,
       textureData: placeholderData,
+      basePositions: initialBasePositions,
+      currentSegmentsWidth: initialTier.segmentsWidth,
+      heightmap: null,
       bodyMesh,
       spikeMesh,
       selectionRing,
@@ -366,7 +403,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       controls.dispose();
-      planetGeometry.dispose();
+      sceneRef.current?.planetMesh.geometry.dispose();
       planetMaterial.dispose();
       sceneRef.current?.planetTexture.dispose();
       bodyGeometry.dispose();
@@ -404,11 +441,23 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   // texture's resolution matches the ViewportFrame's own (bounded, fixed
   // LOD-tier) size, not the planet's actual width/height, so a much
   // larger world costs exactly the same to paint here.
+  //
+  // v1.2.2 — Real 3D Surface: the same effect also (a) rebuilds the
+  // sphere geometry at a new tessellation if the LOD tier changed (see
+  // rebuildPlanetGeometry below — tessellation is keyed off texWidth,
+  // which is unique per tier), and (b) displaces every vertex along its
+  // own outward normal by elevationDisplacement(...), sampled from this
+  // same viewport payload — never a per-vertex simulation query, never a
+  // per-cell Three.js object. Runs only on this same on-demand cadence,
+  // not per animation frame, keeping the CPU cost of displacement (and
+  // the mandatory computeVertexNormals() afterward, for correct lighting
+  // on the now-uneven surface) bounded by how often the viewport actually
+  // refreshes rather than by the render loop.
   useEffect(() => {
     const refs = sceneRef.current;
     if (!refs || !viewportFrame) return;
 
-    const { texWidth, texHeight, vegetation, terrain } = viewportFrame;
+    const { texWidth, texHeight, vegetation, terrain, elevation, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
 
     const sizeChanged = lastTextureSize.current?.width !== texWidth || lastTextureSize.current?.height !== texHeight;
     if (sizeChanged) {
@@ -433,6 +482,76 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       data[i * 4 + 3] = 255;
     }
     refs.planetTexture.needsUpdate = true;
+
+    // v1.2.2 — rebuild the mesh at a new tessellation only when the LOD
+    // tier genuinely changed (texWidth uniquely identifies a tier — see
+    // TERRAIN_LOD_TIERS), not on every periodic refresh at the same tier.
+    const tier = TERRAIN_LOD_TIERS.find((t) => t.maxWidth === texWidth) ?? TERRAIN_LOD_TIERS[TERRAIN_LOD_TIERS.length - 1];
+    if (tier.segmentsWidth !== refs.currentSegmentsWidth) {
+      const newGeometry = new THREE.SphereGeometry(PLANET_RADIUS, tier.segmentsWidth, tier.segmentsHeight);
+      refs.planetMesh.geometry.dispose();
+      refs.planetMesh.geometry = newGeometry;
+      refs.basePositions = new Float32Array((newGeometry.attributes.position as THREE.BufferAttribute).array as Float32Array);
+      refs.currentSegmentsWidth = tier.segmentsWidth;
+    }
+
+    // v1.2.2 — the actual vertex displacement: for every vertex, sample
+    // elevation (bilinear, for a smooth surface) and terrain (nearest, to
+    // detect ocean) at that vertex's own longitude/latitude, and push it
+    // outward/inward from PLANET_RADIUS along its own pristine direction.
+    const positionAttr = refs.planetMesh.geometry.attributes.position as THREE.BufferAttribute;
+    const base = refs.basePositions;
+    const positions = positionAttr.array as Float32Array;
+    let sawNonFinite = false;
+    for (let i = 0; i < base.length; i += 3) {
+      const bx = base[i];
+      const by = base[i + 1];
+      const bz = base[i + 2];
+      const dirLength = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
+      const dirX = bx / dirLength;
+      const dirY = by / dirLength;
+      const dirZ = bz / dirLength;
+      // Recover the same (gridX, gridY) this vertex's direction corresponds
+      // to, inverting projectToSphere's own theta/phi convention, so the
+      // heightmap sample lines up with the already-correct color texture.
+      const phi = Math.acos(Math.max(-1, Math.min(1, dirY)));
+      let theta = Math.atan2(dirZ, -dirX);
+      if (theta < 0) theta += Math.PI * 2;
+      // Note: this assumes the viewport spans the whole planet
+      // (originX=0, cellsWidth=planetWidth), which is the only mode the
+      // mount effect above ever requests (see maybeRequestViewport) — a
+      // future closer-flyover camera requesting a sub-region would need
+      // this inverse mapping revisited.
+      const gridX = (theta / (Math.PI * 2)) * cellsWidth + originX;
+      const gridY = (phi / Math.PI) * cellsHeight + originY;
+
+      const sampledElevation = sampleViewportChannelBilinear(gridX, gridY, elevation, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+      const isOcean = sampleViewportTerrainIsOcean(gridX, gridY, terrain, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+      const displacement = elevationDisplacement(sampledElevation, isOcean);
+      const newRadius = PLANET_RADIUS + displacement;
+
+      const px = dirX * newRadius;
+      const py = dirY * newRadius;
+      const pz = dirZ * newRadius;
+      if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
+        sawNonFinite = true;
+        continue; // leave this vertex at its last valid position rather than corrupting the mesh
+      }
+      positions[i] = px;
+      positions[i + 1] = py;
+      positions[i + 2] = pz;
+    }
+    if (sawNonFinite && process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn("Planet3DView: non-finite vertex displacement encountered and skipped.");
+    }
+    positionAttr.needsUpdate = true;
+    refs.planetMesh.geometry.computeVertexNormals();
+
+    // v1.2.2 — shared with updateCreatureInstances/updateSelectionRing
+    // below, so creatures rest on the same displaced surface without any
+    // growth to the per-tick RenderFrame payload.
+    refs.heightmap = { elevation, terrain, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight };
   }, [viewportFrame]);
 
   return (
@@ -453,6 +572,26 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       </ul>
     </div>
   );
+}
+
+/**
+ * v1.2.2 — Real 3D Surface: resting radius for a creature/marker at a
+ * given world (x, y), sampled from the same on-demand viewport heightmap
+ * already used to displace the terrain mesh (see the [viewportFrame]
+ * effect above) — never a per-tick simulation query, so this adds zero
+ * bytes to RenderFrame. `restOffset` is the small existing "hover above
+ * the ground" gap (0.02 for bodies, 0.05 for the selection ring, both
+ * pre-existing since v0.7/v1.0.4) preserved on top of the terrain height.
+ * Falls back to flat PLANET_RADIUS + restOffset if no viewport data has
+ * arrived yet (e.g. the very first frame), exactly matching pre-v1.2.2
+ * behavior in that case.
+ */
+function restingRadius(refs: SceneRefs, worldX: number, worldY: number, restOffset: number): number {
+  const hm = refs.heightmap;
+  if (!hm) return PLANET_RADIUS + restOffset;
+  const elevation = sampleViewportElevationNearest(worldX, worldY, hm.elevation, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
+  const isOcean = sampleViewportTerrainIsOcean(worldX, worldY, hm.terrain, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
+  return PLANET_RADIUS + elevationDisplacement(elevation, isOcean) + restOffset;
 }
 
 function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
@@ -476,7 +615,8 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
 
   let writeIndex = 0;
   for (let i = 0; i < population && writeIndex < MAX_CREATURE_INSTANCES; i += stride) {
-    const point = projectToSphere(organismsX[i], organismsY[i], planetWidth, planetHeight, PLANET_RADIUS + 0.02);
+    const restingR = restingRadius(refs, organismsX[i], organismsY[i], 0.02);
+    const point = projectToSphere(organismsX[i], organismsY[i], planetWidth, planetHeight, restingR);
     tmpPosition.set(point.x, point.y, point.z);
     tmpNormal.set(point.normalX, point.normalY, point.normalZ);
     tmpQuaternion.setFromUnitVectors(UP, tmpNormal);
@@ -552,7 +692,7 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
     return;
   }
 
-  const point = projectToSphere(organismsX[index], organismsY[index], planetWidth, planetHeight, PLANET_RADIUS + 0.05);
+  const point = projectToSphere(organismsX[index], organismsY[index], planetWidth, planetHeight, restingRadius(refs, organismsX[index], organismsY[index], 0.05));
   const normal = new THREE.Vector3(point.normalX, point.normalY, point.normalZ);
   refs.selectionRing.position.set(point.x, point.y, point.z);
   refs.selectionRing.quaternion.setFromUnitVectors(UP, normal);
