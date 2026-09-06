@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectToSphere } from "../lib/sphereProjection";
+import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest, PLANET_HEIGHT_SCALE, OCEAN_DEPTH_SCALE } from "../lib/sphereProjection";
 
 const RADIUS = 5;
 const WIDTH = 100;
@@ -64,5 +64,104 @@ describe("projectToSphere", () => {
     const dx = a.x - b.x;
     const dz = a.z - b.z;
     expect(Math.sqrt(dx * dx + dz * dz)).toBeGreaterThan(0.1);
+  });
+});
+
+/**
+ * v1.2.2 — Real 3D Surface: elevation → displacement, and viewport
+ * heightmap sampling used to drive it.
+ */
+describe("elevationDisplacement", () => {
+  it("stays finite and bounded for the full valid elevation range, land and ocean", () => {
+    for (let e = 0; e <= 1; e += 0.1) {
+      for (const isOcean of [false, true]) {
+        const d = elevationDisplacement(e, isOcean);
+        expect(Number.isFinite(d)).toBe(true);
+        expect(Math.abs(d)).toBeLessThanOrEqual(Math.max(PLANET_HEIGHT_SCALE, OCEAN_DEPTH_SCALE));
+      }
+    }
+  });
+
+  it("never produces NaN or Infinity even for out-of-range or non-finite input", () => {
+    for (const e of [-5, 2, NaN, Infinity, -Infinity]) {
+      const dLand = elevationDisplacement(e, false);
+      const dOcean = elevationDisplacement(e, true);
+      expect(Number.isFinite(dLand)).toBe(true);
+      expect(Number.isFinite(dOcean)).toBe(true);
+    }
+  });
+
+  it("higher land elevation produces a larger (or equal) outward displacement", () => {
+    const low = elevationDisplacement(0.2, false);
+    const high = elevationDisplacement(0.9, false);
+    expect(high).toBeGreaterThan(low);
+  });
+
+  it("identical elevation and ocean-flag always produce identical displacement", () => {
+    expect(elevationDisplacement(0.6, false)).toBe(elevationDisplacement(0.6, false));
+    expect(elevationDisplacement(0.6, true)).toBe(elevationDisplacement(0.6, true));
+  });
+
+  it("ocean recesses inward (negative) while land at the same elevation rises outward (non-negative)", () => {
+    expect(elevationDisplacement(0.5, true)).toBeLessThan(0);
+    expect(elevationDisplacement(0.5, false)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("radius = PLANET_RADIUS + displacement never collapses or inverts the sphere (radius stays positive and close to PLANET_RADIUS)", () => {
+    const RADIUS = 5;
+    for (let e = 0; e <= 1; e += 0.25) {
+      for (const isOcean of [false, true]) {
+        const radius = RADIUS + elevationDisplacement(e, isOcean);
+        expect(radius).toBeGreaterThan(0);
+        expect(Math.abs(radius - RADIUS)).toBeLessThan(RADIUS * 0.5); // relief stays small relative to the planet, per the brief
+      }
+    }
+  });
+});
+
+describe("sampleViewportChannelBilinear / sampleViewportTerrainIsOcean / sampleViewportElevationNearest", () => {
+  const texWidth = 8;
+  const texHeight = 8;
+  const cellsWidth = 800;
+  const cellsHeight = 800;
+  const originX = 0;
+  const originY = 0;
+  const elevationChannel = new Float32Array(texWidth * texHeight);
+  for (let i = 0; i < elevationChannel.length; i++) elevationChannel[i] = i / elevationChannel.length;
+  const terrainChannel = new Uint8Array(texWidth * texHeight); // all 0 == ocean code
+  terrainChannel[10] = 1; // one non-ocean texel
+
+  it("a given world coordinate always maps to a coherent, in-range sample", () => {
+    const v = sampleViewportChannelBilinear(123, 456, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    expect(Number.isFinite(v)).toBe(true);
+    expect(v).toBeGreaterThanOrEqual(0);
+    expect(v).toBeLessThanOrEqual(1);
+  });
+
+  it("bilinear sampling is deterministic for the same coordinate", () => {
+    const a = sampleViewportChannelBilinear(300, 300, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    const b = sampleViewportChannelBilinear(300, 300, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    expect(a).toBe(b);
+  });
+
+  it("terrain-is-ocean lookup is deterministic and boolean", () => {
+    const a = sampleViewportTerrainIsOcean(50, 50, terrainChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    const b = sampleViewportTerrainIsOcean(50, 50, terrainChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    expect(typeof a).toBe("boolean");
+    expect(a).toBe(b);
+  });
+
+  it("nearest elevation sampling is deterministic and in range", () => {
+    const a = sampleViewportElevationNearest(400, 400, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    const b = sampleViewportElevationNearest(400, 400, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    expect(a).toBe(b);
+    expect(a).toBeGreaterThanOrEqual(0);
+    expect(a).toBeLessThanOrEqual(1);
+  });
+
+  it("wraps world coordinates outside the viewport's cell range the same as their in-range equivalents (torus)", () => {
+    const inRange = sampleViewportChannelBilinear(50, 50, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    const wrapped = sampleViewportChannelBilinear(50 + cellsWidth, 50 + cellsHeight, elevationChannel, originX, originY, cellsWidth, cellsHeight, texWidth, texHeight);
+    expect(wrapped).toBeCloseTo(inRange, 6);
   });
 });
