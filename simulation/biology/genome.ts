@@ -23,15 +23,42 @@ export const TRAIT_RANGES: TraitRanges = {
   // Matches the planet's realistic temperature spread (see planet.ts:
   // 32 - latitude*40 - elevation*10 +- noise, roughly -18..34).
   preferredTemperature: { min: -15, max: 34 },
-  // Narrow (specialist) to broad (generalist) tolerance, in the same units as temperature.
-  temperatureTolerance: { min: 2, max: 25 },
+  // Narrow (specialist) to broad (generalist) tolerance, in the same
+  // units as temperature.
+  //
+  // v1.2.5 — max raised from 25 to 50 after a controlled sweep
+  // (baseline/+25%/+50%/+75%/x2, same seeds, everything else held
+  // fixed) diagnosed WHY the founding population was collapsing on most
+  // seeds: genomes are generated independently of spawn position (by
+  // design — see createRandomOrganism; this stays true, nothing here
+  // correlates genome to biome), so a founder's environmental fitness at
+  // its actual spawn cell was essentially a random pairing. Measured
+  // average founder fitness at the old max was only ~0.23 (84-88% of
+  // founders below 0.5), which — combined with the already-validated
+  // regional carrying capacity and upkeep baseline — left almost no
+  // energy margin for most founders to ever reach reproductive age. x2
+  // raised average spawn fitness to ~0.425 (58% below 0.5) and was the
+  // first configuration in this whole investigation where speciation was
+  // observed to occur at all. This does NOT correlate genome to spawn
+  // biome (still fully independent) and does NOT remove the
+  // specialist/generalist tradeoff: environment.ts's peak-height formula
+  // normalizes against TRAIT_RANGES.temperatureTolerance.max itself, and
+  // `min` is unchanged here, so a true specialist (tolerance near 2)
+  // still reaches the same maximum peak fitness (1.35) at its ideal
+  // conditions as before — only how far a *generalist* can stretch
+  // changed. Not a full fix on its own: extinction is still possible on
+  // unlucky seeds (a sparse founding population scattered across a huge
+  // world remains a genuine minimum-viable-population risk) — see
+  // HANDOFF for the full v1.2 series of experiments this was validated
+  // against.
+  temperatureTolerance: { min: 2, max: 50 },
   preferredWater: { min: 0, max: 1 },
-  waterTolerance: { min: 0.05, max: 0.6 },
-    // Capped below 1.0, same precedent as carnivory: leaving some residual
+  // v1.2.5 — same rationale/validation as temperatureTolerance above.
+  waterTolerance: { min: 0.05, max: 1.2 },
+  // Capped below 1.0, same precedent as carnivory: leaving some residual
   // vulnerability/inefficiency avoids a degenerate all-or-nothing extreme.
   evasion: { min: 0, max: 0.8 },
   huntingSkill: { min: 0, max: 0.8 },
-
 };
 
 const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as (keyof Genome)[];
