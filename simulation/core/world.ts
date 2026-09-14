@@ -8,10 +8,10 @@ import type {
 } from "../../types";
 import { Random } from "./random";
 import { Planet } from "../planet/planet";
-import { createRandomOrganism, upkeepCost, isDying } from "../biology/organism";
+import { createRandomOrganism, upkeepCost, dispersalCost, DISPERSAL_HOME_RADIUS, isDying } from "../biology/organism";
 import { averageGenome, randomGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
-import { feedOrganisms } from "../ecology/feeding";
+import { feedOrganisms, regionKey, FEEDING_REGION_SIZE } from "../ecology/feeding";
 import { huntPrey } from "../ecology/predation";
 import { buildOrganismBuckets } from "../ecology/spatialIndex";
 import { BEHAVIOR_BUCKET_SIZE } from "../ecology/behavior";
@@ -25,6 +25,15 @@ import {
 import { computeSpeciesGenomeStats } from "../evolution/speciesAnalysis";
 import { TICKS_PER_YEAR, CHUNK_ACTIVATION_HALO } from "./constants";
 import { computeActiveChunkKeys } from "../planet/chunkActivity";
+import { RegionEstablishment } from "../ecology/regionEcology";
+
+/**
+ * v1.2 — EXPERIMENTAL. Maximum extra per-tick death probability for an
+ * organism in a completely unestablished (freshly colonized) region,
+ * tapering to 0 as that region settles — see World.step's death phase and
+ * RegionEstablishment.
+ */
+const SETTLEMENT_MORTALITY_MAX = 0.004;
 
 /**
  * World is the top-level simulation object. It owns the planet, the
@@ -50,12 +59,70 @@ export class World {
   private nextSpeciesId = 1;
   private speciesRegistry: Map<number, SpeciesRecord>;
   private lastStats: SimulationStats;
+  /**
+   * v1.2 — EXPERIMENTAL flag, defaults on. Exists so a controlled A/B
+   * comparison (with vs. without the dispersal cost — see
+   * simulation/biology/organism.ts's dispersalCost) can be run from the
+   * exact same World class rather than a forked copy. Not exposed through
+   * PlanetConfig/the worker protocol: this is an internal tuning knob for
+   * evaluating the mechanism, not a person-facing setting.
+   */
+  private enableDispersalCost: boolean;
+  /**
+   * v1.2 — EXPERIMENTAL, same rationale as enableDispersalCost above: a
+   * newly colonized region's low productivity/higher mortality (see
+   * simulation/ecology/regionEcology.ts) is toggleable for controlled A/B
+   * comparison. null when disabled (no per-region state tracked at all,
+   * not just a no-op multiplier — keeps the "without" condition honestly
+   * identical to pre-settlement-mechanism behavior).
+   */
+  private regionEstablishment: RegionEstablishment | null;
 
-  constructor(config: PlanetConfig, initialPopulation: number) {
+  constructor(
+    config: PlanetConfig,
+    initialPopulation: number,
+    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean },
+  ) {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
     this.speciesRegistry = new Map();
+    this.enableDispersalCost = options?.enableDispersalCost ?? true;
+    this.regionEstablishment = (options?.enableSettlement ?? true) ? new RegionEstablishment() : null;
     this.seedPopulation(initialPopulation);
+    // v1.2 — the founding population represents organisms already settled
+    // in the world, not colonizers: their home regions start fully
+    // established, never subject to the settlement ramp. Only regions
+    // reached *later* — by organisms dispersing out from where they
+    // already are, whether founders or their descendants — start at 0 and
+    // must go through it. This is what confines the settlement penalty to
+    // the actual colonization dynamic rather than to the initial seeding.
+    //
+    // v1.2.2 — seeds the founder's *whole home territory* (every region
+    // within DISPERSAL_HOME_RADIUS, matching dispersalCost's own
+    // definition of "home"), not just the single 8-cell region a founder
+    // happened to land in. Otherwise ordinary local foraging that drifts
+    // even one region over from the exact birth point — completely
+    // normal, unremarkable movement, not dispersal — would still trigger
+    // feeding.ts's settlement-efficiency floor and the settlement
+    // mortality risk below for a founding population that's supposed to
+    // already be settled everywhere it naturally roams.
+    if (this.regionEstablishment) {
+      const seedKeys: string[] = [];
+      for (const o of this.organisms) {
+        const homeRx = Math.floor(o.position.x / FEEDING_REGION_SIZE);
+        const homeRy = Math.floor(o.position.y / FEEDING_REGION_SIZE);
+        const regionsX = Math.ceil(this.planet.width / FEEDING_REGION_SIZE);
+        const regionsY = Math.ceil(this.planet.height / FEEDING_REGION_SIZE);
+        for (let dx = -DISPERSAL_HOME_RADIUS; dx <= DISPERSAL_HOME_RADIUS; dx++) {
+          for (let dy = -DISPERSAL_HOME_RADIUS; dy <= DISPERSAL_HOME_RADIUS; dy++) {
+            const rx = (((homeRx + dx) % regionsX) + regionsX) % regionsX;
+            const ry = (((homeRy + dy) % regionsY) + regionsY) % regionsY;
+            seedKeys.push(`${rx},${ry}`);
+          }
+        }
+      }
+      this.regionEstablishment.seedEstablished(seedKeys);
+    }
     this.lastStats = this.computeStats(0, 0, 0);
   }
 
@@ -110,11 +177,25 @@ export class World {
       if (!o.alive) continue;
       o.age++;
       o.energy -= upkeepCost(o);
+      if (this.enableDispersalCost) {
+        const currentX = Math.round(o.position.x) % this.planet.width;
+        const currentY = Math.round(o.position.y) % this.planet.height;
+        const currentEstablishment = this.regionEstablishment?.get(regionKey(currentX, currentY)) ?? 1;
+        o.energy -= dispersalCost(
+          Math.floor(o.home.x / FEEDING_REGION_SIZE),
+          Math.floor(o.home.y / FEEDING_REGION_SIZE),
+          Math.floor(currentX / FEEDING_REGION_SIZE),
+          Math.floor(currentY / FEEDING_REGION_SIZE),
+          Math.ceil(this.planet.width / FEEDING_REGION_SIZE),
+          Math.ceil(this.planet.height / FEEDING_REGION_SIZE),
+          currentEstablishment,
+        );
+      }
       moveOrganism(o, this.planet, this.rng, behaviorBuckets, BEHAVIOR_BUCKET_SIZE, this.tick);
     }
 
     // 4. feeding (vegetation, weighted by 1 - carnivory)
-    feedOrganisms(this.organisms, this.planet);
+    feedOrganisms(this.organisms, this.planet, this.regionEstablishment ?? undefined);
 
     // 4b. predation (v0.3): carnivorous organisms may hunt nearby prey
     const predationKills = huntPrey(this.organisms, this.planet, this.rng, this.tick);
@@ -122,9 +203,29 @@ export class World {
     // 5. death + removal (includes organisms killed by predation above)
     let deaths = 0;
     for (const o of this.organisms) {
-      if (o.alive && isDying(o)) {
+      if (!o.alive) continue;
+      if (isDying(o)) {
         o.alive = false;
         deaths++;
+        continue;
+      }
+      // v1.2 — EXPERIMENTAL settlement risk: an organism living in a
+      // still-unsettled region (see RegionEstablishment) faces a small
+      // extra chance of death this tick — unfamiliar hazards a mature,
+      // established population would no longer be as exposed to. Tapers
+      // to 0 as the region establishes; never applies at all when the
+      // settlement mechanism is disabled.
+      if (this.regionEstablishment) {
+        const key = regionKey(
+          Math.round(o.position.x) % this.planet.width,
+          Math.round(o.position.y) % this.planet.height,
+        );
+        const establishment = this.regionEstablishment.get(key);
+        const settlementRisk = SETTLEMENT_MORTALITY_MAX * (1 - establishment);
+        if (settlementRisk > 0 && this.rng.chance(settlementRisk)) {
+          o.alive = false;
+          deaths++;
+        }
       }
     }
     if (deaths > 0 || predationKills > 0) {
@@ -217,6 +318,32 @@ export class World {
     world.rng = new Random(snapshot.planet.config.seed);
     world.rng.setState(snapshot.randomState);
     world.speciesRegistry = new Map(snapshot.speciesRegistry.map((r) => [r.speciesId, r]));
+    // v1.2 — restored worlds resume with dispersal cost/settlement both
+    // on (the shipped default), since these flags are an internal tuning
+    // knob, not part of a saved WorldSnapshot. Regions around every
+    // restored organism's current position are seeded as established —
+    // otherwise a long-settled population would resume as if it had just
+    // colonized everywhere it already lives, paying the settlement
+    // penalty for no reason (same home-territory-seeding logic as the
+    // constructor, applied to current position since a restored
+    // organism's true settled history isn't itself part of the snapshot).
+    world.enableDispersalCost = true;
+    world.regionEstablishment = new RegionEstablishment();
+    const seedKeys: string[] = [];
+    const regionsX = Math.ceil(world.planet.width / FEEDING_REGION_SIZE);
+    const regionsY = Math.ceil(world.planet.height / FEEDING_REGION_SIZE);
+    for (const o of world.organisms) {
+      const rx = Math.floor(o.position.x / FEEDING_REGION_SIZE);
+      const ry = Math.floor(o.position.y / FEEDING_REGION_SIZE);
+      for (let dx = -DISPERSAL_HOME_RADIUS; dx <= DISPERSAL_HOME_RADIUS; dx++) {
+        for (let dy = -DISPERSAL_HOME_RADIUS; dy <= DISPERSAL_HOME_RADIUS; dy++) {
+          const wrappedX = (((rx + dx) % regionsX) + regionsX) % regionsX;
+          const wrappedY = (((ry + dy) % regionsY) + regionsY) % regionsY;
+          seedKeys.push(`${wrappedX},${wrappedY}`);
+        }
+      }
+    }
+    world.regionEstablishment.seedEstablished(seedKeys);
     world.lastStats = world.computeStats(0, 0, 0);
     return world;
   }
