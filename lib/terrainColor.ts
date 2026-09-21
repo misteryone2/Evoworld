@@ -36,6 +36,43 @@ export function terrainColorRGB(terrainCode: number, vegetation: number): [numbe
   return [r, g, b];
 }
 
+/**
+ * v1.2.3 — Rivers & Lakes rendering (see HANDOFF.md's brief §§10-13): a
+ * simple, cheap color overlay rather than any new geometry/shader — a
+ * river/lake cell's base terrain color is blended toward a water tone,
+ * with intensity driven by riverFlow (rivers) or a fixed strong blend
+ * (lakes, since HydrologyResult doesn't grade lake "depth"). Applied
+ * per-texel in the same texture-paint loop that already runs for every
+ * viewport pixel (see components/simulation/Planet3DView.tsx), so it adds
+ * no extra draw calls and no per-cell 3D objects — exactly what §§10-12 of
+ * the brief require.
+ */
+const RIVER_COLOR: [number, number, number] = [64, 132, 189];
+const LAKE_COLOR: [number, number, number] = [40, 96, 158];
+
+export function applyWaterOverlayRGB(
+  base: [number, number, number],
+  riverFlow: number,
+  isLake: boolean,
+): [number, number, number] {
+  if (isLake) {
+    return [
+      Math.round(base[0] * 0.15 + LAKE_COLOR[0] * 0.85),
+      Math.round(base[1] * 0.15 + LAKE_COLOR[1] * 0.85),
+      Math.round(base[2] * 0.15 + LAKE_COLOR[2] * 0.85),
+    ];
+  }
+  if (riverFlow > 0) {
+    const t = Math.max(0, Math.min(1, riverFlow)) * 0.75 + 0.15; // even a faint river stays visible
+    return [
+      Math.round(base[0] * (1 - t) + RIVER_COLOR[0] * t),
+      Math.round(base[1] * (1 - t) + RIVER_COLOR[1] * t),
+      Math.round(base[2] * (1 - t) + RIVER_COLOR[2] * t),
+    ];
+  }
+  return base;
+}
+
 /** Same mapping as terrainColorRGB, formatted as a CSS rgb() string for canvas 2D fillStyle use. */
 export function terrainColorCSS(terrainCode: number, vegetation: number): string {
   const [r, g, b] = terrainColorRGB(terrainCode, vegetation);
