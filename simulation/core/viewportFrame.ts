@@ -46,6 +46,12 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
   // comment above for why that matters (never materializes a chunk from
   // rendering, payload size tracks viewport resolution only).
   const elevation = new Float32Array(texWidth * texHeight);
+  // v1.2.3 — Rivers & Lakes: sampled in the exact same loop, same
+  // read-only accessors, same bounded resolution as every other channel
+  // here — see this function's doc comment above and Cell.riverFlow/
+  // isLake's own doc comments in types/index.ts.
+  const riverFlow = new Float32Array(texWidth * texHeight);
+  const lake = new Uint8Array(texWidth * texHeight);
 
   for (let ty = 0; ty < texHeight; ty++) {
     const wy = Math.floor(originY + ((ty + 0.5) / texHeight) * cellsHeight);
@@ -56,6 +62,8 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
       vegetation[i] = cell.vegetation;
       terrain[i] = TERRAIN_CODE[cell.terrain] ?? 1;
       elevation[i] = cell.elevation;
+      riverFlow[i] = cell.riverFlow ?? 0;
+      lake[i] = cell.isLake ? 1 : 0;
     }
   }
 
@@ -70,5 +78,7 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
     vegetation,
     terrain,
     elevation,
+    riverFlow,
+    lake,
   };
 }
