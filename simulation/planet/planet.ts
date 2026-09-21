@@ -1,105 +1,13 @@
 import type { Cell, PlanetChunkSnapshot, PlanetConfig, Season, TerrainType } from "../../types";
 import { TICKS_PER_YEAR, DEFAULT_CHUNK_SIZE } from "../core/constants";
+import { hashNoise, computeElevationAt, computeWaterAt, classifyBaseAt } from "./terrainNoise";
+import { hydrologyAt, computeChunkHydrology, type HydrologyResult } from "./hydrology";
 
 /** Wraps a coordinate into [0, max). */
 function wrapCoord(value: number, max: number): number {
   let v = Math.floor(value) % max;
   if (v < 0) v += max;
   return v;
-}
-
-/**
- * Deterministic pseudo-random value in [-1, 1], a function of (seed, x, y)
- * only — NOT of call order. This is what makes lazy, on-demand chunk
- * generation give byte-identical terrain to eager whole-grid generation:
- * a cell's value never depends on which chunks happened to be generated
- * before it, only on its own coordinates and the world seed. (A sequential
- * RNG stream, as pre-v1.1 used for this same per-cell noise term, would
- * silently produce different results depending on chunk visit order —
- * fine for an eagerly-generated dense grid, but not for a world explored
- * lazily and in an unpredictable order.)
- */
-function hashNoise(seed: number, x: number, y: number): number {
-  let h = seed | 0;
-  h = Math.imul(h ^ x, 0x27d4eb2d);
-  h = Math.imul(h ^ y, 0x165667b1);
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  const u = (h >>> 0) / 4294967296;
-  return u * 2 - 1;
-}
-
-/** Smoothstep (Hermite) easing — avoids axis-aligned blocky artifacts in the interpolated noise below. */
-function smoothstep(t: number): number {
-  return t * t * (3 - 2 * t);
-}
-
-/** Wraps a lattice index into [0, count) — same torus-wraparound principle as wrapCoord, applied to a coarser noise lattice so each octave tiles seamlessly at the world's edges instead of showing a seam. */
-function wrapLattice(v: number, count: number): number {
-  let w = v % count;
-  if (w < 0) w += count;
-  return w;
-}
-
-/**
- * v1.2.1 — smooth 2D "value noise": deterministic, order-independent
- * (same function-of-coordinates contract as hashNoise), continuous
- * between lattice points via bilinear interpolation with smoothstep
- * easing. `frequency` is the lattice spacing in world cells — a large
- * frequency gives slowly-varying, continent-scale structure; a small one
- * gives high-frequency local roughness. This single primitive, evaluated
- * at different frequencies/amplitudes and summed (see fbm2D), is what
- * replaces the old handful-of-random-blobs field: unlike a handful of
- * blobs, arbitrarily many octaves compose into genuine multi-scale
- * structure without ever needing more than a few number-crunching steps
- * per cell — still O(1) per cell, still zero precomputation.
- */
-function valueNoise2D(seed: number, x: number, y: number, frequency: number, worldWidth: number, worldHeight: number): number {
-  const latticeCountX = Math.max(1, Math.round(worldWidth / frequency));
-  const latticeCountY = Math.max(1, Math.round(worldHeight / frequency));
-  const fx = (x / worldWidth) * latticeCountX;
-  const fy = (y / worldHeight) * latticeCountY;
-  const x0 = Math.floor(fx);
-  const y0 = Math.floor(fy);
-  const tx = smoothstep(fx - x0);
-  const ty = smoothstep(fy - y0);
-  const lx0 = wrapLattice(x0, latticeCountX);
-  const lx1 = wrapLattice(x0 + 1, latticeCountX);
-  const ly0 = wrapLattice(y0, latticeCountY);
-  const ly1 = wrapLattice(y0 + 1, latticeCountY);
-  const v00 = hashNoise(seed, lx0, ly0);
-  const v10 = hashNoise(seed, lx1, ly0);
-  const v01 = hashNoise(seed, lx0, ly1);
-  const v11 = hashNoise(seed, lx1, ly1);
-  const a = v00 + (v10 - v00) * tx;
-  const b = v01 + (v11 - v01) * tx;
-  return a + (b - a) * ty; // still in [-1, 1]
-}
-
-/**
- * v1.2.1 — fractal Brownian motion: sums valueNoise2D at progressively
- * higher frequencies (lacunarity) and lower amplitudes (persistence).
- * Each octave uses a distinct seed offset (large arbitrary primes) so
- * octaves are statistically independent rather than correlated repeats
- * of the same pattern at different scales. Result is NOT re-normalized
- * here — callers combine multiple fBm calls (continental shape, ridged
- * mountains, detail) with their own weights before normalizing once.
- */
-function fbm2D(seed: number, x: number, y: number, worldWidth: number, worldHeight: number, octaves: number, baseFrequency: number, lacunarity: number, persistence: number, seedOffset: number): number {
-  let sum = 0;
-  let amplitude = 1;
-  let frequency = baseFrequency;
-  let maxAmplitude = 0;
-  for (let i = 0; i < octaves; i++) {
-    sum += valueNoise2D(seed + seedOffset + i * 104729, x, y, frequency, worldWidth, worldHeight) * amplitude;
-    maxAmplitude += amplitude;
-    amplitude *= persistence;
-    frequency /= lacunarity;
-  }
-  return sum / maxAmplitude; // back to [-1, 1]
 }
 
 /** "cx,cy" chunk map key. */
@@ -125,9 +33,6 @@ function growthFactorForTick(tick: number): number {
 
 /** Average of growthFactorForTick over a full year — the closed-form limit catch-up uses for long dormancy spans (>= one year). */
 const YEARLY_AVG_GROWTH_FACTOR = (1 + 1.6 + 1 + 0.3) / 4; // primavera + estate + autunno + inverno
-
-/** v1.2.1 — power curve applied to normalized elevation to sharpen ocean/continent contrast (>1 widens flat lowlands/ocean basins, steepens rise near landmass cores). */
-const ELEVATION_REDISTRIBUTION_POWER = 1.35;
 
 /**
  * Planet owns the world's terrain as a lazily-generated, chunked grid of
@@ -220,16 +125,7 @@ export class Planet {
    */
   private computeElevation(x: number, y: number): number {
     const { width, height, seed } = this.config;
-    const continental = fbm2D(seed, x, y, width, height, 4, width * 0.35, 2, 0.5, 0);
-    const ridgedRaw = fbm2D(seed, x, y, width, height, 4, width * 0.09, 2.2, 0.5, 9973);
-    const ridged = 1 - Math.abs(ridgedRaw); // ridge lines instead of smooth bumps
-    const detail = fbm2D(seed, x, y, width, height, 3, width * 0.02, 2, 0.5, 40009);
-
-    const landMask = Math.max(0, Math.min(1, smoothstep((continental + 0.15) / 0.4)));
-
-    const combined = continental * 0.62 + (ridged * 2 - 1) * 0.28 * landMask + detail * 0.1;
-    const normalized = Math.max(0, Math.min(1, (combined + 1) / 2));
-    return Math.pow(normalized, ELEVATION_REDISTRIBUTION_POWER);
+    return computeElevationAt(seed, x, y, width, height);
   }
 
   /**
@@ -244,17 +140,12 @@ export class Planet {
    */
   private computeWater(x: number, y: number, elevation: number): number {
     const { width, height, seed } = this.config;
-    const noise = fbm2D(seed, x, y, width, height, 4, width * 0.28, 2, 0.55, 70211);
-    const noiseComponent = (noise + 1) / 2;
-    const elevationBias = 1 - elevation; // lower ground trends wetter, higher ground trends drier
-    return Math.max(0, Math.min(1, noiseComponent * 0.75 + elevationBias * 0.25));
+    return computeWaterAt(seed, x, y, width, height, elevation);
   }
 
   /** Structural classification from elevation/water — fixed for the planet's lifetime. */
   private static classifyBase(elevation: number, water: number): "ocean" | "mountain" | null {
-    if (water > 0.65) return "ocean";
-    if (elevation > 0.75) return "mountain";
-    return null;
+    return classifyBaseAt(elevation, water);
   }
 
   /** Climate-dependent biome for non-ocean, non-mountain land — see Planet.update's doc comment on the class for why this is re-evaluated over time. */
@@ -274,8 +165,17 @@ export class Planet {
    * cheap, memory-free terrain reads (e.g. a distant/never-visited region
    * shown in an overview render).
    */
-  private computeCellBaseline(x: number, y: number): Cell {
-    const { height, seed } = this.config;
+  /**
+   * `precomputedHydro`, when given, skips a fresh per-cell hydrologyAt
+   * call in favor of a result already computed by computeChunkHydrology's
+   * shared, chunk-wide ElevationPatch — see generateChunk, the only
+   * caller that passes it, and hydrology.ts's doc comment on
+   * computeChunkHydrology for why this batching matters for performance.
+   * sampleBaseline (single isolated cells, no chunk context) omits it and
+   * falls back to the per-cell hydrologyAt path instead.
+   */
+  private computeCellBaseline(x: number, y: number, precomputedHydro?: HydrologyResult | null): Cell {
+    const { width, height, seed } = this.config;
     const elevation = this.computeElevation(x, y);
     const water = this.computeWater(x, y, elevation);
     const latitude = Math.abs(y / height - 0.5) * 2; // 0 at equator, 1 at poles
@@ -287,12 +187,36 @@ export class Planet {
       : Math.max(0, Math.min(1, (1 - Math.abs(temperature - 22) / 40) * (1 - Math.abs(water - 0.4))));
 
     const terrain: TerrainType = base ?? Planet.classifyBiome(temperature, water, vegetation);
-    return { elevation, temperature, water, vegetation, terrain };
+
+    // v1.2.3 — Rivers & Lakes: a small, bounded, local-neighborhood query
+    // (see hydrology.ts's doc comment for why this — not global flow
+    // accumulation or long source-to-sea path tracing — is what the
+    // lazy/chunked architecture can afford), pure function of (seed, x, y)
+    // like every other channel here, so it's automatically deterministic,
+    // order-independent and continuous across chunk boundaries with zero
+    // extra bookkeeping.
+    const hydro = base === "ocean" ? null : (precomputedHydro !== undefined ? precomputedHydro : hydrologyAt(seed, x, y, width, height));
+
+    return {
+      elevation,
+      temperature,
+      water,
+      vegetation,
+      terrain,
+      riverFlow: hydro && hydro.riverFlow > 0 ? hydro.riverFlow : undefined,
+      isLake: hydro?.isLake || undefined,
+    };
   }
 
   private generateChunk(cx: number, cy: number): Cell[] {
     const cs = this.chunkSize;
+    const { width, height, seed } = this.config;
     const cells = new Array<Cell>(cs * cs);
+    // v1.2.3 — one shared ElevationPatch for the whole chunk (see
+    // hydrology.ts's computeChunkHydrology doc comment) instead of a
+    // fresh per-cell query; this is what keeps chunk generation itself
+    // fast now that every cell also carries a hydrology result.
+    const chunkHydro = computeChunkHydrology(seed, cx * cs, cy * cs, cs, width, height);
     for (let ly = 0; ly < cs; ly++) {
       for (let lx = 0; lx < cs; lx++) {
         const wx = cx * cs + lx;
@@ -302,7 +226,7 @@ export class Planet {
         // v1.1 preset is an exact multiple) have local slots beyond the
         // planet's real width/height that no wrapped (x, y) ever maps
         // to; still generated for code simplicity, just never read.
-        cells[ly * cs + lx] = this.computeCellBaseline(wx, wy);
+        cells[ly * cs + lx] = this.computeCellBaseline(wx, wy, chunkHydro[ly * cs + lx]);
       }
     }
     return cells;
