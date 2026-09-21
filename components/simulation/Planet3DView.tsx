@@ -6,7 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
-import { terrainColorRGB } from "../../lib/terrainColor";
+import { terrainColorRGB, applyWaterOverlayRGB } from "../../lib/terrainColor";
 import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
 
@@ -457,7 +457,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const refs = sceneRef.current;
     if (!refs || !viewportFrame) return;
 
-    const { texWidth, texHeight, vegetation, terrain, elevation, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
+    const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
 
     const sizeChanged = lastTextureSize.current?.width !== texWidth || lastTextureSize.current?.height !== texHeight;
     if (sizeChanged) {
@@ -475,7 +475,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
 
     const data = refs.textureData;
     for (let i = 0; i < texWidth * texHeight; i++) {
-      const [r, g, b] = terrainColorRGB(terrain[i], vegetation[i]);
+      const [r, g, b] = applyWaterOverlayRGB(terrainColorRGB(terrain[i], vegetation[i]), riverFlow[i], lake[i] === 1);
       data[i * 4] = r;
       data[i * 4 + 1] = g;
       data[i * 4 + 2] = b;
