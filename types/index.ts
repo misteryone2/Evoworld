@@ -130,6 +130,23 @@ export interface Cell {
   water: number; // 0..1, fixed at generation time
   vegetation: number; // 0..1, regrows over time, consumed by herbivores
   terrain: TerrainType;
+  /**
+   * v1.2.3 — Rivers & Lakes. 0/undefined = no river at this cell; > 0 =
+   * presence/intensity of river flow (see simulation/planet/hydrology.ts
+   * for how this is derived — a local, deterministic approximation, not a
+   * true global flow accumulation). Optional so old snapshots without
+   * this field keep loading unchanged (treated as "no river").
+   * Structural, like elevation: fixed at generation time, never
+   * mutated by Planet.update — same lifecycle as elevation/water.
+   */
+  riverFlow?: number;
+  /**
+   * v1.2.3 — true when this cell is part of a lake (a local topographic
+   * depression where the local hydrology approximation's drainage pools
+   * rather than continuing downhill — see hydrology.ts). Optional/undefined
+   * = not a lake, for the same snapshot-compatibility reason as riverFlow.
+   */
+  isLake?: boolean;
 }
 
 export interface PlanetConfig {
@@ -311,6 +328,18 @@ export interface ViewportFrame {
    * sent per-tick on RenderFrame.
    */
   elevation: Float32Array; // texWidth * texHeight
+  /**
+   * v1.2.3 — Rivers & Lakes. Same bounded texWidth*texHeight resolution as
+   * every other channel here (never tied to the planet's declared size —
+   * see this interface's own doc comment). 0 = no river; > 0 = flow
+   * intensity, in the same range Cell.riverFlow uses. A second
+   * Float32Array channel at viewport resolution costs the same fixed,
+   * bounded amount regardless of world size — see simulation/core/
+   * viewportFrame.ts's benchmark-verified cost accounting.
+   */
+  riverFlow: Float32Array; // texWidth * texHeight
+  /** v1.2.3 — 1 where the sampled cell is part of a lake, 0 otherwise; same bounded resolution as riverFlow. */
+  lake: Uint8Array; // texWidth * texHeight
 }
 
 /** Lightweight payload sent from the worker to the UI every rendered frame. */
