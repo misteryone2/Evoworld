@@ -102,4 +102,38 @@ export function classifyBaseAt(elevation: number, water: number): "ocean" | "mou
   return null;
 }
 
+/**
+ * v1.2.4 — Biome & Vegetation Integration.
+ *
+ * Bounded, deterministic "how much vegetation this environment can
+ * ultimately support" — the causal target §10/§15 of the brief calls
+ * `vegetationPotential`, feeding the *existing* regrowth model (see
+ * Planet.stepCellOneTick/catchUpCell) instead of replacing it. A pure
+ * product of three [0,1] suitability-style factors, each independently
+ * bounded, so the product itself never needs its own extra clamp beyond
+ * the final one:
+ *  - climate suitability: same triangular falloff around 22 the pre-v1.2.4
+ *    baseline vegetation formula already used, kept unchanged (elevation's
+ *    effect reaches this indirectly through `temperature`, which already
+ *    factors in elevation cooling — see Planet.computeCellBaseline).
+ *  - water suitability: peaks at moderate `waterAvailability` (~0.55,
+ *    slightly above the old 0.4 peak, since waterAvailability now already
+ *    includes river/lake bonuses on top of the raw water field — see
+ *    computeWaterAvailability in hydrology.ts) and falls off on both sides,
+ *    so a flooded/ocean-adjacent value doesn't score higher than a
+ *    genuinely well-watered one.
+ *  - fertility: small ±15% deterministic per-cell noise (seed/x/y hash,
+ *    O(1), no fBm) so a planet doesn't look perfectly smooth within a
+ *    single climate/water band — purely cosmetic variation, not a driver
+ *    of macro biome structure.
+ */
+const FERTILITY_NOISE_SEED_OFFSET = 190513;
+
+export function computeVegetationPotential(seed: number, x: number, y: number, temperature: number, waterAvailability: number): number {
+  const climateSuitability = Math.max(0, 1 - Math.abs(temperature - 22) / 40);
+  const waterSuitability = Math.max(0, 1 - Math.abs(waterAvailability - 0.55) / 0.75);
+  const fertility = 0.85 + ((hashNoise(seed + FERTILITY_NOISE_SEED_OFFSET, x, y) + 1) / 2) * 0.3; // 0.85..1.15
+  return Math.max(0, Math.min(1, climateSuitability * waterSuitability * fertility));
+}
+
 export type { TerrainType };
