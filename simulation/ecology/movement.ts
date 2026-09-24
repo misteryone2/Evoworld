@@ -3,6 +3,7 @@ import { Random } from "../core/random";
 import { Planet } from "../planet/planet";
 import { computeSensoryChannels, recordFoodMemory } from "./behavior";
 import { evaluateBrain, SENSORY_INPUT_SIZE } from "../biology/brain";
+import { evaluateTerrainMovement } from "./terrain";
 
 /**
  * Below this combined output magnitude from the organism's brain, treat it
@@ -95,8 +96,32 @@ export function moveOrganism(
   dirX /= mag;
   dirY /= mag;
 
-  const newX = wrap(x + dirX * speed * rng.range(0.5, 1), planet.width);
-  const newY = wrap(y + dirY * speed * rng.range(0.5, 1), planet.height);
+  const stepRand = rng.range(0.5, 1);
+  const rawStepX = dirX * speed * stepRand;
+  const rawStepY = dirY * speed * stepRand;
+
+  // v1.2.5 — Movement on Real Terrain. The brain has already chosen a
+  // direction (above); this evaluates what the topography thinks of that
+  // one candidate destination and turns it into a cost, without touching
+  // the brain's decision itself (see terrain.ts's doc comment). The
+  // candidate is the uncosted destination the brain's direction implies —
+  // terrain evaluation only ever shortens or blocks that single step, it
+  // never picks a different one.
+  const candidateX = wrap(x + rawStepX, planet.width);
+  const candidateY = wrap(y + rawStepY, planet.height);
+  const terrainEval = evaluateTerrainMovement({ x, y }, { x: candidateX, y: candidateY }, planet);
+
+  // Extreme slopes (cliffs/ridge walls) block the step entirely, exactly
+  // like the ocean check below — the organism simply stays put this tick.
+  if (!terrainEval.traversable) return;
+
+  // Uphill/rough terrain shortens how far the organism actually gets this
+  // tick; flat ground (movementCost ~1) leaves the step unchanged. This is
+  // the "terrain cost, not terrain control" balance the brief asks for:
+  // genome speed and the brain's chosen direction are untouched, only the
+  // realized distance is reduced.
+  const newX = wrap(x + rawStepX / terrainEval.movementCost, planet.width);
+  const newY = wrap(y + rawStepY / terrainEval.movementCost, planet.height);
 
   // Only commit to the step if it lands on traversable terrain. Without
   // this check, an organism could end up on an ocean cell simply because
