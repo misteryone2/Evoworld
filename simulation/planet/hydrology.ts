@@ -229,6 +229,38 @@ export function hydrologyAt(seed: number, x: number, y: number, width: number, h
  * practice) — see tests/hydrology.test.ts's own benchmark-style
  * assertion for a regression guard on this.
  */
+/**
+ * v1.2.4 — Biome & Vegetation Integration.
+ *
+ * How much a river or a lake actually raises the *usable* water at a
+ * cell, on top of the cell's own static `water` field. Kept as a small,
+ * bounded, additive contribution rather than an override, per the
+ * v1.2.4 brief (§5/§14): a river cell is "terrain with a nearby water
+ * source", not "terrain that becomes water" — `terrain` itself is still
+ * decided purely by classifyBaseAt (ocean vs. land), never by riverFlow.
+ * Both influences are deterministic functions of the same persisted,
+ * generation-time fields (Cell.water/riverFlow/isLake — see
+ * types/index.ts), so nothing new needs to be stored or recomputed per
+ * tick beyond what v1.2.3 already persists (see Planet.computeCellBaseline
+ * and Planet's stepCellOneTick/catchUpCell, the three call sites).
+ */
+export const RIVER_WATER_INFLUENCE = 0.4;
+export const LAKE_WATER_INFLUENCE = 0.5;
+
+/**
+ * Effective local water availability for vegetation/biome purposes:
+ * the cell's own water field plus a bounded contribution from a nearby
+ * river (graded by flow intensity, per §5's "gradiente ambientale, non
+ * booleano" requirement) and/or lake (flat contribution — HydrologyResult
+ * doesn't grade lake "depth", same simplification §6 explicitly allows).
+ * Always clamped to [0, 1], same as every other water-like channel here.
+ */
+export function computeWaterAvailability(water: number, riverFlow: number, isLake: boolean): number {
+  const riverInfluence = Math.max(0, Math.min(1, riverFlow)) * RIVER_WATER_INFLUENCE;
+  const lakeInfluence = isLake ? LAKE_WATER_INFLUENCE : 0;
+  return Math.max(0, Math.min(1, water + riverInfluence + lakeInfluence));
+}
+
 export function computeChunkHydrology(
   seed: number,
   chunkOriginX: number,
