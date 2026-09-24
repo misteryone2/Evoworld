@@ -1,7 +1,7 @@
 import type { Cell, PlanetChunkSnapshot, PlanetConfig, Season, TerrainType } from "../../types";
 import { TICKS_PER_YEAR, DEFAULT_CHUNK_SIZE } from "../core/constants";
-import { hashNoise, computeElevationAt, computeWaterAt, classifyBaseAt } from "./terrainNoise";
-import { hydrologyAt, computeChunkHydrology, type HydrologyResult } from "./hydrology";
+import { hashNoise, computeElevationAt, computeWaterAt, classifyBaseAt, computeVegetationPotential } from "./terrainNoise";
+import { hydrologyAt, computeChunkHydrology, computeWaterAvailability, type HydrologyResult } from "./hydrology";
 
 /** Wraps a coordinate into [0, max). */
 function wrapCoord(value: number, max: number): number {
@@ -33,6 +33,9 @@ function growthFactorForTick(tick: number): number {
 
 /** Average of growthFactorForTick over a full year — the closed-form limit catch-up uses for long dormancy spans (>= one year). */
 const YEARLY_AVG_GROWTH_FACTOR = (1 + 1.6 + 1 + 0.3) / 4; // primavera + estate + autunno + inverno
+
+/** v1.2.4 — see computeCellBaseline's vegetation initialization comment. */
+const INITIAL_VEGETATION_FRACTION = 0.5;
 
 /**
  * Planet owns the world's terrain as a lazily-generated, chunked grid of
@@ -182,11 +185,6 @@ export class Planet {
     const temperature = 32 - latitude * 40 - elevation * 10 + hashNoise(seed, x, y) * 2;
 
     const base = Planet.classifyBase(elevation, water);
-    const vegetation = base === "ocean"
-      ? 0
-      : Math.max(0, Math.min(1, (1 - Math.abs(temperature - 22) / 40) * (1 - Math.abs(water - 0.4))));
-
-    const terrain: TerrainType = base ?? Planet.classifyBiome(temperature, water, vegetation);
 
     // v1.2.3 — Rivers & Lakes: a small, bounded, local-neighborhood query
     // (see hydrology.ts's doc comment for why this — not global flow
@@ -195,7 +193,32 @@ export class Planet {
     // like every other channel here, so it's automatically deterministic,
     // order-independent and continuous across chunk boundaries with zero
     // extra bookkeeping.
+    //
+    // v1.2.4 — computed *before* vegetation now, since vegetation potential
+    // needs riverFlow/isLake's contribution to water availability (see
+    // computeWaterAvailability below) — the ELEVATION -> WATER -> CLIMATE ->
+    // BIOME -> VEGETATION chain the brief asks for.
     const hydro = base === "ocean" ? null : (precomputedHydro !== undefined ? precomputedHydro : hydrologyAt(seed, x, y, width, height));
+
+    // v1.2.4 — effective water availability = the cell's own static water
+    // field plus a bounded river/lake bonus (see hydrology.ts). This is
+    // what vegetation potential and biome classification react to, not
+    // the raw `water` field alone — a dry-looking cell right next to a
+    // river or lake now genuinely has more to grow on.
+    const waterAvailability = computeWaterAvailability(water, hydro?.riverFlow ?? 0, hydro?.isLake ?? false);
+
+    const vegetation = base === "ocean"
+      ? 0
+      // v1.2.4 — a freshly-generated cell starts partway toward its
+      // vegetation potential rather than already sitting at equilibrium,
+      // so the existing regrowth model (stepCellOneTick/catchUpCell) has
+      // real work to do growing it in over time — matching the pre-v1.2.4
+      // baseline's own behavior (its old formula never started a land
+      // cell already saturated either). INITIAL_VEGETATION_FRACTION is a
+      // startup constant only, unrelated to any per-tick growth rate.
+      : computeVegetationPotential(seed, x, y, temperature, waterAvailability) * INITIAL_VEGETATION_FRACTION;
+
+    const terrain: TerrainType = base ?? Planet.classifyBiome(temperature, waterAvailability, vegetation);
 
     return {
       elevation,
@@ -307,15 +330,24 @@ export class Planet {
    * active chunk behaves exactly as before — this path only ever runs
    * with elapsed <= 1, see update()).
    */
-  private stepCellOneTick(cell: Cell, tick: number, seasonalOffset: number, climateDrift: number, growthFactor: number): void {
+  private stepCellOneTick(cell: Cell, x: number, y: number, tick: number, seasonalOffset: number, climateDrift: number, growthFactor: number): void {
     if (cell.terrain === "ocean") return;
 
     cell.temperature = cell.temperature * 0.999 + (cell.temperature + seasonalOffset * 0.02 + climateDrift * 0.005) * 0.001;
 
     if (cell.terrain !== "mountain") {
-      const regrowth = 0.005 * growthFactor * (1 - cell.vegetation) * (cell.water > 0.1 ? 1 : 0.2);
+      // v1.2.4 — vegetation now regrows toward an environment-derived
+      // potential (temperature + river/lake-aware water availability),
+      // not unconditionally toward 1 — see computeVegetationPotential and
+      // computeWaterAvailability. The regrowth *mechanism* itself (a
+      // rate proportional to the gap, scaled by growthFactor/water) is
+      // untouched from pre-v1.2.4, per the brief's "don't replace the
+      // regrowth model" constraint (§10).
+      const waterAvailability = computeWaterAvailability(cell.water, cell.riverFlow ?? 0, cell.isLake ?? false);
+      const potential = computeVegetationPotential(this.config.seed, x, y, cell.temperature, waterAvailability);
+      const regrowth = 0.005 * growthFactor * (potential - cell.vegetation) * (waterAvailability > 0.1 ? 1 : 0.2);
       cell.vegetation = Math.max(0, Math.min(1, cell.vegetation + regrowth));
-      cell.terrain = Planet.classifyBiome(cell.temperature, cell.water, cell.vegetation);
+      cell.terrain = Planet.classifyBiome(cell.temperature, waterAvailability, cell.vegetation);
     }
   }
 
@@ -346,11 +378,18 @@ export class Planet {
     cell.temperature = 32 - latitude * 40 - cell.elevation * 10 + seasonalOffset * 0.25;
 
     if (cell.terrain !== "mountain") {
+      // v1.2.4 — same closed-form catch-up as before, generalized to
+      // converge toward `potential` instead of a hardcoded 1: the exact
+      // solution of v_{n+1} = v_n + rate*(potential - v_n) is
+      // v_n = potential - (potential - v_0)*(1-rate)^n, which reduces to
+      // the old formula exactly when potential = 1.
+      const waterAvailability = computeWaterAvailability(cell.water, cell.riverFlow ?? 0, cell.isLake ?? false);
+      const potential = computeVegetationPotential(this.config.seed, x, y, cell.temperature, waterAvailability);
       const growthFactor = Planet.averageGrowthFactor(tick - elapsedTicks, tick);
-      const waterFactor = cell.water > 0.1 ? 1 : 0.2;
+      const waterFactor = waterAvailability > 0.1 ? 1 : 0.2;
       const rate = 0.005 * growthFactor * waterFactor;
-      cell.vegetation = Math.max(0, Math.min(1, 1 - (1 - cell.vegetation) * Math.pow(1 - rate, elapsedTicks)));
-      cell.terrain = Planet.classifyBiome(cell.temperature, cell.water, cell.vegetation);
+      cell.vegetation = Math.max(0, Math.min(1, potential - (potential - cell.vegetation) * Math.pow(1 - rate, elapsedTicks)));
+      cell.terrain = Planet.classifyBiome(cell.temperature, waterAvailability, cell.vegetation);
     }
   }
 
@@ -416,7 +455,7 @@ export class Planet {
           if (wx >= this.config.width || wy >= this.config.height) continue;
           const cell = chunk[ly * cs + lx];
           if (elapsed <= 1) {
-            this.stepCellOneTick(cell, tick, seasonalOffset, climateDrift, growthFactor);
+            this.stepCellOneTick(cell, wx, wy, tick, seasonalOffset, climateDrift, growthFactor);
           } else {
             this.catchUpCell(cell, wx, wy, elapsed, tick);
           }
