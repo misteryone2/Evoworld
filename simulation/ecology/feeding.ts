@@ -22,7 +22,16 @@ export const FEEDING_REGION_SIZE = 8;
  * also needs slack to recover from natural fluctuation — not an
  * arbitrary population-limiting knob).
  */
-const SUSTAINABLE_HARVEST_FRACTION = 0.2;
+/**
+ * v1.2.6 — lowered from 0.2 to 0.085, together with settlement now being
+ * off by default. Measured on 12 seeds (512x512, 300 founders, 4000
+ * ticks): every seed survived with 2-7 living species. With 0.2 and no
+ * settlement, populations kept doubling every ~500 ticks with no sign of
+ * slowing; at 0.1 and 0.07 they flattened out on their own (no hard cap).
+ * At 0.05 or less, poorly adapted founders starve even when alone,
+ * because this ceiling also bounds a lone organism's income.
+ */
+const SUSTAINABLE_HARVEST_FRACTION = 0.085;
 const SUSTAINABLE_YIELD_PER_CELL = 0.005 * 0.975 * ENERGY_PER_VEGETATION * SUSTAINABLE_HARVEST_FRACTION;
 
 /**
