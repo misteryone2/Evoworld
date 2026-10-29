@@ -60,7 +60,9 @@ export class World {
   private speciesRegistry: Map<number, SpeciesRecord>;
   private lastStats: SimulationStats;
   /**
-   * v1.2 — EXPERIMENTAL flag, defaults on. Exists so a controlled A/B
+   * v1.2.6 — now defaults OFF (see regionEcology.ts): the fixed colonization
+   * delay was suppressing populations, not regulating them.
+   * v1.2 — EXPERIMENTAL flag, formerly default on. Exists so a controlled A/B
    * comparison (with vs. without the dispersal cost — see
    * simulation/biology/organism.ts's dispersalCost) can be run from the
    * exact same World class rather than a forked copy. Not exposed through
@@ -86,8 +88,8 @@ export class World {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
     this.speciesRegistry = new Map();
-    this.enableDispersalCost = options?.enableDispersalCost ?? true;
-    this.regionEstablishment = (options?.enableSettlement ?? true) ? new RegionEstablishment() : null;
+    this.enableDispersalCost = options?.enableDispersalCost ?? false;
+    this.regionEstablishment = (options?.enableSettlement ?? false) ? new RegionEstablishment() : null;
     this.seedPopulation(initialPopulation);
     // v1.2 — the founding population represents organisms already settled
     // in the world, not colonizers: their home regions start fully
@@ -318,32 +320,11 @@ export class World {
     world.rng = new Random(snapshot.planet.config.seed);
     world.rng.setState(snapshot.randomState);
     world.speciesRegistry = new Map(snapshot.speciesRegistry.map((r) => [r.speciesId, r]));
-    // v1.2 — restored worlds resume with dispersal cost/settlement both
-    // on (the shipped default), since these flags are an internal tuning
-    // knob, not part of a saved WorldSnapshot. Regions around every
-    // restored organism's current position are seeded as established —
-    // otherwise a long-settled population would resume as if it had just
-    // colonized everywhere it already lives, paying the settlement
-    // penalty for no reason (same home-territory-seeding logic as the
-    // constructor, applied to current position since a restored
-    // organism's true settled history isn't itself part of the snapshot).
-    world.enableDispersalCost = true;
-    world.regionEstablishment = new RegionEstablishment();
-    const seedKeys: string[] = [];
-    const regionsX = Math.ceil(world.planet.width / FEEDING_REGION_SIZE);
-    const regionsY = Math.ceil(world.planet.height / FEEDING_REGION_SIZE);
-    for (const o of world.organisms) {
-      const rx = Math.floor(o.position.x / FEEDING_REGION_SIZE);
-      const ry = Math.floor(o.position.y / FEEDING_REGION_SIZE);
-      for (let dx = -DISPERSAL_HOME_RADIUS; dx <= DISPERSAL_HOME_RADIUS; dx++) {
-        for (let dy = -DISPERSAL_HOME_RADIUS; dy <= DISPERSAL_HOME_RADIUS; dy++) {
-          const wrappedX = (((rx + dx) % regionsX) + regionsX) % regionsX;
-          const wrappedY = (((ry + dy) % regionsY) + regionsY) % regionsY;
-          seedKeys.push(`${wrappedX},${wrappedY}`);
-        }
-      }
-    }
-    world.regionEstablishment.seedEstablished(seedKeys);
+    // v1.2.6 — restored worlds resume with the same defaults as a fresh
+    // World: dispersal cost and settlement are experimental tuning knobs,
+    // off by default (see the constructor), not part of a saved snapshot.
+    world.enableDispersalCost = false;
+    world.regionEstablishment = null;
     world.lastStats = world.computeStats(0, 0, 0);
     return world;
   }
