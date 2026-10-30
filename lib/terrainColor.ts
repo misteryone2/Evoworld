@@ -73,6 +73,46 @@ export function applyWaterOverlayRGB(
   return base;
 }
 
+/**
+ * v1.3.0 — Stagioni. Seasonal look of a cell, applied on top of its base
+ * terrain color in the same per-texel paint loop (no extra draw calls):
+ *  - snow covers any land cell whose current temperature drops below about
+ *    1 degree, more thickly the colder it gets;
+ *  - sea ice forms on ocean cells below about -1 degrees;
+ *  - vegetated land (plains, forest, savanna) turns toward autumn tones
+ *    during its own autumn, scaled by how much vegetation there is.
+ * `seasonPhase` is the cell's own position in the year (0..1, 0 = first day
+ * of spring) — the caller shifts it by half a year for the southern
+ * hemisphere, where seasons are mirrored.
+ */
+const SNOW_COLOR: [number, number, number] = [238, 243, 247];
+const SEA_ICE_COLOR: [number, number, number] = [190, 214, 226];
+const AUTUMN_COLOR: [number, number, number] = [196, 122, 48];
+
+function mixRGB(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
+  const k = Math.max(0, Math.min(1, t));
+  return [Math.round(a[0] * (1 - k) + b[0] * k), Math.round(a[1] * (1 - k) + b[1] * k), Math.round(a[2] * (1 - k) + b[2] * k)];
+}
+
+export function applySeasonalTintRGB(
+  base: [number, number, number],
+  terrainCode: number,
+  vegetation: number,
+  temperature: number,
+  seasonPhase: number,
+): [number, number, number] {
+  if (terrainCode === 0) {
+    return mixRGB(base, SEA_ICE_COLOR, ((-1 - temperature) / 6) * 0.8);
+  }
+  let color = base;
+  if (terrainCode === 1 || terrainCode === 4 || terrainCode === 6) {
+    const autumnCenter = 0.625; // middle of "autunno"
+    const autumnness = Math.max(0, 1 - Math.abs(seasonPhase - autumnCenter) / 0.17);
+    color = mixRGB(color, AUTUMN_COLOR, autumnness * Math.max(0, Math.min(1, vegetation)) * 0.5);
+  }
+  return mixRGB(color, SNOW_COLOR, ((1 - temperature) / 8) * 0.9);
+}
+
 /** Same mapping as terrainColorRGB, formatted as a CSS rgb() string for canvas 2D fillStyle use. */
 export function terrainColorCSS(terrainCode: number, vegetation: number): string {
   const [r, g, b] = terrainColorRGB(terrainCode, vegetation);
