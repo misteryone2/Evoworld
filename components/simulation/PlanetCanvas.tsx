@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import type { RenderFrame, ViewportFrame } from "../../types";
 import { speciesColor } from "../../lib/speciesColor";
 import { computeCreatureShape } from "../../lib/creatureShape";
-import { terrainColorCSS } from "../../lib/terrainColor";
+import { terrainColorRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
+import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { drawCreature } from "./drawCreature";
 
 // Terrain codes must match simulation/core/renderFrame.ts TERRAIN_CODE.
@@ -58,13 +59,18 @@ export function PlanetCanvas({ frame, viewportFrame = null }: Props) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (viewportFrame) {
-      const { texWidth, texHeight, cellsWidth, cellsHeight, vegetation, terrain } = viewportFrame;
+      const { texWidth, texHeight, cellsWidth, cellsHeight, vegetation, terrain, temperature, planetHeight, originY, tick } = viewportFrame;
+      const yearPhase = (tick % TICKS_PER_YEAR) / TICKS_PER_YEAR;
       const texToWorldX = cellsWidth / texWidth;
       const texToWorldY = cellsHeight / texHeight;
       for (let ty = 0; ty < texHeight; ty++) {
         for (let tx = 0; tx < texWidth; tx++) {
           const idx = ty * texWidth + tx;
-          ctx.fillStyle = terrainColorCSS(terrain[idx], vegetation[idx]);
+          // v1.3.0 — Stagioni: same seasonal tint as the 3D view.
+          const worldY = (((originY + ((ty + 0.5) / texHeight) * cellsHeight) % planetHeight) + planetHeight) % planetHeight;
+          const seasonPhase = worldY < planetHeight / 2 ? yearPhase : (yearPhase + 0.5) % 1;
+          const [r, g, b] = applySeasonalTintRGB(terrainColorRGB(terrain[idx], vegetation[idx]), terrain[idx], vegetation[idx], temperature[idx], seasonPhase);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
           ctx.fillRect(
             tx * texToWorldX * cellSize,
             ty * texToWorldY * cellSize,
