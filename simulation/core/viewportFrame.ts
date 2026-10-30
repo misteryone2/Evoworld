@@ -1,6 +1,7 @@
 import type { Cell, ViewportFrame, ViewportRequest } from "../../types";
 import { World } from "./world";
 import { TERRAIN_CODE } from "./renderFrame";
+import { annualMeanTemperature, seasonalTemperatureOffset } from "../planet/seasons";
 
 /**
  * v1.1 — World Scale. Builds a terrain/vegetation/elevation texture
@@ -52,6 +53,13 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
   // isLake's own doc comments in types/index.ts.
   const riverFlow = new Float32Array(texWidth * texHeight);
   const lake = new Uint8Array(texWidth * texHeight);
+  // v1.3.0 — Stagioni: the *current* (seasonal) temperature of each
+  // sampled cell, in the same loop and at the same bounded resolution as
+  // every other channel. Computed from the stateless seasonal model (annual
+  // mean + this tick's offset) rather than read from Cell.temperature, so
+  // dormant chunks, never-visited baseline cells and ocean cells (whose
+  // stored temperature is never stepped) all show the same, correct season.
+  const temperature = new Float32Array(texWidth * texHeight);
 
   for (let ty = 0; ty < texHeight; ty++) {
     const wy = Math.floor(originY + ((ty + 0.5) / texHeight) * cellsHeight);
@@ -64,6 +72,11 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
       elevation[i] = cell.elevation;
       riverFlow[i] = cell.riverFlow ?? 0;
       lake[i] = cell.isLake ? 1 : 0;
+      const wrappedX = ((wx % planet.width) + planet.width) % planet.width;
+      const wrappedY = ((wy % planet.height) + planet.height) % planet.height;
+      temperature[i] =
+        annualMeanTemperature(planet.config.seed, wrappedX, wrappedY, planet.height, cell.elevation) +
+        seasonalTemperatureOffset(wrappedY, planet.height, world.tick);
     }
   }
 
@@ -80,5 +93,7 @@ export function buildViewportFrame(world: World, request: ViewportRequest): View
     elevation,
     riverFlow,
     lake,
+    temperature,
+    planetHeight: planet.height,
   };
 }
