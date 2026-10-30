@@ -2,6 +2,7 @@
 
 import type { SimulationStats, TraitName } from "../../types";
 import { TRAIT_LABELS } from "../../lib/traitLabels";
+import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 
 interface Props {
   stats: SimulationStats | null;
@@ -24,6 +25,17 @@ export function StatsPanel({ stats }: Props) {
       <div className="season-badge">
         <span>{SEASON_ICONS[stats.season]}</span>
         <span>{capitalize(stats.season)}</span>
+      </div>
+      {/* v1.3.0 — Stagioni: how far through the current year the world is. */}
+      <div
+        className="season-progress"
+        role="progressbar"
+        aria-label="Avanzamento dell'anno"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(((stats.tick % TICKS_PER_YEAR) / TICKS_PER_YEAR) * 100)}
+      >
+        <div className="season-progress-fill" style={{ width: `${((stats.tick % TICKS_PER_YEAR) / TICKS_PER_YEAR) * 100}%` }} />
       </div>
 
       <div className="stats-grid">
