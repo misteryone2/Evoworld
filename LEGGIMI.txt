@@ -1,0 +1,23 @@
+EvoWorld v1.3.0 - STAGIONI
+Base: v1.2.6 (commit "Create settlementDefaults.test.ts")
+
+COME CARICARE SU GITHUB
+Le cartelle di questo pacchetto riproducono quelle del repository.
+Per ogni cartella: apri la stessa cartella su GitHub ->
+"Add file" -> "Upload files" -> scegli i file di quella cartella ->
+"Commit changes". I file con lo stesso nome vengono sostituiti.
+
+FILE (10)
+app/globals.css                           (sostituisce)
+components/simulation/Planet3DView.tsx    (sostituisce)
+components/simulation/PlanetCanvas.tsx    (sostituisce)
+components/ui/StatsPanel.tsx              (sostituisce)
+lib/terrainColor.ts                       (sostituisce)
+simulation/core/viewportFrame.ts          (sostituisce)
+simulation/planet/planet.ts               (sostituisce)
+simulation/planet/seasons.ts              (NUOVO)
+types/index.ts                            (sostituisce)
+tests/seasons.test.ts                     (NUOVO)
+
+ATTENZIONE: carica tutti i 10 file prima del deploy. Caricarne solo
+una parte fa fallire la build (tipi e funzioni sono collegati).
