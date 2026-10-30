@@ -1,6 +1,7 @@
 import type { Cell, PlanetChunkSnapshot, PlanetConfig, Season, TerrainType } from "../../types";
 import { TICKS_PER_YEAR, DEFAULT_CHUNK_SIZE } from "../core/constants";
 import { hashNoise, computeElevationAt, computeWaterAt, classifyBaseAt, computeVegetationPotential } from "./terrainNoise";
+import { annualMeanTemperature, seasonalTemperatureOffset } from "./seasons";
 import { hydrologyAt, computeChunkHydrology, computeWaterAvailability, type HydrologyResult } from "./hydrology";
 
 /** Wraps a coordinate into [0, max). */
@@ -181,8 +182,7 @@ export class Planet {
     const { width, height, seed } = this.config;
     const elevation = this.computeElevation(x, y);
     const water = this.computeWater(x, y, elevation);
-    const latitude = Math.abs(y / height - 0.5) * 2; // 0 at equator, 1 at poles
-    const temperature = 32 - latitude * 40 - elevation * 10 + hashNoise(seed, x, y) * 2;
+    const temperature = annualMeanTemperature(seed, x, y, height, elevation);
 
     const base = Planet.classifyBase(elevation, water);
 
@@ -330,10 +330,17 @@ export class Planet {
    * active chunk behaves exactly as before — this path only ever runs
    * with elapsed <= 1, see update()).
    */
-  private stepCellOneTick(cell: Cell, x: number, y: number, tick: number, seasonalOffset: number, climateDrift: number, growthFactor: number): void {
+  private stepCellOneTick(cell: Cell, x: number, y: number, tick: number, growthFactor: number): void {
     if (cell.terrain === "ocean") return;
 
-    cell.temperature = cell.temperature * 0.999 + (cell.temperature + seasonalOffset * 0.02 + climateDrift * 0.005) * 0.001;
+    // v1.3.0 — Stagioni: current temperature = annual mean + this tick's
+    // seasonal offset (latitude-scaled, hemisphere-aware — see seasons.ts).
+    // Biome classification keeps using the annual mean, so a cell does not
+    // flip between tundra and plains every winter; the season shows up in
+    // temperature (hence in organisms' fitness and in vegetation potential)
+    // and in vegetation, not in the biome label.
+    const meanTemperature = annualMeanTemperature(this.config.seed, x, y, this.config.height, cell.elevation);
+    cell.temperature = meanTemperature + seasonalTemperatureOffset(y, this.config.height, tick);
 
     if (cell.terrain !== "mountain") {
       // v1.2.4 — vegetation now regrows toward an environment-derived
@@ -347,7 +354,7 @@ export class Planet {
       const potential = computeVegetationPotential(this.config.seed, x, y, cell.temperature, waterAvailability);
       const regrowth = 0.005 * growthFactor * (potential - cell.vegetation) * (waterAvailability > 0.1 ? 1 : 0.2);
       cell.vegetation = Math.max(0, Math.min(1, cell.vegetation + regrowth));
-      cell.terrain = Planet.classifyBiome(cell.temperature, waterAvailability, cell.vegetation);
+      cell.terrain = Planet.classifyBiome(meanTemperature, waterAvailability, cell.vegetation);
     }
   }
 
@@ -373,9 +380,11 @@ export class Planet {
   private catchUpCell(cell: Cell, x: number, y: number, elapsedTicks: number, tick: number): void {
     if (cell.terrain === "ocean") return;
 
-    const latitude = Math.abs(y / this.config.height - 0.5) * 2;
-    const seasonalOffset = Math.sin((tick / TICKS_PER_YEAR) * Math.PI * 2) * 8;
-    cell.temperature = 32 - latitude * 40 - cell.elevation * 10 + seasonalOffset * 0.25;
+    // v1.3.0 — same stateless temperature as stepCellOneTick, so a chunk
+    // that reactivates after a dormant stretch is exactly as warm or cold
+    // as one that was simulated every tick.
+    const meanTemperature = annualMeanTemperature(this.config.seed, x, y, this.config.height, cell.elevation);
+    cell.temperature = meanTemperature + seasonalTemperatureOffset(y, this.config.height, tick);
 
     if (cell.terrain !== "mountain") {
       // v1.2.4 — same closed-form catch-up as before, generalized to
@@ -389,7 +398,7 @@ export class Planet {
       const waterFactor = waterAvailability > 0.1 ? 1 : 0.2;
       const rate = 0.005 * growthFactor * waterFactor;
       cell.vegetation = Math.max(0, Math.min(1, potential - (potential - cell.vegetation) * Math.pow(1 - rate, elapsedTicks)));
-      cell.terrain = Planet.classifyBiome(cell.temperature, waterAvailability, cell.vegetation);
+      cell.terrain = Planet.classifyBiome(meanTemperature, waterAvailability, cell.vegetation);
     }
   }
 
@@ -420,8 +429,6 @@ export class Planet {
    * replay of every skipped tick.
    */
   update(tick: number, activeChunkKeys: Iterable<string>): void {
-    const seasonalOffset = Math.sin((tick / TICKS_PER_YEAR) * Math.PI * 2) * 8;
-    const climateDrift = Math.sin(tick / (TICKS_PER_YEAR * 20)) * 2;
     const growthFactor = growthFactorForTick(tick);
     const cs = this.chunkSize;
 
@@ -455,7 +462,7 @@ export class Planet {
           if (wx >= this.config.width || wy >= this.config.height) continue;
           const cell = chunk[ly * cs + lx];
           if (elapsed <= 1) {
-            this.stepCellOneTick(cell, wx, wy, tick, seasonalOffset, climateDrift, growthFactor);
+            this.stepCellOneTick(cell, wx, wy, tick, growthFactor);
           } else {
             this.catchUpCell(cell, wx, wy, elapsed, tick);
           }
