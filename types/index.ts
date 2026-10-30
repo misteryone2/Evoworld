@@ -340,6 +340,15 @@ export interface ViewportFrame {
   riverFlow: Float32Array; // texWidth * texHeight
   /** v1.2.3 — 1 where the sampled cell is part of a lake, 0 otherwise; same bounded resolution as riverFlow. */
   lake: Uint8Array; // texWidth * texHeight
+  /**
+   * v1.3.0 — Stagioni. Current (seasonal) temperature in degrees at the
+   * same bounded texWidth*texHeight resolution as every other channel.
+   * Used client-side only to show snow, ice and autumn colors; never sent
+   * per tick on RenderFrame.
+   */
+  temperature: Float32Array; // texWidth * texHeight
+  /** v1.3.0 — the planet's height in cells, so a client can tell which hemisphere (and so which season) a texel belongs to. */
+  planetHeight: number;
 }
 
 /** Lightweight payload sent from the worker to the UI every rendered frame. */
