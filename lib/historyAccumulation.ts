@@ -21,7 +21,21 @@ export function sampleHistoryPoint(frame: RenderFrame): HistoryPoint {
     // the frame no longer carries a full per-cell vegetation array to
     // average client-side.
     avgVegetation: frame.avgVegetation,
+    // v1.4.0 — how well organisms fit where they live, averaged over every
+    // living species weighted by population (0 when no habitat data).
+    avgFitness: populationWeightedFitness(frame),
   };
+}
+
+function populationWeightedFitness(frame: RenderFrame): number {
+  let weighted = 0;
+  let total = 0;
+  for (const s of frame.speciesGenomeStats) {
+    if (!s.habitat) continue;
+    weighted += s.habitat.meanFitness * s.population;
+    total += s.population;
+  }
+  return total > 0 ? weighted / total : 0;
 }
 
 /**
