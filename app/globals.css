@@ -482,6 +482,59 @@ body {
   border: 1px solid var(--line);
   image-rendering: pixelated;
 }
+/* v1.4.0 — adattamento ai biomi */
+
+.species-habitat-section h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 1rem 0 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.species-habitat-empty {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
+.habitat-shares {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.habitat-share {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.habitat-share-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.habitat-share-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.habitat-share-value {
+  text-align: right;
+  color: var(--text-dim);
+  font-family: "EvoMono", ui-monospace, monospace;
+}
+
 /* v0.4.1 — analisi genetica */
 
 .species-genetics-section h4 {
