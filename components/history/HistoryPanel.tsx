@@ -28,6 +28,7 @@ export function HistoryPanel({ history }: Props) {
   const avgCarnivory = history.map((h) => h.avgCarnivory);
   const avgSize = history.map((h) => h.avgSize);
   const avgVegetation = history.map((h) => h.avgVegetation);
+  const avgFitness = history.map((h) => h.avgFitness ?? 0);
 
   const first = history[0];
   const last = history[history.length - 1];
@@ -45,6 +46,7 @@ export function HistoryPanel({ history }: Props) {
         <LineChart title="Carnivoria media" values={avgCarnivory} color="#ff8a65" />
         <LineChart title="Dimensione media" values={avgSize} color="var(--amber)" />
         <LineChart title="Vegetazione media (clima)" values={avgVegetation} color="#7ec4a8" />
+        <LineChart title="Adattamento medio al luogo" values={avgFitness} color="#9ad1ff" />
       </div>
     </div>
   );
