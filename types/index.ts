@@ -215,12 +215,33 @@ export interface SpeciesDistance {
  * (total drift since speciation), and genetic distance from every other
  * currently-alive species (for cross-species comparison).
  */
+/**
+ * v1.4.0 — Adattamento ai biomi. Where a living species actually lives and
+ * how well its genomes fit that place right now. Pure observability, like
+ * the rest of SpeciesGenomeStats: derived from the organisms and the cells
+ * they stand on, never fed back into selection.
+ */
+export interface SpeciesHabitat {
+  /** Terrain type hosting the largest share of the species' living individuals. */
+  dominantBiome: TerrainType;
+  /** Fraction (0..1) of the species' living individuals standing on each terrain type; the shares sum to 1. */
+  biomeShares: Partial<Record<TerrainType, number>>;
+  /**
+   * Mean environmental fitness (see simulation/biology/environment.ts) of
+   * the species' individuals in the cells they currently occupy. About 1 or
+   * more means well adapted to where they live; near 0 means a poor match.
+   */
+  meanFitness: number;
+}
+
 export interface SpeciesGenomeStats {
   speciesId: number;
   population: number;
   genomeStats: GenomeStats;
   distanceFromParentOrigin: number | null;
   distanceFromOtherSpecies: SpeciesDistance[];
+  /** v1.4.0 — present when the stats were computed with access to the planet. */
+  habitat?: SpeciesHabitat;
 }
 
 /** Aggregated statistics computed once per tick for the UI. */
@@ -428,6 +449,12 @@ export interface HistoryPoint {
   avgSize: number;
   /** Average vegetation across the whole grid — the closest thing to a single "climate" number available without new engine instrumentation. */
   avgVegetation: number;
+  /**
+   * v1.4.0 — population-weighted mean environmental fitness across all
+   * living species: how well, on average, organisms fit where they live.
+   * Absent on points recorded before v1.4.0.
+   */
+  avgFitness?: number;
 }
 
 /**
