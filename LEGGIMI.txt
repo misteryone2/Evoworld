@@ -1,5 +1,5 @@
-EvoWorld v1.4.0 - ADATTAMENTO AI BIOMI
-Base: v1.3.0 (commit "Add files via upload" del 30 ottobre)
+EvoWorld v1.5.0 - CREATURE 3D
+Base: v1.4.0 (commit "Add files via upload" del 1 novembre)
 
 COME CARICARE SU GITHUB
 Le cartelle di questo pacchetto riproducono quelle del repository.
@@ -7,17 +7,23 @@ Per ogni file: apri la stessa cartella su GitHub -> "Add file" ->
 "Upload files" -> scegli il file -> "Commit changes".
 I file con lo stesso nome vengono sostituiti.
 
-FILE (10)
-app/globals.css                           (sostituisce)
-components/history/HistoryPanel.tsx       (sostituisce)
-components/species/SpeciesDetail.tsx      (sostituisce)
-components/species/SpeciesHabitat.tsx     (NUOVO)
-lib/historyAccumulation.ts                (sostituisce)
-lib/terrainLabels.ts                      (NUOVO)
-simulation/core/world.ts                  (sostituisce)
-simulation/evolution/speciesAnalysis.ts   (sostituisce)
-types/index.ts                            (sostituisce)
-tests/speciesHabitat.test.ts              (NUOVO)
+FILE (16)
+app/globals.css                              (sostituisce)
+app/page.tsx                                 (sostituisce)
+components/simulation/Planet3DView.tsx       (sostituisce)
+components/species/SpeciesDetail.tsx         (sostituisce)
+components/species/SpeciesPanel.tsx          (sostituisce)
+components/species/SpeciesEvolutionStrip.tsx (NUOVO)
+components/species/SpeciesPortrait3D.tsx     (NUOVO)
+lib/creatureAnatomy.ts                       (NUOVO)
+lib/creatureHeading.ts                       (NUOVO)
+lib/creatureModel.ts                         (NUOVO)
+lib/speciesTraitHistory.ts                   (NUOVO)
+tests/creatureAnatomy.test.ts                (NUOVO)
+tests/creatureHeading.test.ts                (NUOVO)
+tests/creatureInstances.test.ts              (NUOVO)
+tests/creatureModel.test.ts                  (NUOVO)
+tests/speciesTraitHistory.test.ts            (NUOVO)
 
-ATTENZIONE: carica tutti i 10 file prima del deploy. Caricarne solo
-una parte fa fallire la build (tipi e componenti sono collegati).
+ATTENZIONE: carica tutti i 16 file prima del deploy. Caricarne solo
+una parte fa fallire la build (componenti, librerie e test sono collegati).
