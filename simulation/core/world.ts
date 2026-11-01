@@ -285,7 +285,7 @@ export class World {
 
   /** Per-species genetic analysis for every currently-alive species (v0.4.1). */
   getSpeciesGenomeStats(): SpeciesGenomeStats[] {
-    return computeSpeciesGenomeStats(this.organisms, this.speciesRegistry);
+    return computeSpeciesGenomeStats(this.organisms, this.speciesRegistry, this.planet);
   }
 
   /** Finds a single living organism by id (v1.0.4 — esplorazione individuale), or null if it's no longer alive/present. */
