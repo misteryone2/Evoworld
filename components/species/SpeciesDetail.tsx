@@ -6,7 +6,9 @@ import { speciesColor } from "../../lib/speciesColor";
 import type { VisualTraits } from "../../lib/creatureShape";
 import { SpeciesGenetics } from "./SpeciesGenetics";
 import { SpeciesHabitat } from "./SpeciesHabitat";
-import { SpeciesPortrait } from "./SpeciesPortrait";
+import { SpeciesPortrait3D } from "./SpeciesPortrait3D";
+import { SpeciesEvolutionStrip } from "./SpeciesEvolutionStrip";
+import type { SpeciesSnapshot } from "../../lib/speciesTraitHistory";
 
 interface Props {
   record: SpeciesRecord | null;
@@ -14,6 +16,8 @@ interface Props {
   directChildren: SpeciesRecord[];
   frame: RenderFrame | null;
   genomeStats: SpeciesGenomeStats | null;
+  /** v1.5.0 — moments of this species' life, oldest first, for the shape timeline (see lib/speciesTraitHistory.ts). */
+  timeline?: SpeciesSnapshot[];
 }
 
 /**
@@ -26,7 +30,7 @@ interface Props {
  * selected species, plus a minimap plotting just its individuals against
  * the full population as faint background dots.
  */
-export function SpeciesDetail({ record, parent, directChildren, frame, genomeStats }: Props) {
+export function SpeciesDetail({ record, parent, directChildren, frame, genomeStats, timeline = [] }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const geo = useMemo(() => computeGeography(record?.speciesId ?? null, frame), [record, frame]);
@@ -90,7 +94,7 @@ export function SpeciesDetail({ record, parent, directChildren, frame, genomeSta
   return (
     <div className="species-detail">
       <div className="species-detail-header">
-        {visualTraits && <SpeciesPortrait traits={visualTraits} color={speciesColor(record.speciesId)} size={56} />}
+        {visualTraits && <SpeciesPortrait3D traits={visualTraits} color={speciesColor(record.speciesId)} size={96} />}
         <h3>Specie #{record.speciesId}</h3>
         <span className={`species-status ${record.alive ? "alive" : "extinct"}`}>{record.alive ? "viva" : "estinta"}</span>
       </div>
@@ -119,6 +123,11 @@ export function SpeciesDetail({ record, parent, directChildren, frame, genomeSta
         ) : (
           <p className="species-geo-empty">Nessun individuo di questa specie attualmente sulla mappa.</p>
         )}
+      </div>
+
+      <div className="species-evolution-section">
+        <h4>Evoluzione della forma</h4>
+        <SpeciesEvolutionStrip samples={timeline} color={speciesColor(record.speciesId)} />
       </div>
 
       <div className="species-habitat-section">
