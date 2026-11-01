@@ -5,7 +5,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
-import { computeCreatureShape } from "../../lib/creatureShape";
+import { computeCreatureAnatomy, MAX_SPIKES } from "../../lib/creatureAnatomy";
+import { nextHeading, wrappedDelta, type Heading } from "../../lib/creatureHeading";
 import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
@@ -27,9 +28,14 @@ const MAX_CREATURE_INSTANCES = 6000;
  * simulation engine has no population cap and never will; this only
  * bounds what gets drawn.
  */
-const RENDER_TARGET_COUNT = 4000;
-/** Below this normalized evasion value, no spike ornament is drawn at all (matches the 2D drawCreature threshold). */
-const SPIKINESS_VISIBLE_THRESHOLD = 0.2;
+/**
+ * v1.5.0 — lowered from 4000 to 2500: each creature now has up to eight
+ * instanced parts (torso, head, two eyes, tail, jaw, up to three spikes)
+ * instead of two, so drawing a creature costs more. Measured on a desktop
+ * CPU at 4000 creatures the per-frame instance update takes about 9 ms; a
+ * phone is several times slower, so the drawn subset is kept smaller.
+ */
+const RENDER_TARGET_COUNT = 2500;
 /** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
@@ -111,7 +117,7 @@ interface HeightmapSample {
   texHeight: number;
 }
 
-interface SceneRefs {
+export interface SceneRefs {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -126,7 +132,16 @@ interface SceneRefs {
   /** v1.2.2 — latest viewport elevation/terrain sample, shared so creature positioning (updateCreatureInstances) can rest organisms on the same displaced surface without any per-tick RenderFrame payload growth. */
   heightmap: HeightmapSample | null;
   bodyMesh: THREE.InstancedMesh;
+  /** v1.5.0 — Creature 3D: the rest of a creature's body, one InstancedMesh per part (see updateCreatureInstances). */
+  headMesh: THREE.InstancedMesh;
+  /** Two slots per creature: instance 2n is the left eye, 2n+1 the right. */
+  eyeMesh: THREE.InstancedMesh;
+  tailMesh: THREE.InstancedMesh;
+  jawMesh: THREE.InstancedMesh;
+  /** Three slots per creature (up to three dorsal spikes): instances 3n..3n+2. */
   spikeMesh: THREE.InstancedMesh;
+  /** v1.5.0 — last rendered position and heading of each drawn creature, so each one can face the way it has been moving. Rebuilt every frame (creatures no longer drawn are dropped). */
+  creatureTrack: Map<number, { x: number; y: number; heading: Heading | null }>;
   selectionRing: THREE.Mesh;
   /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
   instanceOrganismId: Uint32Array;
@@ -136,12 +151,31 @@ interface SceneRefs {
 // allocating thousands of THREE.Vector3/Matrix4/Color objects every tick.
 const UP = new THREE.Vector3(0, 1, 0);
 const AGGRO_TINT = new THREE.Color(1, 0.35, 0.27);
+const SPIKE_TINT = new THREE.Color(1, 1, 1);
 const tmpPosition = new THREE.Vector3();
 const tmpNormal = new THREE.Vector3();
 const tmpQuaternion = new THREE.Quaternion();
 const tmpScale = new THREE.Vector3();
 const tmpMatrix = new THREE.Matrix4();
 const tmpColor = new THREE.Color();
+// v1.5.0 — Creature 3D scratch objects.
+const tmpColor2 = new THREE.Color();
+const tmpTangent = new THREE.Vector3();
+const tmpRight = new THREE.Vector3();
+const tmpBasis = new THREE.Matrix4();
+const tmpCreatureMatrix = new THREE.Matrix4();
+const tmpLocal = new THREE.Matrix4();
+const tmpPartMatrix = new THREE.Matrix4();
+const tmpLocalPos = new THREE.Vector3();
+const tmpLocalScale = new THREE.Vector3();
+const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+const Q_IDENTITY = new THREE.Quaternion();
+/** Rotates a cone (tip along +Y) so its tip points backward (-Z): the tail. */
+const Q_TIP_BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+/** Rotates a cone so its tip points forward (+Z): the jaw. */
+const Q_TIP_FORWARD = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+/** Radius of the unit cone geometry used for tail, jaw and spikes (see ConeGeometry below). */
+const CONE_BASE_RADIUS = 0.35;
 
 /**
  * Renders the planet as a rotatable 3D sphere with organisms drawn as
@@ -277,17 +311,47 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // overwritten with already-displaced data.
     const initialBasePositions = new Float32Array((planetGeometry.attributes.position as THREE.BufferAttribute).array as Float32Array);
 
-    const bodyGeometry = new THREE.SphereGeometry(1, 8, 6);
+    // v1.5.0 — Creature 3D: a creature is a torso, a head, two eyes, a
+    // tail, an optional jaw and up to three dorsal spikes, each a separate
+    // InstancedMesh (one draw call per part for the whole population). The
+    // proportions come from the genome (lib/creatureAnatomy.ts).
+    const bodyGeometry = new THREE.SphereGeometry(1, 10, 8);
     const bodyMaterial = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.1 });
     const bodyMesh = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, MAX_CREATURE_INSTANCES);
     bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
     bodyMesh.count = 0;
     scene.add(bodyMesh);
 
-    const spikeGeometry = new THREE.ConeGeometry(0.35, 1, 5);
+    const headGeometry = new THREE.SphereGeometry(1, 8, 6);
+    const headMaterial = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.1 });
+    const headMesh = new THREE.InstancedMesh(headGeometry, headMaterial, MAX_CREATURE_INSTANCES);
+    headMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
+    headMesh.count = 0;
+    scene.add(headMesh);
+
+    const eyeGeometry = new THREE.SphereGeometry(1, 6, 4);
+    const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.25, metalness: 0.2 });
+    const eyeMesh = new THREE.InstancedMesh(eyeGeometry, eyeMaterial, MAX_CREATURE_INSTANCES * 2);
+    eyeMesh.count = 0;
+    scene.add(eyeMesh);
+
+    const tailGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 6);
+    const tailMaterial = new THREE.MeshStandardMaterial({ roughness: 0.65 });
+    const tailMesh = new THREE.InstancedMesh(tailGeometry, tailMaterial, MAX_CREATURE_INSTANCES);
+    tailMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
+    tailMesh.count = 0;
+    scene.add(tailMesh);
+
+    const jawGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
+    const jawMaterial = new THREE.MeshStandardMaterial({ color: 0xc8553d, roughness: 0.5 });
+    const jawMesh = new THREE.InstancedMesh(jawGeometry, jawMaterial, MAX_CREATURE_INSTANCES);
+    jawMesh.count = 0;
+    scene.add(jawMesh);
+
+    const spikeGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
     const spikeMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5 });
-    const spikeMesh = new THREE.InstancedMesh(spikeGeometry, spikeMaterial, MAX_CREATURE_INSTANCES);
-    spikeMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
+    const spikeMesh = new THREE.InstancedMesh(spikeGeometry, spikeMaterial, MAX_CREATURE_INSTANCES * 3);
+    spikeMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3 * 3), 3);
     spikeMesh.count = 0;
     scene.add(spikeMesh);
 
@@ -359,7 +423,12 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       currentSegmentsWidth: initialTier.segmentsWidth,
       heightmap: null,
       bodyMesh,
+      headMesh,
+      eyeMesh,
+      tailMesh,
+      jawMesh,
       spikeMesh,
+      creatureTrack: new Map(),
       selectionRing,
       instanceOrganismId: new Uint32Array(MAX_CREATURE_INSTANCES),
     };
@@ -409,6 +478,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       sceneRef.current?.planetTexture.dispose();
       bodyGeometry.dispose();
       bodyMaterial.dispose();
+      headGeometry.dispose();
+      headMaterial.dispose();
+      eyeGeometry.dispose();
+      eyeMaterial.dispose();
+      tailGeometry.dispose();
+      tailMaterial.dispose();
+      jawGeometry.dispose();
+      jawMaterial.dispose();
       spikeGeometry.dispose();
       spikeMaterial.dispose();
       ringGeometry.dispose();
@@ -607,7 +684,35 @@ function restingRadius(refs: SceneRefs, worldX: number, worldY: number, restOffs
   return PLANET_RADIUS + elevationDisplacement(elevation, isOcean) + restOffset;
 }
 
-function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
+/** Writes `parent * local(position, rotation, scale)` into `mesh` instance `index`. */
+function setPart(
+  mesh: THREE.InstancedMesh,
+  index: number,
+  parent: THREE.Matrix4,
+  px: number,
+  py: number,
+  pz: number,
+  rotation: THREE.Quaternion,
+  sx: number,
+  sy: number,
+  sz: number,
+): void {
+  tmpLocalPos.set(px, py, pz);
+  tmpLocalScale.set(sx, sy, sz);
+  tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
+  tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
+  mesh.setMatrixAt(index, tmpPartMatrix);
+}
+
+/**
+ * v1.5.0 — Creature 3D. Each drawn creature is placed on the (displaced)
+ * surface, oriented with its feet on the ground and its nose toward the
+ * direction it has been moving, and built from the parts of its genome-
+ * derived anatomy (torso, head, eyes, tail, jaw, spikes). Everything
+ * about its shape is a pure function of its traits (lib/creatureAnatomy.ts),
+ * so an evolving species visibly changes body over generations.
+ */
+export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
   const {
     organismsX,
     organismsY,
@@ -625,16 +730,41 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
 
   const population = organismsX.length;
   const stride = computeRenderStride(population, RENDER_TARGET_COUNT);
+  const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null }>();
 
   let writeIndex = 0;
   for (let i = 0; i < population && writeIndex < MAX_CREATURE_INSTANCES; i += stride) {
-    const restingR = restingRadius(refs, organismsX[i], organismsY[i], 0.02);
-    const point = projectToSphere(organismsX[i], organismsY[i], planetWidth, planetHeight, restingR);
+    const id = organismsId[i];
+    const x = organismsX[i];
+    const y = organismsY[i];
+
+    const restingR = restingRadius(refs, x, y, 0.02);
+    const point = projectToSphere(x, y, planetWidth, planetHeight, restingR);
     tmpPosition.set(point.x, point.y, point.z);
     tmpNormal.set(point.normalX, point.normalY, point.normalZ);
-    tmpQuaternion.setFromUnitVectors(UP, tmpNormal);
 
-    const shape = computeCreatureShape({
+    // Heading: face the way this creature has moved since the last frame
+    // (keeps its previous heading while it stands still; first sight of a
+    // creature faces north until it moves).
+    const previous = refs.creatureTrack.get(id);
+    let heading: Heading | null = previous?.heading ?? null;
+    if (previous) {
+      heading = nextHeading(heading, wrappedDelta(previous.x, x, planetWidth), wrappedDelta(previous.y, y, planetHeight));
+    }
+    nextTrack.set(id, { x, y, heading });
+    const ahead = projectToSphere(x + (heading?.hx ?? 0) * 0.5, y + (heading?.hy ?? -1) * 0.5, planetWidth, planetHeight, restingR);
+    tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+    tmpTangent.addScaledVector(tmpNormal, -tmpTangent.dot(tmpNormal));
+    if (tmpTangent.lengthSq() < 1e-12) {
+      // Degenerate (e.g. exactly at a pole): any direction along the surface will do.
+      tmpTangent.crossVectors(tmpNormal, Math.abs(tmpNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+    }
+    tmpTangent.normalize();
+    tmpRight.crossVectors(tmpNormal, tmpTangent);
+    tmpBasis.makeBasis(tmpRight, tmpNormal, tmpTangent);
+    tmpQuaternion.setFromRotationMatrix(tmpBasis);
+
+    const anatomy = computeCreatureAnatomy({
       speed: organismsSpeed[i],
       carnivory: organismsCarnivory[i],
       vision: organismsVision[i],
@@ -643,40 +773,72 @@ function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
     });
 
     const baseScale = Math.max(0.05, organismsSize[i] * 0.12);
-    tmpScale.set(baseScale * (0.85 + shape.elongation * 0.5), baseScale * (0.85 - shape.elongation * 0.2), baseScale);
-    tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-    refs.bodyMesh.setMatrixAt(writeIndex, tmpMatrix);
+    tmpScale.set(baseScale, baseScale, baseScale);
+    tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
 
+    // The torso is sunk a fifth of its height into the ground, so a creature never looks like it floats on uneven terrain.
+    const lift = anatomy.bodyHalfHeight * 0.8;
+
+    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, 0, lift, 0, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
+    setPart(refs.headMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
+    setPart(refs.eyeMesh, writeIndex * 2, tmpCreatureMatrix, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+    setPart(refs.eyeMesh, writeIndex * 2 + 1, tmpCreatureMatrix, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+    setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, 0, lift, anatomy.tailZ, Q_TIP_BACK, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
+    if (anatomy.jawVisible) {
+      setPart(refs.jawMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
+    } else {
+      refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
+    }
+
+    // Species color, warmed toward red the more predatory the creature is.
     tmpColor.setHSL(speciesHue(organismsSpecies[i]) / 360, 0.85, 0.62);
-    if (shape.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
-      tmpColor.lerp(AGGRO_TINT, shape.aggression * 0.35);
+    if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
+      tmpColor.lerp(AGGRO_TINT, anatomy.aggression * 0.35);
     }
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
+    refs.headMesh.setColorAt(writeIndex, tmpColor);
+    tmpColor2.copy(tmpColor).multiplyScalar(0.82);
+    refs.tailMesh.setColorAt(writeIndex, tmpColor2);
+    tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.3);
 
-    if (shape.spikiness > SPIKINESS_VISIBLE_THRESHOLD) {
-      const spikeLength = baseScale * (1 + shape.spikiness * 2.5);
-      tmpPosition.addScaledVector(tmpNormal, baseScale * 0.6);
-      tmpScale.set(baseScale * 0.4, spikeLength, baseScale * 0.4);
-      tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-      refs.spikeMesh.setMatrixAt(writeIndex, tmpMatrix);
-      refs.spikeMesh.setColorAt(writeIndex, tmpColor);
-    } else {
-      tmpScale.set(0, 0, 0);
-      tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-      refs.spikeMesh.setMatrixAt(writeIndex, tmpMatrix);
+    for (let k = 0; k < MAX_SPIKES; k++) {
+      const slot = writeIndex * MAX_SPIKES + k;
+      const spike = anatomy.spikes[k];
+      if (spike) {
+        setPart(
+          refs.spikeMesh,
+          slot,
+          tmpCreatureMatrix,
+          0,
+          lift + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45,
+          spike.z,
+          Q_IDENTITY,
+          spike.radius / CONE_BASE_RADIUS,
+          spike.height,
+          spike.radius / CONE_BASE_RADIUS,
+        );
+        refs.spikeMesh.setColorAt(slot, tmpColor2);
+      } else {
+        refs.spikeMesh.setMatrixAt(slot, ZERO_MATRIX);
+      }
     }
 
-    refs.instanceOrganismId[writeIndex] = organismsId[i];
+    refs.instanceOrganismId[writeIndex] = id;
     writeIndex++;
   }
+  refs.creatureTrack = nextTrack;
 
   refs.bodyMesh.count = writeIndex;
-  refs.spikeMesh.count = writeIndex;
+  refs.headMesh.count = writeIndex;
+  refs.eyeMesh.count = writeIndex * 2;
+  refs.tailMesh.count = writeIndex;
+  refs.jawMesh.count = writeIndex;
+  refs.spikeMesh.count = writeIndex * MAX_SPIKES;
 
-  refs.bodyMesh.instanceMatrix.needsUpdate = true;
-  refs.bodyMesh.instanceColor!.needsUpdate = true;
-  refs.spikeMesh.instanceMatrix.needsUpdate = true;
-  refs.spikeMesh.instanceColor!.needsUpdate = true;
+  for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh]) {
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
 }
 
 /**
