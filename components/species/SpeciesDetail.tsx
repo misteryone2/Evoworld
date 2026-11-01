@@ -5,6 +5,7 @@ import type { RenderFrame, SpeciesGenomeStats, SpeciesRecord } from "../../types
 import { speciesColor } from "../../lib/speciesColor";
 import type { VisualTraits } from "../../lib/creatureShape";
 import { SpeciesGenetics } from "./SpeciesGenetics";
+import { SpeciesHabitat } from "./SpeciesHabitat";
 import { SpeciesPortrait } from "./SpeciesPortrait";
 
 interface Props {
@@ -118,6 +119,11 @@ export function SpeciesDetail({ record, parent, directChildren, frame, genomeSta
         ) : (
           <p className="species-geo-empty">Nessun individuo di questa specie attualmente sulla mappa.</p>
         )}
+      </div>
+
+      <div className="species-habitat-section">
+        <h4>Adattamento al bioma</h4>
+        <SpeciesHabitat genomeStats={genomeStats} />
       </div>
 
       <div className="species-genetics-section">
