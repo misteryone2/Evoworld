@@ -199,7 +199,7 @@ export default function Home() {
                 onReset={() => resetPlanet(activePlanet.id)}
               />
             )}
-            <SpeciesPanel frame={activePlanet?.frame ?? null} />
+            <SpeciesPanel key={activePlanet?.id ?? "none"} frame={activePlanet?.frame ?? null} />
           </div>
 
           {isMobileLayout ? (
