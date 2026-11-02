@@ -9,7 +9,7 @@ const CAP = 6000;
 function mesh(capacity: number): THREE.InstancedMesh {
   return new THREE.InstancedMesh(new THREE.SphereGeometry(1, 4, 3), new THREE.MeshBasicMaterial(), capacity);
 }
-function makeRefs(): SceneRefs {
+function makeRefs(detail: 1 | 2 | 3 = 3): SceneRefs {
   return {
     bodyMesh: mesh(CAP),
     headMesh: mesh(CAP),
@@ -20,6 +20,9 @@ function makeRefs(): SceneRefs {
     creatureTrack: new Map(),
     instanceOrganismId: new Uint32Array(CAP),
     heightmap: null,
+    capacity: CAP,
+    maxCreatures: 2500,
+    detail,
   } as unknown as SceneRefs;
 }
 const mid = (k: keyof typeof TRAIT_RANGES) => (TRAIT_RANGES[k].min + TRAIT_RANGES[k].max) / 2;
@@ -119,6 +122,50 @@ describe("v1.5.0 — 3D creature instances", () => {
     const spiky = makeRefs();
     updateCreatureInstances(spiky, frame(256, 256, { evasion: max("evasion") }));
     expect(Math.abs(det(spiky.spikeMesh, 0))).toBeGreaterThan(0);
+  });
+
+  it("v1.6.0 — a light profile (detail 1) draws only torso and head: no eyes, tail, jaw or spikes", () => {
+    const refs = makeRefs(1);
+    updateCreatureInstances(refs, frame(256, 256, { carnivory: max("carnivory"), evasion: max("evasion") }));
+    expect(refs.bodyMesh.count).toBe(1);
+    expect(refs.headMesh.count).toBe(1);
+    expect(refs.eyeMesh.count).toBe(0);
+    expect(refs.tailMesh.count).toBe(0);
+    expect(refs.jawMesh.count).toBe(0);
+    expect(refs.spikeMesh.count).toBe(0);
+  });
+
+  it("v1.6.0 — a balanced profile (detail 2) adds eyes, tail and jaw but not spikes", () => {
+    const refs = makeRefs(2);
+    updateCreatureInstances(refs, frame(256, 256, { carnivory: max("carnivory"), evasion: max("evasion") }));
+    expect(refs.eyeMesh.count).toBe(2);
+    expect(refs.tailMesh.count).toBe(1);
+    expect(refs.jawMesh.count).toBe(1);
+    expect(refs.spikeMesh.count).toBe(0);
+  });
+
+  it("v1.6.0 — never writes more instances than the buffer capacity, however many creatures there are", () => {
+    const refs = makeRefs(3);
+    refs.capacity = 5;
+    refs.maxCreatures = 5;
+    const n = 100;
+    const big = {
+      planetWidth: 512,
+      planetHeight: 512,
+      organismsX: Float32Array.from({ length: n }, (_, i) => i * 4),
+      organismsY: Float32Array.from({ length: n }, (_, i) => i * 3),
+      organismsSpecies: new Uint16Array(n).fill(1),
+      organismsSize: new Float32Array(n).fill(1),
+      organismsSpeed: new Float32Array(n).fill(mid("speed")),
+      organismsCarnivory: new Float32Array(n).fill(min("carnivory")),
+      organismsVision: new Float32Array(n).fill(mid("vision")),
+      organismsEvasion: new Float32Array(n).fill(min("evasion")),
+      organismsHuntingSkill: new Float32Array(n).fill(mid("huntingSkill")),
+      organismsId: Uint32Array.from({ length: n }, (_, i) => i + 1),
+    } as unknown as RenderFrame;
+    updateCreatureInstances(refs, big);
+    expect(refs.bodyMesh.count).toBeGreaterThan(0);
+    expect(refs.bodyMesh.count).toBeLessThanOrEqual(5);
   });
 
   it("forgets creatures that are no longer drawn", () => {
