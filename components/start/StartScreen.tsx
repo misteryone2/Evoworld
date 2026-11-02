@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { SavedSession, SavedSessionSummary } from "../../types";
 import { listSessions, loadSession as loadSessionFromDb, deleteSession } from "../../lib/persistence";
 
@@ -14,6 +14,10 @@ interface NewWorldOptions {
 interface Props {
   onNewWorld: (options?: NewWorldOptions) => void;
   onContinue: (session: SavedSession) => void;
+  /** v1.6.0 — the size (in cells per side) recommended for this device, preselected in the customize form. */
+  defaultWorldSize?: number;
+  /** v1.6.0 — Modalità leggera: the performance selector, shown on the first screen so a weak device can be set up before anything starts. */
+  qualitySelector?: ReactNode;
 }
 
 const SIZE_PRESETS = {
@@ -22,6 +26,7 @@ const SIZE_PRESETS = {
   // (see simulation/planet/planet.ts): even "Grande" costs roughly what
   // the old presets did, as long as the population stays clustered — see
   // the v1.1 benchmark notes in HANDOFF.md.
+  tiny: { label: "Minuscolo", width: 256, height: 256 },
   small: { label: "Piccolo", width: 512, height: 512 },
   medium: { label: "Medio", width: 1024, height: 1024 },
   large: { label: "Grande", width: 2048, height: 2048 },
@@ -48,10 +53,13 @@ type PopulationKey = keyof typeof POPULATION_PRESETS;
  * or genome traits, which would cross into "modificare artificialmente
  * l'evoluzione" territory the project explicitly avoids.
  */
-export function StartScreen({ onNewWorld, onContinue }: Props) {
+export function StartScreen({ onNewWorld, onContinue, defaultWorldSize, qualitySelector }: Props) {
   const [customizing, setCustomizing] = useState(false);
   const [seedInput, setSeedInput] = useState("");
-  const [sizeKey, setSizeKey] = useState<SizeKey>("medium");
+  const [sizeKey, setSizeKey] = useState<SizeKey>(() => {
+    const match = (Object.keys(SIZE_PRESETS) as SizeKey[]).find((k) => SIZE_PRESETS[k].width === defaultWorldSize);
+    return match ?? "medium";
+  });
   const [populationKey, setPopulationKey] = useState<PopulationKey>("normal");
 
   const [sessions, setSessions] = useState<SavedSessionSummary[]>([]);
@@ -112,6 +120,8 @@ export function StartScreen({ onNewWorld, onContinue }: Props) {
       <div className="start-screen-inner">
         <h1>EvoWorld</h1>
         <p className="tagline">Crea le regole. Avvia la simulazione. Osserva l&apos;evoluzione.</p>
+
+        {qualitySelector && <section className="start-section">{qualitySelector}</section>}
 
         <section className="start-section">
           <h2>Nuovo mondo</h2>
