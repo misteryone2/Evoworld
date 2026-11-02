@@ -421,7 +421,11 @@ export type WorkerCommand =
   | { type: "requestOrganismDetail"; organismId: number }
   // v1.1 — requested on demand by the 3D view (camera move / zoom-level
   // change / periodic refresh), never on a per-tick cadence.
-  | { type: "requestViewport"; request: ViewportRequest };
+  | { type: "requestViewport"; request: ViewportRequest }
+  // v1.6.0 — Modalità leggera: how much the worker reports back to the screen
+  // (see lib/qualityProfile.ts). Sent when a worker starts and whenever the
+  // quality level changes; never changes what the simulation computes.
+  | { type: "setPerformance"; frameIntervalMs: number; speciesStatsIntervalMs: number };
 
 export type WorkerEvent =
   | { type: "frame"; frame: RenderFrame }
