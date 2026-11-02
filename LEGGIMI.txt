@@ -1,5 +1,5 @@
-EvoWorld v1.5.0 - CREATURE 3D
-Base: v1.4.0 (commit "Add files via upload" del 1 novembre)
+EvoWorld v1.6.0 - MODALITA LEGGERA
+Base: v1.5.0 (commit "Add files via upload" del 1 novembre)
 
 COME CARICARE SU GITHUB
 Le cartelle di questo pacchetto riproducono quelle del repository.
@@ -7,23 +7,26 @@ Per ogni file: apri la stessa cartella su GitHub -> "Add file" ->
 "Upload files" -> scegli il file -> "Commit changes".
 I file con lo stesso nome vengono sostituiti.
 
-FILE (16)
+FILE (19)
 app/globals.css                              (sostituisce)
 app/page.tsx                                 (sostituisce)
 components/simulation/Planet3DView.tsx       (sostituisce)
+components/simulation/PlanetCanvas.tsx       (sostituisce)
 components/species/SpeciesDetail.tsx         (sostituisce)
 components/species/SpeciesPanel.tsx          (sostituisce)
-components/species/SpeciesEvolutionStrip.tsx (NUOVO)
-components/species/SpeciesPortrait3D.tsx     (NUOVO)
-lib/creatureAnatomy.ts                       (NUOVO)
-lib/creatureHeading.ts                       (NUOVO)
-lib/creatureModel.ts                         (NUOVO)
-lib/speciesTraitHistory.ts                   (NUOVO)
-tests/creatureAnatomy.test.ts                (NUOVO)
-tests/creatureHeading.test.ts                (NUOVO)
-tests/creatureInstances.test.ts              (NUOVO)
-tests/creatureModel.test.ts                  (NUOVO)
-tests/speciesTraitHistory.test.ts            (NUOVO)
+components/start/StartScreen.tsx             (sostituisce)
+components/ui/QualitySelector.tsx            (NUOVO)
+lib/useMultiverse.ts                         (sostituisce)
+lib/canvasPicking.ts                         (NUOVO)
+lib/qualityProfile.ts                        (NUOVO)
+lib/useQuality.ts                            (NUOVO)
+simulation/core/renderFrame.ts               (sostituisce)
+types/index.ts                               (sostituisce)
+workers/simulation.worker.ts                 (sostituisce)
+tests/canvasPicking.test.ts                  (NUOVO)
+tests/creatureInstances.test.ts              (sostituisce)
+tests/qualityProfile.test.ts                 (NUOVO)
+tests/renderFrameCache.test.ts               (NUOVO)
 
-ATTENZIONE: carica tutti i 16 file prima del deploy. Caricarne solo
-una parte fa fallire la build (componenti, librerie e test sono collegati).
+ATTENZIONE: carica tutti i 19 file prima del deploy. Caricarne solo
+una parte fa fallire la build (componenti, librerie e worker sono collegati).
