@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useMultiverse } from "../lib/useMultiverse";
+import { useQuality } from "../lib/useQuality";
 import { useViewport } from "../lib/useViewport";
 import { Planet3DView } from "../components/simulation/Planet3DView";
+import { PlanetCanvas } from "../components/simulation/PlanetCanvas";
+import { QualitySelector } from "../components/ui/QualitySelector";
 import { Controls } from "../components/ui/Controls";
 import { StatsPanel } from "../components/ui/StatsPanel";
 import { SpeciesPanel } from "../components/species/SpeciesPanel";
@@ -33,7 +36,17 @@ export default function Home() {
     loadSession,
     requestOrganismDetail,
     requestViewport,
+    setPerformance,
   } = useMultiverse();
+  // v1.6.0 — Modalità leggera: how much to draw and report, from the device
+  // (or the person's choice). In automatic mode it also eases off by itself
+  // if the 3D view turns out to be too slow.
+  const quality = useQuality();
+  const { workerFrameIntervalMs, speciesStatsIntervalMs } = quality.profile;
+  useEffect(() => {
+    setPerformance(workerFrameIntervalMs, speciesStatsIntervalMs);
+  }, [setPerformance, workerFrameIntervalMs, speciesStatsIntervalMs]);
+  const defaultWorldSize = quality.profile.defaultWorldSize;
   const [view, setView] = useState<ViewMode>("planet");
   const [selectedOrganismId, setSelectedOrganismId] = useState<number | null>(null);
   const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
@@ -92,9 +105,19 @@ export default function Home() {
     return (
       <StartScreen
         onNewWorld={(options) => {
-          spawnPlanet(options);
+          spawnPlanet({ width: defaultWorldSize, height: defaultWorldSize, ...options });
           setStarted(true);
         }}
+        defaultWorldSize={defaultWorldSize}
+        qualitySelector={
+          <QualitySelector
+            preference={quality.preference}
+            level={quality.level}
+            detectedLevel={quality.detectedLevel}
+            hasWebGL2={quality.hasWebGL2}
+            onChange={quality.setPreference}
+          />
+        }
         onContinue={(session: SavedSession) => {
           loadSession(session);
           setStarted(true);
@@ -108,6 +131,13 @@ export default function Home() {
       <header className="page-header">
         <h1>EvoWorld</h1>
         <p className="tagline">Crea le regole. Avvia la simulazione. Osserva l&apos;evoluzione.</p>
+        <QualitySelector
+          preference={quality.preference}
+          level={quality.level}
+          detectedLevel={quality.detectedLevel}
+          hasWebGL2={quality.hasWebGL2}
+          onChange={quality.setPreference}
+        />
       </header>
 
       <div className="view-toggle" role="tablist" aria-label="Modalità di visualizzazione">
@@ -153,7 +183,7 @@ export default function Home() {
         planets={planets}
         activeId={activeId}
         onSelect={setActiveId}
-        onAdd={() => spawnPlanet()}
+        onAdd={() => spawnPlanet({ width: defaultWorldSize, height: defaultWorldSize })}
         onRemove={removePlanet}
       />
 
@@ -184,13 +214,31 @@ export default function Home() {
                 </button>
               </div>
             )}
-            <Planet3DView
-              frame={activePlanet?.frame ?? null}
-              viewportFrame={activePlanet?.viewportFrame ?? null}
-              onRequestViewport={activePlanet ? (request) => requestViewport(activePlanet.id, request) : undefined}
-              selectedOrganismId={selectedOrganismId}
-              onSelectOrganism={setSelectedOrganismId}
-            />
+            {!quality.ready ? (
+              <p className="loading">Rilevamento del dispositivo…</p>
+            ) : quality.profile.renderer === "canvas2d" ? (
+              <PlanetCanvas
+                frame={activePlanet?.frame ?? null}
+                viewportFrame={activePlanet?.viewportFrame ?? null}
+                onRequestViewport={activePlanet ? (request) => requestViewport(activePlanet.id, request) : undefined}
+                terrainSize={Math.min(256, quality.profile.terrainMaxWidth)}
+                terrainRefreshMs={quality.profile.terrainRefreshMs}
+                maxCreatures={quality.profile.maxCreatures}
+                selectedOrganismId={selectedOrganismId}
+                onSelectOrganism={setSelectedOrganismId}
+              />
+            ) : (
+              <Planet3DView
+                key={quality.level}
+                frame={activePlanet?.frame ?? null}
+                viewportFrame={activePlanet?.viewportFrame ?? null}
+                onRequestViewport={activePlanet ? (request) => requestViewport(activePlanet.id, request) : undefined}
+                selectedOrganismId={selectedOrganismId}
+                onSelectOrganism={setSelectedOrganismId}
+                quality={quality.profile}
+                onSlow={quality.reportSlow}
+              />
+            )}
             {activePlanet && (
               <Controls
                 speed={activePlanet.speed}
@@ -199,7 +247,7 @@ export default function Home() {
                 onReset={() => resetPlanet(activePlanet.id)}
               />
             )}
-            <SpeciesPanel key={activePlanet?.id ?? "none"} frame={activePlanet?.frame ?? null} />
+            <SpeciesPanel key={activePlanet?.id ?? "none"} frame={activePlanet?.frame ?? null} portrait3D={quality.profile.portrait3D} />
           </div>
 
           {isMobileLayout ? (

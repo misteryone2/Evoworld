@@ -482,6 +482,38 @@ body {
   border: 1px solid var(--line);
   image-rendering: pixelated;
 }
+/* v1.6.0 — modalità leggera */
+
+.quality-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.75rem;
+  max-width: 28rem;
+}
+
+.quality-selector label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.quality-selector select {
+  background: var(--void-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.quality-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
 /* v1.5.0 — creature 3D */
 
 .species-portrait-3d {
