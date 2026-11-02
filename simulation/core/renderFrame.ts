@@ -1,4 +1,4 @@
-import type { Cell, RenderFrame } from "../../types";
+import type { Cell, RenderFrame, SpeciesGenomeStats, SpeciesRecord } from "../../types";
 import { World } from "./world";
 
 export const TERRAIN_CODE: Record<string, number> = {
@@ -67,7 +67,22 @@ function sampleAverageVegetation(world: World): number {
  * simulation/core/viewportFrame.ts — decoupled from the organism frame's
  * per-tick cadence entirely.
  */
-export function buildRenderFrame(world: World): RenderFrame {
+/**
+ * v1.6.0 — Modalità leggera. The per-species analysis (genetic statistics,
+ * habitat, genealogy tree) is the most expensive part of a frame and also
+ * the part that changes slowest, so the worker may compute it less often
+ * than it sends frames and reuse the last result in between.
+ */
+export interface SpeciesAnalysis {
+  speciesTree: SpeciesRecord[];
+  speciesGenomeStats: SpeciesGenomeStats[];
+}
+
+export function computeSpeciesAnalysis(world: World): SpeciesAnalysis {
+  return { speciesTree: world.getSpeciesTree(), speciesGenomeStats: world.getSpeciesGenomeStats() };
+}
+
+export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis): RenderFrame {
   const { planet, organisms } = world;
 
   const n = organisms.length;
@@ -96,6 +111,7 @@ export function buildRenderFrame(world: World): RenderFrame {
   }
 
   const stats = world.getStats();
+  const species = cachedSpecies ?? computeSpeciesAnalysis(world);
 
   return {
     tick: world.tick,
@@ -113,8 +129,8 @@ export function buildRenderFrame(world: World): RenderFrame {
     organismsEvasion,
     organismsHuntingSkill,
     organismsId,
-    speciesTree: world.getSpeciesTree(),
-    speciesGenomeStats: world.getSpeciesGenomeStats(),
+    speciesTree: species.speciesTree,
+    speciesGenomeStats: species.speciesGenomeStats,
     avgVegetation: sampleAverageVegetation(world),
   };
 }
