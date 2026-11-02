@@ -3,13 +3,23 @@
 import type { WorkerCommand, WorkerEvent } from "../types";
 import { World } from "../simulation/core/world";
 import { SimulationClock } from "../simulation/core/clock";
-import { buildRenderFrame } from "../simulation/core/renderFrame";
+import { buildRenderFrame, computeSpeciesAnalysis, type SpeciesAnalysis } from "../simulation/core/renderFrame";
 import { buildViewportFrame } from "../simulation/core/viewportFrame";
 
 const DEFAULT_INITIAL_POPULATION = 150;
 // Cap ticks processed per animation frame so a huge speed multiplier (x1000)
 // cannot freeze the worker thread trying to catch up in a single burst.
 const MAX_TICKS_PER_FRAME = 200;
+
+// v1.6.0 — Modalità leggera: how often frames are sent to the screen and how
+// often the (costly) per-species analysis is recomputed. These only change
+// what is reported, never what is simulated. Defaults match the old
+// behavior (a frame every ~33 ms, analysis fresh on every frame).
+let frameIntervalMs = 33;
+let speciesStatsIntervalMs = 0;
+let lastPostAt = 0;
+let lastPostedTick = -1;
+let speciesCache: { at: number; value: SpeciesAnalysis } | null = null;
 
 let world: World | null = null;
 const clock = new SimulationClock();
@@ -22,6 +32,24 @@ function post(event: WorkerEvent): void {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Errore sconosciuto nel motore di simulazione.";
+}
+
+/** Builds and sends one frame, reusing the species analysis if it is recent enough (or recomputing it when `fresh`). */
+function postFrame(now: number, fresh = false): void {
+  if (!world) return;
+  if (fresh || !speciesCache || now - speciesCache.at >= speciesStatsIntervalMs) {
+    speciesCache = { at: now, value: computeSpeciesAnalysis(world) };
+  }
+  lastPostAt = now;
+  lastPostedTick = world.tick;
+  post({ type: "frame", frame: buildRenderFrame(world, speciesCache.value) });
+}
+
+/** Forgets cached state when a different world replaces the current one. */
+function resetReporting(): void {
+  speciesCache = null;
+  lastPostAt = 0;
+  lastPostedTick = -1;
 }
 
 function stopLoop(): void {
@@ -66,8 +94,11 @@ function startLoop(): void {
     for (let i = 0; i < ticks; i++) {
       if (!safeStep()) return; // loop already stopped inside safeStep on error
     }
-    if (ticks > 0 || clock.getSpeed() === 0) {
-      post({ type: "frame", frame: buildRenderFrame(world) });
+    // Frames are sent at most every frameIntervalMs; while paused nothing
+    // changes, so nothing is sent at all (the last frame is still on screen).
+    const paused = clock.getSpeed() === 0;
+    if (ticks > 0 || (paused && world.tick !== lastPostedTick)) {
+      if (now - lastPostAt >= frameIntervalMs) postFrame(now);
     }
   }, 1000 / 30); // 30fps worker tick loop, independent of simulation speed
 }
@@ -79,19 +110,28 @@ self.onmessage = (event: MessageEvent<WorkerCommand>) => {
       case "init": {
         world = new World(command.config, command.initialPopulation ?? DEFAULT_INITIAL_POPULATION);
         clock.setSpeed(1);
+        resetReporting();
         startLoop();
-        post({ type: "frame", frame: buildRenderFrame(world) });
+        postFrame(Date.now(), true);
         break;
       }
       case "reset": {
         world = new World(command.config, command.initialPopulation ?? DEFAULT_INITIAL_POPULATION);
         clock.reset();
+        resetReporting();
         startLoop();
-        post({ type: "frame", frame: buildRenderFrame(world) });
+        postFrame(Date.now(), true);
         break;
       }
       case "setSpeed": {
         clock.setSpeed(command.speed);
+        // Pausing: make sure the screen shows the very latest state, since no more frames follow.
+        if (command.speed === 0 && world) postFrame(Date.now(), true);
+        break;
+      }
+      case "setPerformance": {
+        frameIntervalMs = Math.max(0, command.frameIntervalMs);
+        speciesStatsIntervalMs = Math.max(0, command.speciesStatsIntervalMs);
         break;
       }
       case "requestSnapshot": {
@@ -115,8 +155,9 @@ self.onmessage = (event: MessageEvent<WorkerCommand>) => {
         // World.fromSnapshot), rather than generating a fresh random one.
         world = World.fromSnapshot(command.snapshot);
         clock.setSpeed(1);
+        resetReporting();
         startLoop();
-        post({ type: "frame", frame: buildRenderFrame(world) });
+        postFrame(Date.now(), true);
         break;
       }
       case "requestViewport": {
