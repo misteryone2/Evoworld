@@ -11,31 +11,21 @@ import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
+import { QUALITY_PROFILES, shouldDowngrade, type QualityProfile } from "../../lib/qualityProfile";
 
 const PLANET_RADIUS = 5;
 /**
- * Buffer capacity for the instanced meshes — how many organisms could ever
- * get a rendered instance in one frame, worst case. Kept comfortably above
- * RENDER_TARGET_COUNT (below) since striding leaves a small remainder.
+ * v1.6.0 — Modalità leggera. How many creatures get an instance, how detailed
+ * each one is, the resolution of the screen buffer and of the terrain all come
+ * from the active QualityProfile (lib/qualityProfile.ts) instead of fixed
+ * constants. Above the profile's maxCreatures the renderer draws a
+ * deterministic stride-sampled subset (see lib/renderSampling.ts, v1.0.2):
+ * the simulation engine has no population cap and never will; this only
+ * bounds what gets drawn. Instance buffers are sized to that same number
+ * (plus a little slack for striding), so a light profile also uses far less
+ * memory than a full one.
  */
-const MAX_CREATURE_INSTANCES = 6000;
-/**
- * v1.0.2 — LOD adattivo. Above this many organisms, the renderer stops
- * trying to give every single one an instance and instead draws a
- * deterministic stride-sampled subset (see lib/renderSampling.ts), keeping
- * the per-frame CPU cost of writing instance matrices roughly constant
- * even as the simulation itself scales to far larger populations. The
- * simulation engine has no population cap and never will; this only
- * bounds what gets drawn.
- */
-/**
- * v1.5.0 — lowered from 4000 to 2500: each creature now has up to eight
- * instanced parts (torso, head, two eyes, tail, jaw, up to three spikes)
- * instead of two, so drawing a creature costs more. Measured on a desktop
- * CPU at 4000 creatures the per-frame instance update takes about 9 ms; a
- * phone is several times slower, so the drawn subset is kept smaller.
- */
-const RENDER_TARGET_COUNT = 2500;
+const CREATURE_BUFFER_SLACK = 16;
 /** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
@@ -61,17 +51,23 @@ const TERRAIN_LOD_TIERS: { minDistanceFactor: number; maxWidth: number; maxHeigh
   { minDistanceFactor: 2.2, maxWidth: 640, maxHeight: 320, segmentsWidth: 96, segmentsHeight: 64 },
   { minDistanceFactor: 0, maxWidth: 1024, maxHeight: 512, segmentsWidth: 160, segmentsHeight: 112 },
 ];
-/** How often (ms) the terrain texture is refreshed even without a zoom-level change, to reflect ongoing vegetation drift — not every tick, deliberately. */
-const TERRAIN_REFRESH_INTERVAL_MS = 4000;
 /** How often (ms) camera distance is polled to decide whether a new terrain LOD tier should be requested. */
 const TERRAIN_LOD_CHECK_INTERVAL_MS = 500;
 
-function pickTerrainLodTier(distance: number): { maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number } {
+type TerrainTier = { minDistanceFactor: number; maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number };
+
+/** v1.6.0 — the LOD tiers a profile may use: those whose texture is no wider than the profile allows (always at least the coarsest one). */
+function tiersForProfile(profile: QualityProfile): TerrainTier[] {
+  const allowed = TERRAIN_LOD_TIERS.filter((t) => t.maxWidth <= profile.terrainMaxWidth);
+  return allowed.length > 0 ? allowed : [TERRAIN_LOD_TIERS[0]];
+}
+
+function pickTerrainLodTier(distance: number, tiers: TerrainTier[]): TerrainTier {
   const factor = distance / PLANET_RADIUS;
-  for (const tier of TERRAIN_LOD_TIERS) {
+  for (const tier of tiers) {
     if (factor >= tier.minDistanceFactor) return tier;
   }
-  return TERRAIN_LOD_TIERS[TERRAIN_LOD_TIERS.length - 1];
+  return tiers[tiers.length - 1];
 }
 
 const TERRAIN_LABELS: Record<number, string> = {
@@ -104,6 +100,10 @@ interface Props {
   selectedOrganismId?: number | null;
   /** v1.0.4 — called with an organism id when the person taps/clicks a creature, or null when they tap empty space (deselecting). */
   onSelectOrganism?: (organismId: number | null) => void;
+  /** v1.6.0 — how much to draw and at what resolution (see lib/qualityProfile.ts). Changing the quality level remounts this view (page.tsx keys it on the level). */
+  quality?: QualityProfile;
+  /** v1.6.0 — called when the view measures that the device cannot keep up (the median frame stays slow for a while). */
+  onSlow?: () => void;
 }
 
 interface HeightmapSample {
@@ -131,6 +131,10 @@ export interface SceneRefs {
   currentSegmentsWidth: number;
   /** v1.2.2 — latest viewport elevation/terrain sample, shared so creature positioning (updateCreatureInstances) can rest organisms on the same displaced surface without any per-tick RenderFrame payload growth. */
   heightmap: HeightmapSample | null;
+  /** v1.6.0 — instance-buffer size, drawn-creature target and how many body parts to draw (1 torso+head, 2 +eyes/tail/jaw, 3 +spikes). */
+  capacity: number;
+  maxCreatures: number;
+  detail: 1 | 2 | 3;
   bodyMesh: THREE.InstancedMesh;
   /** v1.5.0 — Creature 3D: the rest of a creature's body, one InstancedMesh per part (see updateCreatureInstances). */
   headMesh: THREE.InstancedMesh;
@@ -197,7 +201,7 @@ const CONE_BASE_RADIUS = 0.35;
  * reserved for the still-2D SpeciesPortrait, where only one creature is
  * ever drawn at a time and per-organism instancing doesn't apply.
  *
- * v1.0.2 — LOD adattivo: once the population exceeds RENDER_TARGET_COUNT,
+ * v1.0.2 — LOD adattivo: once the population exceeds the profile's maxCreatures,
  * only a deterministic stride-sampled subset actually gets a rendered
  * instance each frame (see lib/renderSampling.ts), keeping this
  * component's per-frame CPU cost roughly constant regardless of how large
@@ -233,7 +237,7 @@ const CONE_BASE_RADIUS = 0.35;
  * sampled client-side from the on-demand viewport heightmap — never from
  * a per-tick simulation query, so RenderFrame's payload is unchanged.
  */
-export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism }: Props) {
+export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
   const lastTextureSize = useRef<{ width: number; height: number } | null>(null);
@@ -241,7 +245,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const selectedIdRef = useRef(selectedOrganismId);
   const frameRef = useRef(frame);
   const onRequestViewportRef = useRef(onRequestViewport);
+  const onSlowRef = useRef(onSlow);
 
+  useEffect(() => {
+    onSlowRef.current = onSlow;
+  }, [onSlow]);
   useEffect(() => {
     onSelectRef.current = onSelectOrganism;
   }, [onSelectOrganism]);
@@ -265,8 +273,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const width = container.clientWidth || 800;
     const height = container.clientHeight || 800;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // v1.6.0 — antialiasing and pixel density are the biggest GPU costs on
+    // old graphics cards and dense phone screens; both come from the profile.
+    const renderer = new THREE.WebGLRenderer({
+      antialias: quality.antialias,
+      powerPreference: quality.level === "alto" ? "high-performance" : "default",
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     renderer.setSize(width, height);
     renderer.setClearColor(0x05070a, 1);
     container.appendChild(renderer.domElement);
@@ -300,7 +313,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     planetTexture.flipY = false;
     planetTexture.needsUpdate = true;
 
-    const initialTier = TERRAIN_LOD_TIERS[TERRAIN_LOD_TIERS.length - 1];
+    const tiers = tiersForProfile(quality);
+    const initialTier = tiers[tiers.length - 1];
     const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, initialTier.segmentsWidth, initialTier.segmentsHeight);
     const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughness: 0.9, metalness: 0.05 });
     const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
@@ -315,45 +329,51 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // tail, an optional jaw and up to three dorsal spikes, each a separate
     // InstancedMesh (one draw call per part for the whole population). The
     // proportions come from the genome (lib/creatureAnatomy.ts).
-    const bodyGeometry = new THREE.SphereGeometry(1, 10, 8);
-    const bodyMaterial = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.1 });
-    const bodyMesh = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, MAX_CREATURE_INSTANCES);
-    bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
-    bodyMesh.count = 0;
-    scene.add(bodyMesh);
+    //
+    // v1.6.0 — Modalità leggera: the buffers hold only as many creatures as
+    // the profile will ever draw, and parts a profile never draws get a
+    // one-slot buffer instead of a full one. The lightest profile uses the
+    // cheaper Lambert shading.
+    const maxCreatures = quality.maxCreatures;
+    const capacity = maxCreatures + CREATURE_BUFFER_SLACK;
+    const detail = quality.creatureParts;
+    const [segW, segH] = quality.creatureSegments;
+    const useLambert = quality.level === "basso" || quality.level === "2d";
+    const makeMaterial = (opts: { color?: number; roughness?: number }) =>
+      useLambert
+        ? new THREE.MeshLambertMaterial(opts.color !== undefined ? { color: opts.color } : {})
+        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}) });
+    const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, instances: number, colored: boolean) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, instances));
+      if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, instances) * 3), 3);
+      mesh.count = 0;
+      scene.add(mesh);
+      return mesh;
+    };
 
-    const headGeometry = new THREE.SphereGeometry(1, 8, 6);
-    const headMaterial = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.1 });
-    const headMesh = new THREE.InstancedMesh(headGeometry, headMaterial, MAX_CREATURE_INSTANCES);
-    headMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
-    headMesh.count = 0;
-    scene.add(headMesh);
+    const bodyGeometry = new THREE.SphereGeometry(1, segW, segH);
+    const bodyMaterial = makeMaterial({ roughness: 0.6 });
+    const bodyMesh = makeMesh(bodyGeometry, bodyMaterial, capacity, true);
+
+    const headGeometry = new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2));
+    const headMaterial = makeMaterial({ roughness: 0.55 });
+    const headMesh = makeMesh(headGeometry, headMaterial, capacity, true);
 
     const eyeGeometry = new THREE.SphereGeometry(1, 6, 4);
-    const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.25, metalness: 0.2 });
-    const eyeMesh = new THREE.InstancedMesh(eyeGeometry, eyeMaterial, MAX_CREATURE_INSTANCES * 2);
-    eyeMesh.count = 0;
-    scene.add(eyeMesh);
+    const eyeMaterial = makeMaterial({ color: 0x0b0f14, roughness: 0.25 });
+    const eyeMesh = makeMesh(eyeGeometry, eyeMaterial, detail >= 2 ? capacity * 2 : 1, false);
 
     const tailGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 6);
-    const tailMaterial = new THREE.MeshStandardMaterial({ roughness: 0.65 });
-    const tailMesh = new THREE.InstancedMesh(tailGeometry, tailMaterial, MAX_CREATURE_INSTANCES);
-    tailMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3), 3);
-    tailMesh.count = 0;
-    scene.add(tailMesh);
+    const tailMaterial = makeMaterial({ roughness: 0.65 });
+    const tailMesh = makeMesh(tailGeometry, tailMaterial, detail >= 2 ? capacity : 1, true);
 
     const jawGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const jawMaterial = new THREE.MeshStandardMaterial({ color: 0xc8553d, roughness: 0.5 });
-    const jawMesh = new THREE.InstancedMesh(jawGeometry, jawMaterial, MAX_CREATURE_INSTANCES);
-    jawMesh.count = 0;
-    scene.add(jawMesh);
+    const jawMaterial = makeMaterial({ color: 0xc8553d, roughness: 0.5 });
+    const jawMesh = makeMesh(jawGeometry, jawMaterial, detail >= 2 ? capacity : 1, false);
 
     const spikeGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const spikeMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5 });
-    const spikeMesh = new THREE.InstancedMesh(spikeGeometry, spikeMaterial, MAX_CREATURE_INSTANCES * 3);
-    spikeMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CREATURE_INSTANCES * 3 * 3), 3);
-    spikeMesh.count = 0;
-    scene.add(spikeMesh);
+    const spikeMaterial = makeMaterial({ roughness: 0.5 });
+    const spikeMesh = makeMesh(spikeGeometry, spikeMaterial, detail >= 3 ? capacity * MAX_SPIKES : 1, true);
 
     // v1.0.4 — highlight ring for the selected organism, hidden by default.
     const ringGeometry = new THREE.TorusGeometry(1, 0.12, 8, 28);
@@ -362,10 +382,32 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     selectionRing.visible = false;
     scene.add(selectionRing);
 
+    // v1.6.0 — Modalità leggera: watch how long frames really take. If the
+    // median stays above ~40 ms (under 25 fps) after the first moments of
+    // warm-up, tell the page, which (in automatic mode) steps the quality
+    // down. Frames longer than a second are ignored: those are the tab being
+    // hidden, not the device being slow.
+    const WARMUP_FRAMES = 90;
+    const CHECK_EVERY_FRAMES = 90;
+    const frameTimes: number[] = [];
+    let framesSeen = 0;
+    let lastFrameAt = 0;
     let animationFrameId = 0;
-    const renderLoop = () => {
+    const renderLoop = (nowMs: number) => {
       controls.update();
       renderer.render(scene, camera);
+      if (lastFrameAt > 0) {
+        const dt = nowMs - lastFrameAt;
+        framesSeen++;
+        if (framesSeen > WARMUP_FRAMES && dt < 1000) {
+          frameTimes.push(dt);
+          if (frameTimes.length >= CHECK_EVERY_FRAMES) {
+            if (shouldDowngrade(frameTimes)) onSlowRef.current?.();
+            frameTimes.length = 0;
+          }
+        }
+      }
+      lastFrameAt = nowMs;
       animationFrameId = requestAnimationFrame(renderLoop);
     };
     animationFrameId = requestAnimationFrame(renderLoop);
@@ -376,17 +418,17 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // time has passed that a periodic refresh is worthwhile (vegetation
     // keeps changing near active populations). Deliberately NOT tied to
     // the render loop's per-frame cadence or to the simulation's per-tick
-    // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS/TERRAIN_REFRESH_INTERVAL_MS.
+    // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS and the profile's terrainRefreshMs.
     let lastTierKey = "";
     let lastRequestAt = 0;
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
       const distance = controls.getDistance();
-      const tier = pickTerrainLodTier(distance);
+      const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
       const now = Date.now();
-      const dueForRefresh = now - lastRequestAt >= TERRAIN_REFRESH_INTERVAL_MS;
+      const dueForRefresh = now - lastRequestAt >= quality.terrainRefreshMs;
       if (!force && tierKey === lastTierKey && !dueForRefresh) return;
       lastTierKey = tierKey;
       lastRequestAt = now;
@@ -422,6 +464,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       basePositions: initialBasePositions,
       currentSegmentsWidth: initialTier.segmentsWidth,
       heightmap: null,
+      capacity,
+      maxCreatures,
+      detail,
       bodyMesh,
       headMesh,
       eyeMesh,
@@ -430,7 +475,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       spikeMesh,
       creatureTrack: new Map(),
       selectionRing,
-      instanceOrganismId: new Uint32Array(MAX_CREATURE_INSTANCES),
+      instanceOrganismId: new Uint32Array(capacity),
     };
 
     // v1.0.4 — tap/click selection. A pointerdown/pointerup pair is only
@@ -729,11 +774,11 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): vo
   } = frame;
 
   const population = organismsX.length;
-  const stride = computeRenderStride(population, RENDER_TARGET_COUNT);
+  const stride = computeRenderStride(population, refs.maxCreatures);
   const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null }>();
 
   let writeIndex = 0;
-  for (let i = 0; i < population && writeIndex < MAX_CREATURE_INSTANCES; i += stride) {
+  for (let i = 0; i < population && writeIndex < refs.capacity; i += stride) {
     const id = organismsId[i];
     const x = organismsX[i];
     const y = organismsY[i];
@@ -781,13 +826,17 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): vo
 
     setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, 0, lift, 0, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
     setPart(refs.headMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
-    setPart(refs.eyeMesh, writeIndex * 2, tmpCreatureMatrix, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
-    setPart(refs.eyeMesh, writeIndex * 2 + 1, tmpCreatureMatrix, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
-    setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, 0, lift, anatomy.tailZ, Q_TIP_BACK, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
-    if (anatomy.jawVisible) {
-      setPart(refs.jawMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
-    } else {
-      refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
+    // v1.6.0 — lighter profiles skip the finer parts entirely: eyes, tail
+    // and jaw from detail 2, dorsal spikes only at detail 3.
+    if (refs.detail >= 2) {
+      setPart(refs.eyeMesh, writeIndex * 2, tmpCreatureMatrix, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+      setPart(refs.eyeMesh, writeIndex * 2 + 1, tmpCreatureMatrix, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+      setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, 0, lift, anatomy.tailZ, Q_TIP_BACK, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
+      if (anatomy.jawVisible) {
+        setPart(refs.jawMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
+      } else {
+        refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
+      }
     }
 
     // Species color, warmed toward red the more predatory the creature is.
@@ -797,11 +846,13 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): vo
     }
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
     refs.headMesh.setColorAt(writeIndex, tmpColor);
-    tmpColor2.copy(tmpColor).multiplyScalar(0.82);
-    refs.tailMesh.setColorAt(writeIndex, tmpColor2);
+    if (refs.detail >= 2) {
+      tmpColor2.copy(tmpColor).multiplyScalar(0.82);
+      refs.tailMesh.setColorAt(writeIndex, tmpColor2);
+    }
     tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.3);
 
-    for (let k = 0; k < MAX_SPIKES; k++) {
+    for (let k = 0; refs.detail >= 3 && k < MAX_SPIKES; k++) {
       const slot = writeIndex * MAX_SPIKES + k;
       const spike = anatomy.spikes[k];
       if (spike) {
@@ -830,10 +881,10 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): vo
 
   refs.bodyMesh.count = writeIndex;
   refs.headMesh.count = writeIndex;
-  refs.eyeMesh.count = writeIndex * 2;
-  refs.tailMesh.count = writeIndex;
-  refs.jawMesh.count = writeIndex;
-  refs.spikeMesh.count = writeIndex * MAX_SPIKES;
+  refs.eyeMesh.count = refs.detail >= 2 ? writeIndex * 2 : 0;
+  refs.tailMesh.count = refs.detail >= 2 ? writeIndex : 0;
+  refs.jawMesh.count = refs.detail >= 2 ? writeIndex : 0;
+  refs.spikeMesh.count = refs.detail >= 3 ? writeIndex * MAX_SPIKES : 0;
 
   for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh]) {
     mesh.instanceMatrix.needsUpdate = true;
