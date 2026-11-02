@@ -23,6 +23,7 @@ const DEFAULT_POPULATION = 150;
  * config isn't available for some reason.
  */
 export const WORLD_SIZE_PRESETS = {
+  tiny: { width: 256, height: 256 },
   small: { width: 512, height: 512 },
   medium: { width: 1024, height: 1024 },
   large: { width: 2048, height: 2048 },
@@ -91,6 +92,9 @@ export function useMultiverse() {
   const [planets, setPlanets] = useState<PlanetInstance[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const workersRef = useRef<Map<string, Worker>>(new Map());
+  // v1.6.0 — Modalità leggera: how much each worker reports back; sent to
+  // every worker as it starts and again whenever the quality level changes.
+  const performanceRef = useRef({ frameIntervalMs: 33, speciesStatsIntervalMs: 400 });
   const nextIndexRef = useRef(1);
   const pendingSnapshotsRef = useRef<Map<string, PendingSnapshot>>(new Map());
   const pendingOrganismDetailsRef = useRef<Map<string, PendingOrganismDetail>>(new Map());
@@ -105,6 +109,7 @@ export function useMultiverse() {
     worker.onmessage = (event: MessageEvent<WorkerEvent>) => {
       const msg = event.data;
       if (msg.type === "ready") {
+        worker.postMessage({ type: "setPerformance", ...performanceRef.current } satisfies WorkerCommand);
         onReady();
         setPlanets((prev) => prev.map((p) => (p.id === id ? { ...p, ready: true, error: null } : p)));
       } else if (msg.type === "frame") {
@@ -401,6 +406,14 @@ export function useMultiverse() {
     };
   }, []);
 
+  /** v1.6.0 — changes how much every planet's worker reports to the screen (does not change the simulation). */
+  const setPerformance = useCallback((frameIntervalMs: number, speciesStatsIntervalMs: number) => {
+    performanceRef.current = { frameIntervalMs, speciesStatsIntervalMs };
+    for (const worker of workersRef.current.values()) {
+      worker.postMessage({ type: "setPerformance", frameIntervalMs, speciesStatsIntervalMs } satisfies WorkerCommand);
+    }
+  }, []);
+
   return {
     planets,
     activeId,
@@ -415,5 +428,6 @@ export function useMultiverse() {
     loadSession,
     requestOrganismDetail,
     requestViewport,
+    setPerformance,
   };
 }
