@@ -7,6 +7,7 @@ import type { VisualTraits } from "../../lib/creatureShape";
 import { SpeciesGenetics } from "./SpeciesGenetics";
 import { SpeciesHabitat } from "./SpeciesHabitat";
 import { SpeciesPortrait3D } from "./SpeciesPortrait3D";
+import { SpeciesPortrait } from "./SpeciesPortrait";
 import { SpeciesEvolutionStrip } from "./SpeciesEvolutionStrip";
 import type { SpeciesSnapshot } from "../../lib/speciesTraitHistory";
 
@@ -18,6 +19,8 @@ interface Props {
   genomeStats: SpeciesGenomeStats | null;
   /** v1.5.0 — moments of this species' life, oldest first, for the shape timeline (see lib/speciesTraitHistory.ts). */
   timeline?: SpeciesSnapshot[];
+  /** v1.6.0 — false on light profiles: show the flat portrait instead of opening a second WebGL view. */
+  portrait3D?: boolean;
 }
 
 /**
@@ -30,7 +33,7 @@ interface Props {
  * selected species, plus a minimap plotting just its individuals against
  * the full population as faint background dots.
  */
-export function SpeciesDetail({ record, parent, directChildren, frame, genomeStats, timeline = [] }: Props) {
+export function SpeciesDetail({ record, parent, directChildren, frame, genomeStats, timeline = [], portrait3D = true }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const geo = useMemo(() => computeGeography(record?.speciesId ?? null, frame), [record, frame]);
@@ -94,7 +97,12 @@ export function SpeciesDetail({ record, parent, directChildren, frame, genomeSta
   return (
     <div className="species-detail">
       <div className="species-detail-header">
-        {visualTraits && <SpeciesPortrait3D traits={visualTraits} color={speciesColor(record.speciesId)} size={96} />}
+        {visualTraits &&
+          (portrait3D ? (
+            <SpeciesPortrait3D traits={visualTraits} color={speciesColor(record.speciesId)} size={96} />
+          ) : (
+            <SpeciesPortrait traits={visualTraits} color={speciesColor(record.speciesId)} size={72} />
+          ))}
         <h3>Specie #{record.speciesId}</h3>
         <span className={`species-status ${record.alive ? "alive" : "extinct"}`}>{record.alive ? "viva" : "estinta"}</span>
       </div>

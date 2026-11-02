@@ -8,10 +8,12 @@ import { buildTimeline, recordSpeciesSnapshots, type SpeciesSnapshot, type Speci
 
 interface Props {
   frame: RenderFrame | null;
+  /** v1.6.0 — whether the species portrait may use a second WebGL view; false on light profiles (a flat portrait is used instead). */
+  portrait3D?: boolean;
 }
 
 /** v0.4: albero evolutivo + osservazione. Combines the genealogy tree with a detail/geography panel for the selected species. */
-export function SpeciesPanel({ frame }: Props) {
+export function SpeciesPanel({ frame, portrait3D = true }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const speciesTree = frame?.speciesTree ?? [];
 
@@ -53,7 +55,7 @@ export function SpeciesPanel({ frame }: Props) {
       <h2>Albero evolutivo</h2>
       <div className="species-panel-body">
         <SpeciesTree speciesTree={speciesTree} selectedId={selectedId} onSelect={setSelectedId} />
-        <SpeciesDetail record={record} parent={parent} directChildren={directChildren} frame={frame} genomeStats={genomeStats} timeline={timeline} />
+        <SpeciesDetail record={record} parent={parent} directChildren={directChildren} frame={frame} genomeStats={genomeStats} timeline={timeline} portrait3D={portrait3D} />
       </div>
     </div>
   );
