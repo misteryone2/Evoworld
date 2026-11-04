@@ -11,6 +11,16 @@ import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
+import {
+  computeFollowPose,
+  clampCameraRadius,
+  cameraClearance,
+  dampingAlpha,
+  easeAngleToZero,
+  directionToGrid,
+  type Vec3,
+} from "../../lib/followCamera";
+import { nearestOrganismId } from "../../lib/followTarget";
 import { QUALITY_PROFILES, shouldDowngrade, type QualityProfile } from "../../lib/qualityProfile";
 
 const PLANET_RADIUS = 5;
@@ -26,6 +36,23 @@ const PLANET_RADIUS = 5;
  * memory than a full one.
  */
 const CREATURE_BUFFER_SLACK = 16;
+/** v1.7.0 — piano vicino della camera: da vicino al suolo serve molto più piccolo di quello della vista dall'alto. */
+const FOLLOW_NEAR_PLANE = 0.03;
+const ORBIT_NEAR_PLANE = 0.1;
+/** v1.7.0 — costante di tempo (ms) dello smorzamento della camera: abbastanza alta da assorbire i salti tra un frame e l'altro. */
+const FOLLOW_SMOOTHING_MS = 140;
+/** v1.7.0 — dopo quanto tempo senza tocchi la camera torna dietro l'animale, e con che costante di tempo. */
+const FOLLOW_RECENTER_DELAY_MS = 2500;
+const FOLLOW_RECENTER_TIME_MS = 600;
+/** v1.7.0 — se l'animale seguito sparisce (morto) per più di così, si passa al più vicino. */
+const FOLLOW_LOST_TARGET_MS = 1500;
+/** v1.7.0 — se la nuova posa dista più di così dalla camera attuale (altro animale lontano), la camera salta invece di attraversare il pianeta. */
+const FOLLOW_SNAP_DISTANCE = 2.5;
+/** v1.7.0 — radianti per pixel trascinato. */
+const FOLLOW_YAW_PER_PX = 0.006;
+const FOLLOW_PITCH_PER_PX = 0.004;
+const FOLLOW_PITCH_MIN = -0.3;
+const FOLLOW_PITCH_MAX = 1.0;
 /** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
@@ -90,6 +117,9 @@ const TERRAIN_SWATCHES: Record<number, string> = {
   6: "#a68a3c",
 };
 
+/** v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato. */
+export type CameraMode = "orbit" | "follow";
+
 interface Props {
   frame: RenderFrame | null;
   /** v1.1 — on-demand terrain/vegetation payload (see ViewportRequest/ViewportFrame), independent of frame's per-tick cadence. */
@@ -104,6 +134,8 @@ interface Props {
   quality?: QualityProfile;
   /** v1.6.0 — called when the view measures that the device cannot keep up (the median frame stays slow for a while). */
   onSlow?: () => void;
+  /** v1.7.0 — vista dall'alto (default) o terza persona sull'animale selezionato. */
+  cameraMode?: CameraMode;
 }
 
 interface HeightmapSample {
@@ -237,7 +269,7 @@ const CONE_BASE_RADIUS = 0.35;
  * sampled client-side from the on-demand viewport heightmap — never from
  * a per-tick simulation query, so RenderFrame's payload is unchanged.
  */
-export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow }: Props) {
+export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow, cameraMode = "orbit" }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
   const lastTextureSize = useRef<{ width: number; height: number } | null>(null);
@@ -246,7 +278,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const frameRef = useRef(frame);
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
+  const cameraModeRef = useRef<CameraMode>(cameraMode);
 
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+  }, [cameraMode]);
   useEffect(() => {
     onSlowRef.current = onSlow;
   }, [onSlow]);
@@ -393,8 +429,52 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     let framesSeen = 0;
     let lastFrameAt = 0;
     let animationFrameId = 0;
-    const renderLoop = (nowMs: number) => {
+
+    // v1.7.0 — Terza persona. In modalità "follow" la camera non è più
+    // governata da OrbitControls (che a ogni update() riporterebbe la camera
+    // sulla sua orbita): la posa viene calcolata da updateFollowCamera.
+    const follow = createFollowState();
+    let followActive = false;
+    const enterFollow = () => {
+      followActive = true;
+      controls.enabled = false;
+      controls.autoRotate = false;
+      camera.near = FOLLOW_NEAR_PLANE;
+      camera.updateProjectionMatrix();
+      resetFollowState(follow);
+      // da vicino serve il terreno alla massima risoluzione consentita dal profilo
+      maybeRequestViewport(true);
+    };
+    const leaveFollow = () => {
+      followActive = false;
+      // Riporta la camera sull'orbita, nella direzione da cui guardava, a distanza di vista dall'alto.
+      if (camera.position.lengthSq() < 1e-9) camera.position.set(0, 0, 1);
+      camera.position.setLength(PLANET_RADIUS * 3);
+      camera.up.set(0, 1, 0);
+      camera.near = ORBIT_NEAR_PLANE;
+      camera.updateProjectionMatrix();
+      controls.target.set(0, 0, 0);
+      controls.enabled = true;
       controls.update();
+    };
+
+    const renderLoop = (nowMs: number) => {
+      const wantFollow = cameraModeRef.current === "follow";
+      if (wantFollow && !followActive) enterFollow();
+      else if (!wantFollow && followActive) leaveFollow();
+
+      if (followActive) {
+        const refs = sceneRef.current;
+        const f = frameRef.current;
+        const id = selectedIdRef.current;
+        if (refs && f && id !== null) {
+          const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
+          const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
+          if (replacement !== null) onSelectRef.current?.(replacement);
+        }
+      } else {
+        controls.update();
+      }
       renderer.render(scene, camera);
       if (lastFrameAt > 0) {
         const dt = nowMs - lastFrameAt;
@@ -424,7 +504,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
-      const distance = controls.getDistance();
+      // In terza persona la camera è sempre vicina al suolo: serve il livello di dettaglio più alto consentito.
+      const distance = followActive ? 0 : controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
       const now = Date.now();
@@ -484,11 +565,31 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const raycaster = new THREE.Raycaster();
     const pointerNdc = new THREE.Vector2();
 
+    // v1.7.0 — trascinando in terza persona si gira intorno all'animale.
+    let lastMovePos: { x: number; y: number } | null = null;
+
     const handlePointerDown = (e: PointerEvent) => {
       pointerDownPos = { x: e.clientX, y: e.clientY };
+      lastMovePos = { x: e.clientX, y: e.clientY };
+      follow.dragging = true;
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!followActive || !lastMovePos) return;
+      const dx = e.clientX - lastMovePos.x;
+      const dy = e.clientY - lastMovePos.y;
+      lastMovePos = { x: e.clientX, y: e.clientY };
+      applyFollowDrag(follow, dx, dy, performance.now());
+    };
+
+    const handlePointerEnd = () => {
+      lastMovePos = null;
+      follow.dragging = false;
+      follow.lastInteractAt = performance.now();
     };
 
     const handlePointerUp = (e: PointerEvent) => {
+      handlePointerEnd();
       if (!pointerDownPos) return;
       const dx = e.clientX - pointerDownPos.x;
       const dy = e.clientY - pointerDownPos.y;
@@ -503,20 +604,25 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (hits.length > 0 && hits[0].instanceId !== undefined && sceneRef.current) {
         const organismId = sceneRef.current.instanceOrganismId[hits[0].instanceId];
         onSelectRef.current?.(organismId);
-      } else {
+      } else if (!followActive) {
+        // In terza persona un tocco sul vuoto non deseleziona: si smette di seguire dal pulsante.
         onSelectRef.current?.(null);
       }
     };
 
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("pointerup", handlePointerUp);
+    renderer.domElement.addEventListener("pointercancel", handlePointerEnd);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
       clearInterval(lodCheckHandle);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+      renderer.domElement.removeEventListener("pointercancel", handlePointerEnd);
       controls.dispose();
       sceneRef.current?.planetMesh.geometry.dispose();
       planetMaterial.dispose();
@@ -554,9 +660,12 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const refs = sceneRef.current;
     if (!refs || !frame) return;
 
-    updateCreatureInstances(refs, frame);
-    updateSelectionRing(refs, frame, selectedIdRef.current);
-  }, [frame]);
+    // v1.7.0 — in terza persona l'animale seguito va sempre disegnato (anche se il
+    // campionamento per densità lo escluderebbe) e non ha l'anello di selezione.
+    const following = cameraMode === "follow";
+    updateCreatureInstances(refs, frame, following ? selectedIdRef.current : null);
+    updateSelectionRing(refs, frame, following ? null : selectedIdRef.current);
+  }, [frame, cameraMode]);
 
   // v1.1 — repaints the terrain texture only when a new ViewportFrame
   // arrives (on LOD-tier change or periodic refresh — see the mount
@@ -695,7 +804,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         ref={containerRef}
         className="planet-canvas planet-canvas-3d"
         role="img"
-        aria-label="Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
+        aria-label={
+          cameraMode === "follow"
+            ? "Vista in terza persona su un animale — trascina per guardarti intorno, tocca un altro animale per seguirlo"
+            : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
+        }
       />
       <ul className="biome-legend" aria-label="Legenda dei biomi">
         {Object.entries(TERRAIN_LABELS).map(([code, label]) => (
@@ -721,7 +834,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
  * arrived yet (e.g. the very first frame), exactly matching pre-v1.2.2
  * behavior in that case.
  */
-function restingRadius(refs: SceneRefs, worldX: number, worldY: number, restOffset: number): number {
+function restingRadius(refs: Pick<SceneRefs, "heightmap">, worldX: number, worldY: number, restOffset: number): number {
   const hm = refs.heightmap;
   if (!hm) return PLANET_RADIUS + restOffset;
   const elevation = sampleViewportElevationNearest(worldX, worldY, hm.elevation, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
@@ -750,6 +863,192 @@ function setPart(
 }
 
 /**
+ * v1.7.0 — Terza persona. Stato della camera che segue un animale: cosa sta
+ * seguendo, dove l'ha visto l'ultima volta, la sua direzione di marcia e la
+ * posa (già smorzata) della camera.
+ */
+export interface FollowState {
+  id: number | null;
+  /** L'ultimo RenderFrame in cui è stato cercato l'animale (si cerca una volta per frame). */
+  frame: RenderFrame | null;
+  x: number;
+  y: number;
+  size: number;
+  hasPosition: boolean;
+  heading: Heading | null;
+  hasPose: boolean;
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  up: THREE.Vector3;
+  yaw: number;
+  pitch: number;
+  dragging: boolean;
+  lastInteractAt: number;
+  /** Da quando (ms) l'animale non c'è più nei frame, o null. */
+  missingSince: number | null;
+}
+
+export function createFollowState(): FollowState {
+  return {
+    id: null,
+    frame: null,
+    x: 0,
+    y: 0,
+    size: 1,
+    hasPosition: false,
+    heading: null,
+    hasPose: false,
+    position: new THREE.Vector3(),
+    target: new THREE.Vector3(),
+    up: new THREE.Vector3(0, 1, 0),
+    yaw: 0,
+    pitch: 0,
+    dragging: false,
+    lastInteractAt: 0,
+    missingSince: null,
+  };
+}
+
+/** Riporta lo stato come all'inizio (all'ingresso in terza persona). */
+export function resetFollowState(state: FollowState): void {
+  state.id = null;
+  state.frame = null;
+  state.hasPosition = false;
+  state.heading = null;
+  state.hasPose = false;
+  state.yaw = 0;
+  state.pitch = 0;
+  state.dragging = false;
+  state.missingSince = null;
+}
+
+/** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
+export function applyFollowDrag(state: FollowState, dx: number, dy: number, nowMs: number): void {
+  state.yaw += dx * FOLLOW_YAW_PER_PX;
+  state.yaw = Math.atan2(Math.sin(state.yaw), Math.cos(state.yaw));
+  state.pitch = Math.min(FOLLOW_PITCH_MAX, Math.max(FOLLOW_PITCH_MIN, state.pitch + dy * FOLLOW_PITCH_PER_PX));
+  state.lastInteractAt = nowMs;
+}
+
+const fcNormal = new THREE.Vector3();
+const fcTangent = new THREE.Vector3();
+const fcDesired = new THREE.Vector3();
+const fcDesiredTarget = new THREE.Vector3();
+
+/**
+ * Posiziona la camera dietro e sopra l'animale `selectedId`, guardando
+ * leggermente davanti a lui. Va chiamata a ogni frame di rendering mentre la
+ * modalità è "terza persona". Restituisce l'id di un altro animale se quello
+ * seguito è sparito (morto) da troppo tempo — il chiamante lo seleziona —,
+ * altrimenti null. Finché l'animale manca la camera resta dove l'ha visto.
+ */
+export function updateFollowCamera(
+  refs: Pick<SceneRefs, "camera" | "heightmap">,
+  frame: RenderFrame,
+  selectedId: number,
+  state: FollowState,
+  nowMs: number,
+  dtMs: number,
+): number | null {
+  const { planetWidth, planetHeight } = frame;
+
+  if (state.id !== selectedId) {
+    state.id = selectedId;
+    state.frame = null;
+    state.heading = null;
+    state.hasPosition = false;
+    state.missingSince = null;
+  }
+
+  // Si cerca l'animale una sola volta per frame della simulazione.
+  if (state.frame !== frame) {
+    state.frame = frame;
+    let index = -1;
+    for (let k = 0; k < frame.organismsId.length; k++) {
+      if (frame.organismsId[k] === selectedId) {
+        index = k;
+        break;
+      }
+    }
+    if (index >= 0) {
+      const x = frame.organismsX[index];
+      const y = frame.organismsY[index];
+      if (state.hasPosition) {
+        state.heading = nextHeading(state.heading, wrappedDelta(state.x, x, planetWidth), wrappedDelta(state.y, y, planetHeight));
+      }
+      state.x = x;
+      state.y = y;
+      state.size = frame.organismsSize[index];
+      state.hasPosition = true;
+      state.missingSince = null;
+    } else if (state.hasPosition && state.missingSince === null) {
+      state.missingSince = nowMs;
+    }
+  }
+
+  let replacement: number | null = null;
+  if (state.missingSince !== null && nowMs - state.missingSince > FOLLOW_LOST_TARGET_MS) {
+    replacement = nearestOrganismId(frame, state.x, state.y, selectedId);
+    state.missingSince = nowMs; // riprova solo dopo un altro intervallo, se non c'era nessuno
+  }
+
+  if (!state.hasPosition) return replacement;
+
+  // Dopo un po' senza tocchi la camera torna dietro l'animale.
+  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
+    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
+    state.yaw = easeAngleToZero(state.yaw, a);
+    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
+  }
+
+  const scale = Math.max(0.05, state.size * 0.12);
+  const restingR = restingRadius(refs, state.x, state.y, 0.02);
+  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
+  fcNormal.set(point.normalX, point.normalY, point.normalZ);
+  const ahead = projectToSphere(state.x + (state.heading?.hx ?? 0) * 0.5, state.y + (state.heading?.hy ?? -1) * 0.5, planetWidth, planetHeight, restingR);
+  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
+  if (fcTangent.lengthSq() < 1e-12) {
+    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+  }
+  fcTangent.normalize();
+
+  const pose = computeFollowPose({
+    point: [point.x, point.y, point.z],
+    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
+    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
+    scale,
+    yaw: state.yaw,
+    pitch: state.pitch,
+  });
+
+  // La camera non deve finire dentro una collina.
+  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
+  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(scale);
+  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
+
+  fcDesired.set(cam[0], cam[1], cam[2]);
+  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
+
+  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
+    state.position.copy(fcDesired);
+    state.target.copy(fcDesiredTarget);
+    state.up.copy(fcNormal);
+    state.hasPose = true;
+  } else {
+    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
+    state.position.lerp(fcDesired, a);
+    state.target.lerp(fcDesiredTarget, a);
+    state.up.lerp(fcNormal, a).normalize();
+  }
+
+  refs.camera.position.copy(state.position);
+  refs.camera.up.copy(state.up);
+  refs.camera.lookAt(state.target);
+  return replacement;
+}
+
+/**
  * v1.5.0 — Creature 3D. Each drawn creature is placed on the (displaced)
  * surface, oriented with its feet on the ground and its nose toward the
  * direction it has been moving, and built from the parts of its genome-
@@ -757,7 +1056,7 @@ function setPart(
  * about its shape is a pure function of its traits (lib/creatureAnatomy.ts),
  * so an evolving species visibly changes body over generations.
  */
-export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): void {
+export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, forceOrganismId: number | null = null): void {
   const {
     organismsX,
     organismsY,
@@ -777,8 +1076,26 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame): vo
   const stride = computeRenderStride(population, refs.maxCreatures);
   const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null }>();
 
+  // v1.7.0 — un animale "obbligato" (quello seguito in terza persona) viene
+  // disegnato anche se il campionamento a passo fisso non lo includerebbe.
+  let extraIndex = -1;
+  if (forceOrganismId !== null && stride > 1) {
+    for (let k = 0; k < population; k++) {
+      if (organismsId[k] === forceOrganismId) {
+        if (k % stride !== 0) extraIndex = k;
+        break;
+      }
+    }
+  }
+
   let writeIndex = 0;
-  for (let i = 0; i < population && writeIndex < refs.capacity; i += stride) {
+  for (let step = 0; writeIndex < refs.capacity; step++) {
+    let i = step * stride;
+    if (i >= population) {
+      if (extraIndex < 0) break;
+      i = extraIndex;
+      extraIndex = -1;
+    }
     const id = organismsId[i];
     const x = organismsX[i];
     const y = organismsY[i];
