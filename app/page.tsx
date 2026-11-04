@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { useMultiverse } from "../lib/useMultiverse";
 import { useQuality } from "../lib/useQuality";
 import { useViewport } from "../lib/useViewport";
-import { Planet3DView } from "../components/simulation/Planet3DView";
+import { Planet3DView, type CameraMode } from "../components/simulation/Planet3DView";
+import { CameraModeBar } from "../components/ui/CameraModeBar";
+import { nearestOrganismId, randomOrganismId, stepOrganismId } from "../lib/followTarget";
 import { PlanetCanvas } from "../components/simulation/PlanetCanvas";
 import { QualitySelector } from "../components/ui/QualitySelector";
 import { Controls } from "../components/ui/Controls";
@@ -49,6 +51,8 @@ export default function Home() {
   const defaultWorldSize = quality.profile.defaultWorldSize;
   const [view, setView] = useState<ViewMode>("planet");
   const [selectedOrganismId, setSelectedOrganismId] = useState<number | null>(null);
+  // v1.7.0 — vista dall'alto o terza persona sull'animale selezionato (solo con il rendering 3D).
+  const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
   const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
   const [organismLoading, setOrganismLoading] = useState(false);
   // v1.0.5 — the start screen is shown until the person explicitly chooses
@@ -95,11 +99,34 @@ export default function Home() {
 
   // v1.0.6 — selecting a creature on mobile should reveal the inspector
   // automatically, since it lives in a closed-by-default bottom sheet there.
+  // In terza persona il pannello non si apre da solo a ogni cambio di animale: coprirebbe la vista.
   useEffect(() => {
-    if (isMobileLayout && selectedOrganismId !== null) {
+    if (isMobileLayout && selectedOrganismId !== null && cameraMode === "orbit") {
       setSheetOpen(true);
     }
-  }, [isMobileLayout, selectedOrganismId]);
+  }, [isMobileLayout, selectedOrganismId, cameraMode]);
+
+  // v1.7.0 — la terza persona esiste solo con un animale selezionato e con il rendering 3D.
+  const canFollow = quality.profile.renderer !== "canvas2d";
+  useEffect(() => {
+    if (cameraMode === "follow" && (selectedOrganismId === null || !canFollow)) setCameraMode("orbit");
+  }, [cameraMode, selectedOrganismId, canFollow]);
+  useEffect(() => {
+    setCameraMode("orbit");
+  }, [activePlanet?.id]);
+
+  const changeCameraMode = (mode: CameraMode) => {
+    if (mode === "orbit") {
+      setCameraMode("orbit");
+      return;
+    }
+    // Entrando in terza persona senza un animale scelto, se ne sceglie uno a caso.
+    let id = selectedOrganismId;
+    if (id === null && activePlanet?.frame) id = randomOrganismId(activePlanet.frame);
+    if (id === null) return;
+    setSelectedOrganismId(id);
+    setCameraMode("follow");
+  };
 
   if (!started) {
     return (
@@ -237,6 +264,24 @@ export default function Home() {
                 onSelectOrganism={setSelectedOrganismId}
                 quality={quality.profile}
                 onSlow={quality.reportSlow}
+                cameraMode={cameraMode}
+              />
+            )}
+            {quality.ready && quality.profile.renderer !== "canvas2d" && activePlanet && (
+              <CameraModeBar
+                mode={cameraMode}
+                onChangeMode={changeCameraMode}
+                onStep={(step) => {
+                  const next = activePlanet.frame ? stepOrganismId(activePlanet.frame, selectedOrganismId, step) : null;
+                  if (next !== null) setSelectedOrganismId(next);
+                }}
+                onNearest={() => {
+                  const f = activePlanet.frame;
+                  if (!f) return;
+                  const i = selectedOrganismId === null ? -1 : Array.prototype.indexOf.call(f.organismsId, selectedOrganismId);
+                  const next = i >= 0 ? nearestOrganismId(f, f.organismsX[i], f.organismsY[i], selectedOrganismId) : randomOrganismId(f);
+                  if (next !== null) setSelectedOrganismId(next);
+                }}
               />
             )}
             {activePlanet && (

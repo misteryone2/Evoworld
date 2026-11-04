@@ -1535,3 +1535,21 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* v1.7.0 — Terza persona: barra del punto di vista */
+.camera-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.camera-bar-hint {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
