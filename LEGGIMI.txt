@@ -1,32 +1,21 @@
-EvoWorld v1.6.0 - MODALITA LEGGERA
-Base: v1.5.0 (commit "Add files via upload" del 1 novembre)
+EvoWorld v1.7.0 - Terza persona
 
-COME CARICARE SU GITHUB
-Le cartelle di questo pacchetto riproducono quelle del repository.
-Per ogni file: apri la stessa cartella su GitHub -> "Add file" ->
-"Upload files" -> scegli il file -> "Commit changes".
-I file con lo stesso nome vengono sostituiti.
+Caricare TUTTI i file prima del deploy (tipi, componenti e test sono collegati).
+Cartella del repository -> file
 
-FILE (19)
-app/globals.css                              (sostituisce)
-app/page.tsx                                 (sostituisce)
-components/simulation/Planet3DView.tsx       (sostituisce)
-components/simulation/PlanetCanvas.tsx       (sostituisce)
-components/species/SpeciesDetail.tsx         (sostituisce)
-components/species/SpeciesPanel.tsx          (sostituisce)
-components/start/StartScreen.tsx             (sostituisce)
-components/ui/QualitySelector.tsx            (NUOVO)
-lib/useMultiverse.ts                         (sostituisce)
-lib/canvasPicking.ts                         (NUOVO)
-lib/qualityProfile.ts                        (NUOVO)
-lib/useQuality.ts                            (NUOVO)
-simulation/core/renderFrame.ts               (sostituisce)
-types/index.ts                               (sostituisce)
-workers/simulation.worker.ts                 (sostituisce)
-tests/canvasPicking.test.ts                  (NUOVO)
-tests/creatureInstances.test.ts              (sostituisce)
-tests/qualityProfile.test.ts                 (NUOVO)
-tests/renderFrameCache.test.ts               (NUOVO)
+app/
+  page.tsx                              (sostituisce)
+  globals.css                           (sostituisce)
+components/simulation/
+  Planet3DView.tsx                      (sostituisce)
+components/ui/
+  CameraModeBar.tsx                     (NUOVO)
+lib/
+  followCamera.ts                       (NUOVO)
+  followTarget.ts                       (NUOVO)
+tests/
+  followCamera.test.ts                  (NUOVO)
+  followTarget.test.ts                  (NUOVO)
+  followView.test.ts                    (NUOVO)
 
-ATTENZIONE: carica tutti i 19 file prima del deploy. Caricarne solo
-una parte fa fallire la build (componenti, librerie e worker sono collegati).
+Non caricare package-lock.json. LEGGIMI.txt nella radice del repository si puo cancellare.
