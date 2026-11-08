@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useMultiverse } from "../lib/useMultiverse";
 import { useQuality } from "../lib/useQuality";
 import { useViewport } from "../lib/useViewport";
+import { useThrottledValue } from "../lib/useThrottledValue";
+import { ImmersiveHud } from "../components/ui/ImmersiveHud";
 import { Planet3DView, type CameraMode } from "../components/simulation/Planet3DView";
 import { CameraModeBar } from "../components/ui/CameraModeBar";
 import { nearestOrganismId, randomOrganismId, stepOrganismId } from "../lib/followTarget";
@@ -22,6 +24,15 @@ import { StartScreen } from "../components/start/StartScreen";
 import type { Organism, SavedSession } from "../types";
 
 type ViewMode = "planet" | "confronto" | "salvataggi" | "storico";
+
+// v1.9.0 — i pannelli si ridisegnano solo quando cambiano le loro proprietà (con i valori già rallentati sotto),
+// non a ogni frame del mondo: col tempo hanno più specie da mostrare e ogni ridisegno costa di più.
+const SpeciesPanelMemo = memo(SpeciesPanel);
+const StatsPanelMemo = memo(StatsPanel);
+const OrganismInspectorMemo = memo(OrganismInspector);
+/** Ogni quanto (ms) i pannelli ricevono un nuovo frame. */
+const PANEL_REFRESH_MS = 500;
+const INSPECTOR_REFRESH_MS = 250;
 
 export default function Home() {
   const {
@@ -67,6 +78,60 @@ export default function Home() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const activePlanet = planets.find((p) => p.id === activeId) ?? null;
+  const panelFrame = useThrottledValue(activePlanet?.frame ?? null, PANEL_REFRESH_MS);
+  const inspectorFrame = useThrottledValue(activePlanet?.frame ?? null, INSPECTOR_REFRESH_MS);
+
+  // v1.9.0 — schermo intero: il canvas riempie lo schermo, restano un'intestazione minima e, solo con un
+  // animale selezionato, un pannello a scomparsa con i suoi dati.
+  const [immersive, setImmersive] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState<boolean | null>(null);
+  const nativeFullscreen = useRef(false);
+  const enterImmersive = useCallback(() => {
+    setImmersive(true);
+    const root = document.documentElement;
+    if (root.requestFullscreen) {
+      root
+        .requestFullscreen()
+        .then(() => {
+          nativeFullscreen.current = true;
+        })
+        .catch(() => {
+          // iPhone e alcuni browser non lo permettono: resta lo schermo intero "della pagina".
+        });
+    }
+  }, []);
+  const exitImmersive = useCallback(() => {
+    setImmersive(false);
+    if (document.fullscreenElement) {
+      nativeFullscreen.current = false;
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+  useEffect(() => {
+    if (!immersive) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitImmersive();
+    };
+    const onFullscreenChange = () => {
+      // L'utente è uscito dallo schermo intero del browser (per esempio con Esc): si esce anche dalla modalità.
+      if (!document.fullscreenElement && nativeFullscreen.current) {
+        nativeFullscreen.current = false;
+        setImmersive(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, [immersive, exitImmersive]);
+  useEffect(() => {
+    if (selectedOrganismId === null) setDrawerOpen(null);
+  }, [selectedOrganismId]);
 
   // v1.0.4 — whenever the selection changes (or the active planet
   // changes), fetch full detail for the selected organism. Re-fetches on
@@ -92,10 +157,10 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-    // Re-runs on every new frame (activePlanet.frame reference changes each
-    // tick) so the inspector stays live while a creature is selected.
+    // Re-runs on every new (throttled) frame so the inspector stays live while a
+    // creature is selected, without a worker round-trip for every simulation frame (v1.9.0).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrganismId, activePlanet?.id, activePlanet?.frame]);
+  }, [selectedOrganismId, activePlanet?.id, inspectorFrame]);
 
   // v1.0.6 — selecting a creature on mobile should reveal the inspector
   // automatically, since it lives in a closed-by-default bottom sheet there.
@@ -230,7 +295,7 @@ export default function Home() {
 
       {view === "planet" && (
         <section className="workspace">
-          <div className="canvas-column">
+          <div className={`canvas-column${immersive ? " immersive" : ""}`}>
             {activePlanet?.error && (
               <div className="worker-error-banner">
                 <span>
@@ -271,6 +336,7 @@ export default function Home() {
               <CameraModeBar
                 mode={cameraMode}
                 onChangeMode={changeCameraMode}
+                onEnterImmersive={immersive ? undefined : enterImmersive}
                 onStep={(step) => {
                   const next = activePlanet.frame ? stepOrganismId(activePlanet.frame, selectedOrganismId, step) : null;
                   if (next !== null) setSelectedOrganismId(next);
@@ -284,7 +350,18 @@ export default function Home() {
                 }}
               />
             )}
-            {activePlanet && (
+            {immersive && activePlanet && (
+              <ImmersiveHud
+                stats={panelFrame?.stats ?? null}
+                paused={activePlanet.speed === 0}
+                onTogglePause={() => togglePause(activePlanet.id)}
+                onExit={exitImmersive}
+                canShowDetails={selectedOrganismId !== null}
+                detailsOpen={drawerOpen ?? !isMobileLayout}
+                onToggleDetails={() => setDrawerOpen(!(drawerOpen ?? !isMobileLayout))}
+              />
+            )}
+            {!immersive && activePlanet && (
               <Controls
                 speed={activePlanet.speed}
                 onSetSpeed={(s) => setSpeed(activePlanet.id, s)}
@@ -292,10 +369,21 @@ export default function Home() {
                 onReset={() => resetPlanet(activePlanet.id)}
               />
             )}
-            <SpeciesPanel key={activePlanet?.id ?? "none"} frame={activePlanet?.frame ?? null} portrait3D={quality.profile.portrait3D} />
+            {!immersive && <SpeciesPanelMemo key={activePlanet?.id ?? "none"} frame={panelFrame} portrait3D={quality.profile.portrait3D} />}
           </div>
 
-          {isMobileLayout ? (
+          {immersive ? (
+            selectedOrganismId !== null && (
+              <aside className={`immersive-drawer${(drawerOpen ?? !isMobileLayout) ? " open" : ""}`} aria-label="Dati dell'animale selezionato">
+                <OrganismInspectorMemo
+                  organismId={selectedOrganismId}
+                  organism={selectedOrganism}
+                  loading={organismLoading}
+                  onClose={() => setSelectedOrganismId(null)}
+                />
+              </aside>
+            )
+          ) : isMobileLayout ? (
             <>
               <button
                 type="button"
@@ -314,25 +402,25 @@ export default function Home() {
                 className={`sidebar mobile-sheet${sheetOpen ? " open" : ""}`}
               >
                 <div className="sheet-handle" aria-hidden="true" />
-                <OrganismInspector
+                <OrganismInspectorMemo
                   organismId={selectedOrganismId}
                   organism={selectedOrganism}
                   loading={organismLoading}
                   onClose={() => setSelectedOrganismId(null)}
                 />
-                <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
+                <StatsPanelMemo stats={panelFrame?.stats ?? null} />
                 {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
               </aside>
             </>
           ) : (
             <aside className="sidebar">
-              <OrganismInspector
+              <OrganismInspectorMemo
                 organismId={selectedOrganismId}
                 organism={selectedOrganism}
                 loading={organismLoading}
                 onClose={() => setSelectedOrganismId(null)}
               />
-              <StatsPanel stats={activePlanet?.frame?.stats ?? null} />
+              <StatsPanelMemo stats={panelFrame?.stats ?? null} />
               {!activePlanet?.ready && <p className="loading">Avvio del motore di simulazione…</p>}
             </aside>
           )}

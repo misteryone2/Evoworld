@@ -1553,3 +1553,151 @@ body {
   font-size: 0.75rem;
   color: var(--text-dim);
 }
+
+/* ---- v1.9.0 — Schermo intero ---------------------------------------------
+   Il canvas riempie lo schermo (anche su PC) con una barra minima in alto, i
+   comandi del punto di vista in basso e, solo con un animale selezionato, un
+   pannello a scomparsa con i suoi dati. */
+.canvas-column.immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: block;
+  gap: 0;
+  background: var(--void);
+}
+
+.canvas-column.immersive .canvas-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+.canvas-column.immersive .planet-canvas-3d {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.canvas-column.immersive .planet-canvas:not(.planet-canvas-3d) {
+  display: block;
+  height: 100%;
+  width: auto;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.canvas-column.immersive .biome-legend {
+  display: none;
+}
+
+.canvas-column.immersive .camera-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 1.5rem);
+  justify-content: center;
+  background: rgba(16, 21, 28, 0.82);
+  backdrop-filter: blur(6px);
+  z-index: 2;
+}
+
+.canvas-column.immersive .worker-error-banner {
+  position: absolute;
+  top: calc(3.5rem + env(safe-area-inset-top, 0px));
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+}
+
+.immersive-hud {
+  position: absolute;
+  top: calc(0.6rem + env(safe-area-inset-top, 0px));
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.immersive-hud-info,
+.immersive-hud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  background: rgba(16, 21, 28, 0.78);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  font-family: "EvoMono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  pointer-events: auto;
+}
+
+.immersive-hud-actions {
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.immersive-drawer {
+  position: fixed;
+  z-index: 110;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 90vw);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: rgba(11, 15, 20, 0.94);
+  border-left: 1px solid var(--line);
+  padding: calc(3.6rem + env(safe-area-inset-top, 0px)) 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  pointer-events: none;
+}
+
+.immersive-drawer.open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+@media (max-width: 640px) {
+  .immersive-drawer {
+    top: auto;
+    left: 0;
+    width: auto;
+    max-height: 60vh;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    padding-top: 1rem;
+    transform: translateY(100%);
+  }
+
+  .immersive-drawer.open {
+    transform: translateY(0);
+  }
+
+  .canvas-column.immersive .camera-bar-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .immersive-drawer {
+    transition: none;
+  }
+}
