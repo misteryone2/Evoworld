@@ -1,23 +1,35 @@
-EvoWorld v1.8.0 - Mondo 3D da vicino (terreno, flora, fauna)
+EvoWorld v1.9.0 - Schermo intero, proporzioni realistiche, terza persona più leggera
 
-Parte dalla v1.7.0 gia caricata: app/page.tsx, app/globals.css, CameraModeBar e i file
-follow* NON cambiano. Caricare TUTTI i file qui sotto prima del deploy.
+Pacchetto incrementale sulla v1.8.0. Carica TUTTI i file prima del deploy
+(da telefono: una cartella alla volta, "Add file" > "Upload files" nella stessa
+cartella > "Commit changes"; i file con lo stesso nome vengono sostituiti).
+
+app/
+  globals.css (sostituisce)
+  page.tsx (sostituisce)
 
 components/simulation/
-  Planet3DView.tsx                      (sostituisce)
-  localScene.ts                         (NUOVO)
-lib/
-  creatureAnatomy.ts                    (sostituisce)
-  qualityProfile.ts                     (sostituisce)
-  localGround.ts                        (NUOVO)
-  flora.ts                              (NUOVO)
-tests/
-  creatureInstances.test.ts             (sostituisce)
-  followView.test.ts                    (sostituisce)
-  localGround.test.ts                   (NUOVO)
-  flora.test.ts                         (NUOVO)
-  localScene.test.ts                    (NUOVO)
-  fauna180.test.ts                      (NUOVO)
-  helpers_vf.ts                         (NUOVO)
+  Planet3DView.tsx (sostituisce)
+  localScene.ts (sostituisce)
 
-Non caricare package-lock.json. LEGGIMI.txt nella radice del repository si puo cancellare.
+components/ui/
+  CameraModeBar.tsx (sostituisce)
+  ImmersiveHud.tsx (NUOVO)
+
+lib/
+  creatureHeading.ts (sostituisce)
+  flora.ts (sostituisce)
+  localGround.ts (sostituisce)
+  sphereProjection.ts (sostituisce)
+  followCull.ts (NUOVO)
+  useThrottledValue.ts (NUOVO)
+  worldScale.ts (NUOVO)
+
+tests/
+  flora.test.ts (sostituisce)
+  localScene.test.ts (sostituisce)
+  v190.test.ts (NUOVO)
+
+Verifiche in sandbox: type-check e build di produzione verdi; test 439 su 441
+(le 2 failure note sono in tests/reproduction.test.ts, già presenti nella v1.8.0).
+La grafica non è stata vista su uno schermo: va provata su telefono e su PC.
