@@ -21,6 +21,8 @@ import {
   type Vec3,
 } from "../../lib/followCamera";
 import { nearestOrganismId } from "../../lib/followTarget";
+import { createLocalScene, type LocalScene } from "./localScene";
+import { groundContains, groundRadius, isLocalViewport, localPatchRadiusCells } from "../../lib/localGround";
 import { QUALITY_PROFILES, shouldDowngrade, type QualityProfile } from "../../lib/qualityProfile";
 
 const PLANET_RADIUS = 5;
@@ -48,6 +50,19 @@ const FOLLOW_RECENTER_TIME_MS = 600;
 const FOLLOW_LOST_TARGET_MS = 1500;
 /** v1.7.0 — se la nuova posa dista più di così dalla camera attuale (altro animale lontano), la camera salta invece di attraversare il pianeta. */
 const FOLLOW_SNAP_DISTANCE = 2.5;
+/** v1.8.0 — colori del cielo (terza persona) e dello spazio (vista dall'alto), e foschia atmosferica. */
+const SKY_COLOR = 0x9cc3e6;
+const SPACE_COLOR = 0x05070a;
+const FOLLOW_FOG_NEAR = 1.2;
+const FOLLOW_FOG_FAR = 5.2;
+const SUN_ORBIT_POSITION: [number, number, number] = [6, 4, 8];
+/** v1.8.0 — terreno locale: mezza larghezza (unità del mondo 3D) dell'area richiesta, ritmo delle richieste. */
+const LOCAL_PATCH_HALF_UNITS = 3;
+const LOCAL_CHECK_INTERVAL_MS = 400;
+const LOCAL_MIN_INTERVAL_MS = 400;
+const LOCAL_REFRESH_MS = 2500;
+const LOCAL_RECENTER_FRACTION = 0.3;
+const LEGS_PER_CREATURE = 4;
 /** v1.7.0 — radianti per pixel trascinato. */
 const FOLLOW_YAW_PER_PX = 0.006;
 const FOLLOW_PITCH_PER_PX = 0.004;
@@ -176,8 +191,16 @@ export interface SceneRefs {
   jawMesh: THREE.InstancedMesh;
   /** Three slots per creature (up to three dorsal spikes): instances 3n..3n+2. */
   spikeMesh: THREE.InstancedMesh;
-  /** v1.5.0 — last rendered position and heading of each drawn creature, so each one can face the way it has been moving. Rebuilt every frame (creatures no longer drawn are dropped). */
-  creatureTrack: Map<number, { x: number; y: number; heading: Heading | null }>;
+  /** v1.8.0 — quattro zampe per creatura (istanze 4n..4n+3), dal dettaglio 2. */
+  legMesh: THREE.InstancedMesh;
+  /** v1.8.0 — due orecchie per creatura (istanze 2n, 2n+1), solo al dettaglio 3 e solo per gli erbivori. */
+  earMesh: THREE.InstancedMesh;
+  /** v1.8.0 — ombra morbida sotto ogni creatura, dal dettaglio 2. */
+  shadowMesh: THREE.InstancedMesh;
+  /** v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito (null se il profilo non li prevede). */
+  local: LocalScene | null;
+  /** v1.5.0 — last rendered position and heading of each drawn creature, so each one can face the way it has been moving. Rebuilt every frame (creatures no longer drawn are dropped). v1.8.0: `phase` è la fase del passo, che avanza con la strada percorsa. */
+  creatureTrack: Map<number, { x: number; y: number; heading: Heading | null; phase: number }>;
   selectionRing: THREE.Mesh;
   /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
   instanceOrganismId: Uint32Array;
@@ -186,6 +209,9 @@ export interface SceneRefs {
 // Reused scratch objects for the per-frame instance update loop, to avoid
 // allocating thousands of THREE.Vector3/Matrix4/Color objects every tick.
 const UP = new THREE.Vector3(0, 1, 0);
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+const tmpLegQuat = new THREE.Quaternion();
 const AGGRO_TINT = new THREE.Color(1, 0.35, 0.27);
 const SPIKE_TINT = new THREE.Color(1, 1, 1);
 const tmpPosition = new THREE.Vector3();
@@ -375,24 +401,25 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const detail = quality.creatureParts;
     const [segW, segH] = quality.creatureSegments;
     const useLambert = quality.level === "basso" || quality.level === "2d";
-    const makeMaterial = (opts: { color?: number; roughness?: number }) =>
+    const makeMaterial = (opts: { color?: number; roughness?: number; vertexColors?: boolean }) =>
       useLambert
-        ? new THREE.MeshLambertMaterial(opts.color !== undefined ? { color: opts.color } : {})
-        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}) });
+        ? new THREE.MeshLambertMaterial({ ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) })
+        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) });
     const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, instances: number, colored: boolean) => {
       const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, instances));
       if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, instances) * 3), 3);
       mesh.count = 0;
+      configureInstancedMesh(mesh);
       scene.add(mesh);
       return mesh;
     };
 
-    const bodyGeometry = new THREE.SphereGeometry(1, segW, segH);
-    const bodyMaterial = makeMaterial({ roughness: 0.6 });
+    const bodyGeometry = addBellyGradient(new THREE.SphereGeometry(1, segW, segH));
+    const bodyMaterial = makeMaterial({ roughness: 0.6, vertexColors: true });
     const bodyMesh = makeMesh(bodyGeometry, bodyMaterial, capacity, true);
 
-    const headGeometry = new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2));
-    const headMaterial = makeMaterial({ roughness: 0.55 });
+    const headGeometry = addBellyGradient(new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2)));
+    const headMaterial = makeMaterial({ roughness: 0.55, vertexColors: true });
     const headMesh = makeMesh(headGeometry, headMaterial, capacity, true);
 
     const eyeGeometry = new THREE.SphereGeometry(1, 6, 4);
@@ -410,6 +437,31 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const spikeGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
     const spikeMaterial = makeMaterial({ roughness: 0.5 });
     const spikeMesh = makeMesh(spikeGeometry, spikeMaterial, detail >= 3 ? capacity * MAX_SPIKES : 1, true);
+
+    // v1.8.0 — zampe (cilindri appesi all'anca), orecchie (coni) e ombra (disco piatto).
+    const legGeometry = new THREE.CylinderGeometry(0.8, 1, 1, 5);
+    legGeometry.translate(0, -0.5, 0); // l'estremo alto (l'anca) sta in y = 0
+    const legMaterial = makeMaterial({ roughness: 0.7 });
+    const legMesh = makeMesh(legGeometry, legMaterial, detail >= 2 ? capacity * LEGS_PER_CREATURE : 1, true);
+    const earGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
+    const earMaterial = makeMaterial({ roughness: 0.6 });
+    const earMesh = makeMesh(earGeometry, earMaterial, detail >= 3 ? capacity * 2 : 1, true);
+    const shadowGeometry = new THREE.CircleGeometry(1, 14);
+    shadowGeometry.rotateX(-Math.PI / 2); // il disco giace nel piano XZ, rivolto verso l'alto
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const shadowMesh = makeMesh(shadowGeometry, shadowMaterial, detail >= 2 ? capacity : 1, false);
+
+    // v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito.
+    const local = quality.localTerrainSegments > 0 ? createLocalScene(quality, PLANET_RADIUS) : null;
+    if (local) scene.add(local.group);
 
     // v1.0.4 — highlight ring for the selected organism, hidden by default.
     const ringGeometry = new THREE.TorusGeometry(1, 0.12, 8, 28);
@@ -442,8 +494,16 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       camera.near = FOLLOW_NEAR_PLANE;
       camera.updateProjectionMatrix();
       resetFollowState(follow);
-      // da vicino serve il terreno alla massima risoluzione consentita dal profilo
-      maybeRequestViewport(true);
+      // v1.8.0 — Da vicino il pianeta diventa un mondo: cielo e foschia atmosferica, terreno locale
+      // ad alto dettaglio con le sue piante, e la mesh globale spinta indietro in profondità.
+      renderer.setClearColor(SKY_COLOR, 1);
+      scene.fog = new THREE.Fog(SKY_COLOR, FOLLOW_FOG_NEAR, FOLLOW_FOG_FAR);
+      planetMaterial.polygonOffset = true;
+      planetMaterial.polygonOffsetFactor = 2;
+      planetMaterial.polygonOffsetUnits = 2;
+      local?.setVisible(true);
+      localCenter = null;
+      lastLocalAt = 0;
     };
     const leaveFollow = () => {
       followActive = false;
@@ -456,6 +516,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       controls.target.set(0, 0, 0);
       controls.enabled = true;
       controls.update();
+      renderer.setClearColor(SPACE_COLOR, 1);
+      scene.fog = null;
+      planetMaterial.polygonOffset = false;
+      sun.position.set(...SUN_ORBIT_POSITION);
+      local?.setVisible(false);
+      local?.clear();
+      // l'ultimo ViewportFrame era locale: si torna a chiedere quello del pianeta intero
+      maybeRequestViewport(true);
     };
 
     const renderLoop = (nowMs: number) => {
@@ -471,6 +539,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
           const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
           if (replacement !== null) onSelectRef.current?.(replacement);
+          // Il sole segue chi guarda: dall'altra parte del pianeta sarebbe notte e non si vedrebbe niente.
+          placeFollowSun(sun, camera.position, follow.target, follow.up);
         }
       } else {
         controls.update();
@@ -504,8 +574,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
-      // In terza persona la camera è sempre vicina al suolo: serve il livello di dettaglio più alto consentito.
-      const distance = followActive ? 0 : controls.getDistance();
+      // In terza persona il pianeta intero non serve: c'è il terreno locale (maybeRequestLocal).
+      if (followActive) return;
+      const distance = controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
       const now = Date.now();
@@ -523,6 +594,33 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       });
     };
     const lodCheckHandle = setInterval(() => maybeRequestViewport(false), TERRAIN_LOD_CHECK_INTERVAL_MS);
+
+    // v1.8.0 — Terreno locale. In terza persona si chiede, a ritmo moderato, una piccola area
+    // intorno all'animale (alla risoluzione delle celle). Si richiede di nuovo quando l'animale
+    // si è allontanato dal centro dell'area o dopo LOCAL_REFRESH_MS, per aggiornare la vegetazione.
+    let localCenter: { x: number; y: number } | null = null;
+    let lastLocalAt = 0;
+    const maybeRequestLocal = () => {
+      if (!followActive || !local || !follow.hasPosition) return;
+      const f = frameRef.current;
+      if (!f || !onRequestViewportRef.current) return;
+      const radius = localPatchRadiusCells(f.planetWidth, PLANET_RADIUS, LOCAL_PATCH_HALF_UNITS);
+      const now = Date.now();
+      if (now - lastLocalAt < LOCAL_MIN_INTERVAL_MS) return;
+      const moved = localCenter ? Math.hypot(wrappedDelta(localCenter.x, follow.x, f.planetWidth), wrappedDelta(localCenter.y, follow.y, f.planetHeight)) : Infinity;
+      if (localCenter && moved < radius * LOCAL_RECENTER_FRACTION && now - lastLocalAt < LOCAL_REFRESH_MS) return;
+      localCenter = { x: Math.round(follow.x), y: Math.round(follow.y) };
+      lastLocalAt = now;
+      onRequestViewportRef.current({
+        centerX: localCenter.x,
+        centerY: localCenter.y,
+        radiusX: radius,
+        radiusY: radius,
+        maxWidth: radius * 2,
+        maxHeight: radius * 2,
+      });
+    };
+    const localCheckHandle = setInterval(maybeRequestLocal, LOCAL_CHECK_INTERVAL_MS);
 
     const resizeObserver = new ResizeObserver(() => {
       const w = container.clientWidth;
@@ -554,6 +652,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       tailMesh,
       jawMesh,
       spikeMesh,
+      legMesh,
+      earMesh,
+      shadowMesh,
+      local,
       creatureTrack: new Map(),
       selectionRing,
       instanceOrganismId: new Uint32Array(capacity),
@@ -618,6 +720,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     return () => {
       cancelAnimationFrame(animationFrameId);
       clearInterval(lodCheckHandle);
+      clearInterval(localCheckHandle);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
@@ -639,6 +742,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       jawMaterial.dispose();
       spikeGeometry.dispose();
       spikeMaterial.dispose();
+      legGeometry.dispose();
+      legMaterial.dispose();
+      earGeometry.dispose();
+      earMaterial.dispose();
+      shadowGeometry.dispose();
+      shadowMaterial.dispose();
+      local?.dispose();
       ringGeometry.dispose();
       ringMaterial.dispose();
       renderer.dispose();
@@ -688,6 +798,20 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   useEffect(() => {
     const refs = sceneRef.current;
     if (!refs || !viewportFrame) return;
+
+    // v1.8.0 — Un ViewportFrame di una piccola area non è la texture del pianeta: alimenta
+    // il terreno locale e la flora, e lascia stare la mesh globale e l'altezza di riferimento.
+    const currentFrame = frameRef.current;
+    if (currentFrame && isLocalViewport(viewportFrame, currentFrame.planetWidth)) {
+      refs.local?.update(
+        viewportFrame,
+        currentFrame.planetWidth,
+        currentFrame.planetHeight,
+        viewportFrame.originX + viewportFrame.cellsWidth / 2,
+        viewportFrame.originY + viewportFrame.cellsHeight / 2,
+      );
+      return;
+    }
 
     const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, temperature, planetHeight, tick, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
 
@@ -834,7 +958,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
  * arrived yet (e.g. the very first frame), exactly matching pre-v1.2.2
  * behavior in that case.
  */
-function restingRadius(refs: Pick<SceneRefs, "heightmap">, worldX: number, worldY: number, restOffset: number): number {
+function restingRadius(refs: Pick<SceneRefs, "heightmap"> & Partial<Pick<SceneRefs, "local">>, worldX: number, worldY: number, restOffset: number): number {
+  // v1.8.0 — dentro il terreno locale si poggia sulla stessa superficie che è disegnata (stessa funzione dei vertici).
+  const ground = refs.local?.ground;
+  if (ground && groundContains(ground, worldX, worldY, 1)) return groundRadius(ground, worldX, worldY, PLANET_RADIUS) + restOffset;
   const hm = refs.heightmap;
   if (!hm) return PLANET_RADIUS + restOffset;
   const elevation = sampleViewportElevationNearest(worldX, worldY, hm.elevation, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
@@ -860,6 +987,46 @@ function setPart(
   tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
   tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
   mesh.setMatrixAt(index, tmpPartMatrix);
+}
+
+/**
+ * v1.8.0 — Ogni InstancedMesh va esclusa dal frustum culling. Three.js ne calcola
+ * la sfera di ingombro una volta sola, quando ha ancora zero istanze: resta una
+ * sfera vuota al centro del pianeta. Dalla vista dall'alto il centro è
+ * inquadrato e non succede nulla; in terza persona è fuori campo e l'intera
+ * mesh (cioè tutti gli animali) sparirebbe dallo schermo.
+ */
+export function configureInstancedMesh(mesh: THREE.InstancedMesh): void {
+  mesh.frustumCulled = false;
+}
+
+/**
+ * v1.8.0 — Sfumatura ventre-dorso: colori per vertice (1 sul ventre, più scuro sul
+ * dorso) che il materiale moltiplica per il colore della specie. Dà volume alle
+ * sfere che formano il corpo senza nessuna istanza o luce in più.
+ */
+export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  const position = geometry.attributes.position as THREE.BufferAttribute;
+  const colors = new Float32Array(position.count * 3);
+  for (let i = 0; i < position.count; i++) {
+    const y = position.getY(i); // sfera unitaria: -1 ventre, +1 dorso
+    const shade = 1 - 0.22 * ((y + 1) / 2);
+    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = shade;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+const sunDir = new THREE.Vector3();
+const sunSide = new THREE.Vector3();
+
+/** v1.8.0 — In terza persona il sole sta sopra chi guarda, un po' di lato, così il suolo è sempre illuminato. */
+export function placeFollowSun(sun: THREE.DirectionalLight, cameraPosition: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3): void {
+  sunDir.copy(target).sub(cameraPosition);
+  if (sunDir.lengthSq() < 1e-12) sunDir.set(0, 0, -1);
+  sunDir.normalize();
+  sunSide.crossVectors(up, sunDir);
+  sun.position.copy(target).addScaledVector(up, 7).addScaledVector(sunDir, -2).addScaledVector(sunSide, 3);
 }
 
 /**
@@ -943,7 +1110,7 @@ const fcDesiredTarget = new THREE.Vector3();
  * altrimenti null. Finché l'animale manca la camera resta dove l'ha visto.
  */
 export function updateFollowCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap">,
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
   frame: RenderFrame,
   selectedId: number,
   state: FollowState,
@@ -1074,7 +1241,8 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
 
   const population = organismsX.length;
   const stride = computeRenderStride(population, refs.maxCreatures);
-  const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null }>();
+  const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null; phase: number }>();
+  const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
 
   // v1.7.0 — un animale "obbligato" (quello seguito in terza persona) viene
   // disegnato anche se il campionamento a passo fisso non lo includerebbe.
@@ -1110,10 +1278,18 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     // creature faces north until it moves).
     const previous = refs.creatureTrack.get(id);
     let heading: Heading | null = previous?.heading ?? null;
+    let phase = previous?.phase ?? 0;
+    let walking = false;
     if (previous) {
-      heading = nextHeading(heading, wrappedDelta(previous.x, x, planetWidth), wrappedDelta(previous.y, y, planetHeight));
+      const dxCells = wrappedDelta(previous.x, x, planetWidth);
+      const dyCells = wrappedDelta(previous.y, y, planetHeight);
+      heading = nextHeading(heading, dxCells, dyCells);
+      // v1.8.0 — il passo avanza con la strada fatta: una falcata (mezzo ciclo) ogni ~1,6 lunghezze di corpo.
+      const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
+      walking = travelled > 1e-5;
+      phase = (phase + (travelled / (Math.max(0.05, organismsSize[i] * 0.12) * 1.6)) * Math.PI) % (Math.PI * 2);
     }
-    nextTrack.set(id, { x, y, heading });
+    nextTrack.set(id, { x, y, heading, phase });
     const ahead = projectToSphere(x + (heading?.hx ?? 0) * 0.5, y + (heading?.hy ?? -1) * 0.5, planetWidth, planetHeight, restingR);
     tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
     tmpTangent.addScaledVector(tmpNormal, -tmpTangent.dot(tmpNormal));
@@ -1138,8 +1314,10 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     tmpScale.set(baseScale, baseScale, baseScale);
     tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
 
-    // The torso is sunk a fifth of its height into the ground, so a creature never looks like it floats on uneven terrain.
-    const lift = anatomy.bodyHalfHeight * 0.8;
+    // Senza zampe (dettaglio 1) il torso è affondato di un quinto della sua altezza nel suolo, così una creatura non sembra
+    // mai fluttuare sul terreno irregolare. Con le zampe (v1.8.0) il corpo sta alla loro altezza, con i piedi sul suolo.
+    const hasLegs = refs.detail >= 2;
+    const lift = hasLegs ? anatomy.legLength * 0.97 + anatomy.bodyHalfHeight * 0.4 : anatomy.bodyHalfHeight * 0.8;
 
     setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, 0, lift, 0, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
     setPart(refs.headMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
@@ -1156,6 +1334,43 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
       }
     }
 
+    if (hasLegs) {
+      // quattro zampe che oscillano in diagonale (trotto) mentre la creatura si muove
+      for (let n = 0; n < LEGS_PER_CREATURE; n++) {
+        const side = n % 2 === 0 ? -1 : 1;
+        const front = n < 2;
+        const swing = walking ? Math.sin(phase + (n === 0 || n === 3 ? 0 : Math.PI)) * 0.55 : 0;
+        tmpLegQuat.setFromAxisAngle(AXIS_X, swing);
+        setPart(
+          refs.legMesh,
+          writeIndex * LEGS_PER_CREATURE + n,
+          tmpCreatureMatrix,
+          side * anatomy.legX,
+          anatomy.legLength * 0.97,
+          front ? anatomy.legFrontZ : anatomy.legBackZ,
+          tmpLegQuat,
+          anatomy.legRadius,
+          anatomy.legLength,
+          anatomy.legRadius,
+        );
+      }
+      // ombra morbida sul suolo
+      setPart(refs.shadowMesh, writeIndex, tmpCreatureMatrix, 0, 0.05, 0, Q_IDENTITY, anatomy.bodyHalfWidth * 1.5, 1, anatomy.bodyHalfLength * 1.4);
+    }
+    if (refs.detail >= 3) {
+      // orecchie per gli erbivori, più grandi con la vista migliore, inclinate verso l'esterno
+      for (let n = 0; n < 2; n++) {
+        const slot = writeIndex * 2 + n;
+        if (anatomy.earVisible) {
+          const side = n === 0 ? -1 : 1;
+          tmpLegQuat.setFromAxisAngle(AXIS_Z, -side * 0.35);
+          setPart(refs.earMesh, slot, tmpCreatureMatrix, side * anatomy.earX, lift + anatomy.earY, anatomy.earZ, tmpLegQuat, anatomy.earRadius / CONE_BASE_RADIUS, anatomy.earHeight, anatomy.earRadius / CONE_BASE_RADIUS);
+        } else {
+          refs.earMesh.setMatrixAt(slot, ZERO_MATRIX);
+        }
+      }
+    }
+
     // Species color, warmed toward red the more predatory the creature is.
     tmpColor.setHSL(speciesHue(organismsSpecies[i]) / 360, 0.85, 0.62);
     if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
@@ -1166,6 +1381,14 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     if (refs.detail >= 2) {
       tmpColor2.copy(tmpColor).multiplyScalar(0.82);
       refs.tailMesh.setColorAt(writeIndex, tmpColor2);
+      // zampe più scure del corpo
+      tmpColor2.copy(tmpColor).multiplyScalar(0.68);
+      for (let n = 0; n < LEGS_PER_CREATURE; n++) refs.legMesh.setColorAt(writeIndex * LEGS_PER_CREATURE + n, tmpColor2);
+    }
+    if (refs.detail >= 3) {
+      tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.18);
+      refs.earMesh.setColorAt(writeIndex * 2, tmpColor2);
+      refs.earMesh.setColorAt(writeIndex * 2 + 1, tmpColor2);
     }
     tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.3);
 
@@ -1202,8 +1425,11 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
   refs.tailMesh.count = refs.detail >= 2 ? writeIndex : 0;
   refs.jawMesh.count = refs.detail >= 2 ? writeIndex : 0;
   refs.spikeMesh.count = refs.detail >= 3 ? writeIndex * MAX_SPIKES : 0;
+  refs.legMesh.count = refs.detail >= 2 ? writeIndex * LEGS_PER_CREATURE : 0;
+  refs.earMesh.count = refs.detail >= 3 ? writeIndex * 2 : 0;
+  refs.shadowMesh.count = refs.detail >= 2 ? writeIndex : 0;
 
-  for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh]) {
+  for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh]) {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
