@@ -5,11 +5,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
-import { computeCreatureAnatomy, MAX_SPIKES } from "../../lib/creatureAnatomy";
-import { nextHeading, wrappedDelta, type Heading } from "../../lib/creatureHeading";
+import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../lib/creatureAnatomy";
+import { advanceHeading, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
+import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
+import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
-import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
+import { projectToSphere, projectToSphereInto, type SpherePoint, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
 import {
   computeFollowPose,
@@ -164,6 +166,29 @@ interface HeightmapSample {
   texHeight: number;
 }
 
+/**
+ * v1.9.0 — Traccia di una creatura disegnata: ultima posizione, orientamento, fase del passo e anatomia
+ * (che dipende solo dai geni, quindi si ricalcola solo se cambiano). Si modifica sul posto a ogni frame:
+ * niente oggetti nuovi per creatura, e quindi meno lavoro per il garbage collector.
+ */
+export interface CreatureTrack extends MutableHeading {
+  x: number;
+  y: number;
+  phase: number;
+  /** Numero del frame in cui la creatura è stata disegnata l'ultima volta (per scartare le assenti). */
+  gen: number;
+  anatomy: CreatureAnatomy | null;
+  aSpeed: number;
+  aCarnivory: number;
+  aVision: number;
+  aEvasion: number;
+  aHunting: number;
+}
+
+let trackGeneration = 0;
+const tmpPoint: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
+const tmpAhead: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
+
 export interface SceneRefs {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -200,7 +225,7 @@ export interface SceneRefs {
   /** v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito (null se il profilo non li prevede). */
   local: LocalScene | null;
   /** v1.5.0 — last rendered position and heading of each drawn creature, so each one can face the way it has been moving. Rebuilt every frame (creatures no longer drawn are dropped). v1.8.0: `phase` è la fase del passo, che avanza con la strada percorsa. */
-  creatureTrack: Map<number, { x: number; y: number; heading: Heading | null; phase: number }>;
+  creatureTrack: Map<number, CreatureTrack>;
   selectionRing: THREE.Mesh;
   /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
   instanceOrganismId: Uint32Array;
@@ -773,7 +798,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // v1.7.0 — in terza persona l'animale seguito va sempre disegnato (anche se il
     // campionamento per densità lo escluderebbe) e non ha l'anello di selezione.
     const following = cameraMode === "follow";
-    updateCreatureInstances(refs, frame, following ? selectedIdRef.current : null);
+    updateCreatureInstances(refs, frame, following ? selectedIdRef.current : null, following ? FOLLOW_CREATURE_RANGE_UNITS : null);
     updateSelectionRing(refs, frame, following ? null : selectedIdRef.current);
   }, [frame, cameraMode]);
 
@@ -1168,7 +1193,7 @@ export function updateFollowCamera(
     state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
   }
 
-  const scale = Math.max(0.05, state.size * 0.12);
+  const scale = creatureScale(state.size);
   const restingR = restingRadius(refs, state.x, state.y, 0.02);
   const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
   fcNormal.set(point.normalX, point.normalY, point.normalZ);
@@ -1223,7 +1248,13 @@ export function updateFollowCamera(
  * about its shape is a pure function of its traits (lib/creatureAnatomy.ts),
  * so an evolving species visibly changes body over generations.
  */
-export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, forceOrganismId: number | null = null): void {
+export function updateCreatureInstances(
+  refs: SceneRefs,
+  frame: RenderFrame,
+  forceOrganismId: number | null = null,
+  /** v1.9.0 — se indicato (e c'è un animale obbligato), si disegnano solo le creature entro questo raggio da lui. */
+  cullRangeUnits: number | null = null,
+): void {
   const {
     organismsX,
     organismsY,
@@ -1239,58 +1270,90 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     planetHeight,
   } = frame;
 
-  const population = organismsX.length;
-  const stride = computeRenderStride(population, refs.maxCreatures);
-  const nextTrack = new Map<number, { x: number; y: number; heading: Heading | null; phase: number }>();
-  const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
+  const populationAll = organismsX.length;
 
   // v1.7.0 — un animale "obbligato" (quello seguito in terza persona) viene
   // disegnato anche se il campionamento a passo fisso non lo includerebbe.
-  let extraIndex = -1;
-  if (forceOrganismId !== null && stride > 1) {
-    for (let k = 0; k < population; k++) {
+  let forcedIndex = -1;
+  if (forceOrganismId !== null) {
+    for (let k = 0; k < populationAll; k++) {
       if (organismsId[k] === forceOrganismId) {
-        if (k % stride !== 0) extraIndex = k;
+        forcedIndex = k;
         break;
       }
     }
   }
 
+  // v1.9.0 — in terza persona la foschia e la curvatura del pianeta nascondono tutto ciò che è lontano:
+  // si elaborano e si disegnano solo le creature vicine, e il campionamento si fa su quelle (più dettaglio vicino).
+  let candidates: Int32Array | null = null;
+  let population = populationAll;
+  if (cullRangeUnits !== null && cullRangeUnits > 0 && forcedIndex >= 0) {
+    candidates = ensureCandidateBuffer(populationAll);
+    population = collectNearbyOrganisms(candidates, organismsX, organismsY, populationAll, organismsX[forcedIndex], organismsY[forcedIndex], planetWidth, planetHeight, cullRangeUnits, PLANET_RADIUS);
+  }
+
+  const stride = computeRenderStride(population, refs.maxCreatures);
+  const generation = ++trackGeneration;
+  const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
+
+  let extraIndex = -1;
+  if (forcedIndex >= 0 && stride > 1) {
+    let position = forcedIndex;
+    if (candidates) {
+      position = -1;
+      for (let p = 0; p < population; p++) {
+        if (candidates[p] === forcedIndex) {
+          position = p;
+          break;
+        }
+      }
+    }
+    if (position >= 0 && position % stride !== 0) extraIndex = forcedIndex;
+  }
+
   let writeIndex = 0;
   for (let step = 0; writeIndex < refs.capacity; step++) {
-    let i = step * stride;
-    if (i >= population) {
+    const sampled = step * stride;
+    let i: number;
+    if (sampled >= population) {
       if (extraIndex < 0) break;
       i = extraIndex;
       extraIndex = -1;
+    } else {
+      i = candidates ? candidates[sampled] : sampled;
     }
     const id = organismsId[i];
     const x = organismsX[i];
     const y = organismsY[i];
 
     const restingR = restingRadius(refs, x, y, 0.02);
-    const point = projectToSphere(x, y, planetWidth, planetHeight, restingR);
+    const point = projectToSphereInto(tmpPoint, x, y, planetWidth, planetHeight, restingR);
     tmpPosition.set(point.x, point.y, point.z);
     tmpNormal.set(point.normalX, point.normalY, point.normalZ);
 
     // Heading: face the way this creature has moved since the last frame
     // (keeps its previous heading while it stands still; first sight of a
     // creature faces north until it moves).
-    const previous = refs.creatureTrack.get(id);
-    let heading: Heading | null = previous?.heading ?? null;
-    let phase = previous?.phase ?? 0;
+    let track = refs.creatureTrack.get(id);
     let walking = false;
-    if (previous) {
-      const dxCells = wrappedDelta(previous.x, x, planetWidth);
-      const dyCells = wrappedDelta(previous.y, y, planetHeight);
-      heading = nextHeading(heading, dxCells, dyCells);
+    if (track) {
+      const dxCells = wrappedDelta(track.x, x, planetWidth);
+      const dyCells = wrappedDelta(track.y, y, planetHeight);
+      advanceHeading(track, dxCells, dyCells);
       // v1.8.0 — il passo avanza con la strada fatta: una falcata (mezzo ciclo) ogni ~1,6 lunghezze di corpo.
       const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
       walking = travelled > 1e-5;
-      phase = (phase + (travelled / (Math.max(0.05, organismsSize[i] * 0.12) * 1.6)) * Math.PI) % (Math.PI * 2);
+      track.phase = (track.phase + (travelled / (creatureScale(organismsSize[i]) * 1.6)) * Math.PI) % (Math.PI * 2);
+      track.x = x;
+      track.y = y;
+    } else {
+      track = { x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
+      refs.creatureTrack.set(id, track);
     }
-    nextTrack.set(id, { x, y, heading, phase });
-    const ahead = projectToSphere(x + (heading?.hx ?? 0) * 0.5, y + (heading?.hy ?? -1) * 0.5, planetWidth, planetHeight, restingR);
+    track.gen = generation;
+    const phase = track.phase;
+    const ahead = projectToSphereInto(tmpAhead, x + (track.hasHeading ? track.hx : 0) * 0.5, y + (track.hasHeading ? track.hy : -1) * 0.5, planetWidth, planetHeight, restingR);
     tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
     tmpTangent.addScaledVector(tmpNormal, -tmpTangent.dot(tmpNormal));
     if (tmpTangent.lengthSq() < 1e-12) {
@@ -1302,15 +1365,24 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     tmpBasis.makeBasis(tmpRight, tmpNormal, tmpTangent);
     tmpQuaternion.setFromRotationMatrix(tmpBasis);
 
-    const anatomy = computeCreatureAnatomy({
-      speed: organismsSpeed[i],
-      carnivory: organismsCarnivory[i],
-      vision: organismsVision[i],
-      evasion: organismsEvasion[i],
-      huntingSkill: organismsHuntingSkill[i],
-    });
+    // v1.9.0 — l'anatomia dipende solo dai geni: si ricalcola solo se sono cambiati.
+    const gSpeed = organismsSpeed[i];
+    const gCarnivory = organismsCarnivory[i];
+    const gVision = organismsVision[i];
+    const gEvasion = organismsEvasion[i];
+    const gHunting = organismsHuntingSkill[i];
+    let anatomy = track.anatomy;
+    if (!anatomy || track.aSpeed !== gSpeed || track.aCarnivory !== gCarnivory || track.aVision !== gVision || track.aEvasion !== gEvasion || track.aHunting !== gHunting) {
+      anatomy = computeCreatureAnatomy({ speed: gSpeed, carnivory: gCarnivory, vision: gVision, evasion: gEvasion, huntingSkill: gHunting });
+      track.anatomy = anatomy;
+      track.aSpeed = gSpeed;
+      track.aCarnivory = gCarnivory;
+      track.aVision = gVision;
+      track.aEvasion = gEvasion;
+      track.aHunting = gHunting;
+    }
 
-    const baseScale = Math.max(0.05, organismsSize[i] * 0.12);
+    const baseScale = creatureScale(organismsSize[i]);
     tmpScale.set(baseScale, baseScale, baseScale);
     tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
 
@@ -1417,7 +1489,10 @@ export function updateCreatureInstances(refs: SceneRefs, frame: RenderFrame, for
     refs.instanceOrganismId[writeIndex] = id;
     writeIndex++;
   }
-  refs.creatureTrack = nextTrack;
+  // v1.9.0 — chi non è stato disegnato in questo frame esce dalla traccia (come prima), senza ricostruire la mappa.
+  for (const [trackId, t] of refs.creatureTrack) {
+    if (t.gen !== generation) refs.creatureTrack.delete(trackId);
+  }
 
   refs.bodyMesh.count = writeIndex;
   refs.headMesh.count = writeIndex;
@@ -1467,7 +1542,7 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.quaternion.setFromUnitVectors(UP, normal);
   refs.selectionRing.rotateX(Math.PI / 2); // torus is authored flat on XY; align its face with the surface normal
 
-  const baseScale = Math.max(0.05, organismsSize[index] * 0.12);
+  const baseScale = creatureScale(organismsSize[index]);
   const ringScale = baseScale * 2.2;
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;

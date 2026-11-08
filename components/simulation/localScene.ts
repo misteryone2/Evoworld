@@ -289,7 +289,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
       return state.ground;
     },
     update(vf, planetWidth, planetHeight, focusX, focusY) {
-      const ground = createLocalGround(vf, planetWidth, planetHeight);
+      const ground = createLocalGround(vf, planetWidth, planetHeight, planetRadius);
       state.ground = ground;
       writeTerrain(ground);
       writeFlora(ground, focusX, focusY);
