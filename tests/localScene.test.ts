@@ -92,7 +92,7 @@ describe("v1.8.0 — scena locale (terreno + flora)", () => {
         const r = p.length();
         // nessuna parte sta sotto il suolo di molto, né in aria a distanza assurda
         expect(r).toBeGreaterThan(R - 0.3);
-        expect(r).toBeLessThan(R + 1.5);
+        expect(r).toBeLessThan(R + 5); // v1.9.0 — una conifera adulta arriva a circa 4 unità
         checked++;
       }
     }

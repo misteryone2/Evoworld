@@ -72,10 +72,10 @@ describe("v1.8.0 — flora 3D: regole", () => {
   });
 
   it("savana: acacie; pianura: erba e cespugli, alberi rari", () => {
-    const sav = countKinds(allPlants({ terrain: 6, vegetation: 0.6, originY: 230 }));
+    const sav = countKinds(allPlants({ terrain: 6, vegetation: 0.6, originY: 230, cells: 256 }));
     expect(sav.acacia).toBeGreaterThan(0);
     expect(sav.grass).toBeGreaterThan(sav.acacia);
-    const plains = countKinds(allPlants({ terrain: 1, vegetation: 0.8, originY: 230 }));
+    const plains = countKinds(allPlants({ terrain: 1, vegetation: 0.8, originY: 230, cells: 256 }));
     expect(plains.grass).toBeGreaterThan(plains.bush);
     expect(plains.bush).toBeGreaterThan(plains.broadleaf);
   });
@@ -134,7 +134,8 @@ describe("v1.8.0 — flora 3D: piano di posa", () => {
 
   it("planFlora rispetta i tetti per famiglia e non supera il budget totale", () => {
     const g = createLocalGround(makeVf({ terrain: 4, vegetation: 0.9, originY: 230 }), W, H);
-    const budget = floraBudget(400);
+    // v1.9.0 — alberi grandi, quindi radi: serve un budget piccolo perché i tetti per famiglia entrino in gioco.
+    const budget = floraBudget(6);
     const plan = planFlora(g, 132, 262, budget);
     const trees = plan.filter((p) => p.kind !== "grass" && p.kind !== "bush").length;
     const bushes = plan.filter((p) => p.kind === "bush").length;
@@ -146,11 +147,13 @@ describe("v1.8.0 — flora 3D: piano di posa", () => {
   });
 
   it("planFlora parte dal centro: le piante scelte sono più vicine al fuoco di quelle scartate", () => {
-    const g = createLocalGround(makeVf({ terrain: 4, vegetation: 0.9, originY: 230 }), W, H);
-    const plan = planFlora(g, 132, 262, floraBudget(60));
+    // v1.9.0 — gli alberi sono radi (pochi per area), quindi si prova con l'erba, che è abbondante.
+    const g = createLocalGround(makeVf({ terrain: 1, vegetation: 1, originY: 230 }), W, H);
+    const plan = planFlora(g, 132, 262, { trees: 0, bushes: 0, grass: 20 });
     const farthest = Math.max(...plan.map((p) => Math.hypot(p.gx - 132, p.gy - 262)));
-    const all = allPlants({ terrain: 4, vegetation: 0.9, originY: 230 });
+    const all = allPlants({ terrain: 1, vegetation: 1, originY: 230 }).filter((p) => p.kind === "grass");
     const farthestAll = Math.max(...all.map((p) => Math.hypot(p.gx - 132, p.gy - 262)));
+    expect(plan.length).toBe(20);
     expect(farthest).toBeLessThan(farthestAll / 2);
   });
 
