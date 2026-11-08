@@ -39,6 +39,10 @@ export interface QualityProfile {
   portrait3D: boolean;
   /** Side (in cells) of the world created by "Genera pianeta casuale". */
   defaultWorldSize: number;
+  /** v1.8.0 — Terza persona: suddivisioni per lato del terreno ad alto dettaglio intorno all'animale (0 = non si disegna). */
+  localTerrainSegments: number;
+  /** v1.8.0 — Terza persona: numero massimo di piante 3D disegnate insieme (0 = nessuna). */
+  floraMax: number;
 }
 
 export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
@@ -58,6 +62,8 @@ export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
     speciesStatsIntervalMs: 2000,
     portrait3D: false,
     defaultWorldSize: 256,
+    localTerrainSegments: 0,
+    floraMax: 0,
   },
   basso: {
     level: "basso",
@@ -75,6 +81,8 @@ export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
     speciesStatsIntervalMs: 1500,
     portrait3D: false,
     defaultWorldSize: 256,
+    localTerrainSegments: 40,
+    floraMax: 700,
   },
   medio: {
     level: "medio",
@@ -92,6 +100,8 @@ export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
     speciesStatsIntervalMs: 800,
     portrait3D: true,
     defaultWorldSize: 512,
+    localTerrainSegments: 64,
+    floraMax: 2200,
   },
   alto: {
     level: "alto",
@@ -109,6 +119,8 @@ export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
     speciesStatsIntervalMs: 400,
     portrait3D: true,
     defaultWorldSize: 1024,
+    localTerrainSegments: 96,
+    floraMax: 5000,
   },
 };
 

@@ -52,6 +52,19 @@ export interface CreatureAnatomy {
   jawZ: number;
   /** 0 to 3 dorsal spikes. */
   spikes: SpikeAnatomy[];
+  /** v1.8.0 — quattro zampe che reggono il corpo: lunghezza, raggio, distanza laterale e posizione (z) di quelle anteriori e posteriori. */
+  legLength: number;
+  legRadius: number;
+  legX: number;
+  legFrontZ: number;
+  legBackZ: number;
+  /** v1.8.0 — gli erbivori hanno orecchie (più grandi con la vista migliore); i predatori no. */
+  earVisible: boolean;
+  earHeight: number;
+  earRadius: number;
+  earX: number;
+  earY: number;
+  earZ: number;
   /** 0..1 — how predatory it looks (drives color tint). */
   aggression: number;
 }
@@ -61,6 +74,8 @@ export const JAW_VISIBLE_THRESHOLD = 0.15;
 /** Below this normalized evasion, no spike is drawn at all. */
 export const SPIKE_VISIBLE_THRESHOLD = 0.2;
 export const MAX_SPIKES = 3;
+/** v1.8.0 — Sopra questa carnivoria normalizzata non si disegnano orecchie. */
+export const EAR_VISIBLE_MAX_CARNIVORY = 0.5;
 
 function normalize(value: number, key: keyof typeof TRAIT_RANGES): number {
   const { min, max } = TRAIT_RANGES[key];
@@ -110,6 +125,19 @@ export function computeCreatureAnatomy(traits: CreatureTraits): CreatureAnatomy 
     }
   }
 
+  // v1.8.0 — Zampe più lunghe per chi corre di più; orecchie solo per chi non è predatore.
+  const legLength = 0.55 + speed * 0.4;
+  const legRadius = 0.13 - speed * 0.03;
+  const legX = bodyHalfWidth * 0.55;
+  const legFrontZ = bodyHalfLength * 0.55;
+  const legBackZ = -bodyHalfLength * 0.55;
+  const earVisible = carnivory < EAR_VISIBLE_MAX_CARNIVORY;
+  const earHeight = 0.3 + vision * 0.35;
+  const earRadius = 0.12 + vision * 0.05;
+  const earX = headRadius * 0.6;
+  const earY = headY + headRadius * 0.9;
+  const earZ = headZ - headRadius * 0.1;
+
   return {
     bodyHalfWidth,
     bodyHalfHeight,
@@ -130,6 +158,17 @@ export function computeCreatureAnatomy(traits: CreatureTraits): CreatureAnatomy 
     jawY,
     jawZ,
     spikes,
+    legLength,
+    legRadius,
+    legX,
+    legFrontZ,
+    legBackZ,
+    earVisible,
+    earHeight,
+    earRadius,
+    earX,
+    earY,
+    earZ,
     aggression: carnivory,
   };
 }
