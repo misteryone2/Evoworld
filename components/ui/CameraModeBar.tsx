@@ -9,13 +9,15 @@ interface Props {
   onStep: (step: 1 | -1) => void;
   /** Passa all'animale più vicino a quello seguito. */
   onNearest: () => void;
+  /** v1.9.0 — schermo intero: se presente, la barra mostra il pulsante per entrarvi. */
+  onEnterImmersive?: () => void;
 }
 
 /**
  * v1.7.0 — Terza persona. Scelta tra vista dall'alto e terza persona, e
  * (in terza persona) i pulsanti per passare da un animale all'altro.
  */
-export function CameraModeBar({ mode, onChangeMode, onStep, onNearest }: Props) {
+export function CameraModeBar({ mode, onChangeMode, onStep, onNearest, onEnterImmersive }: Props) {
   const following = mode === "follow";
   return (
     <div className="camera-bar" role="group" aria-label="Punto di vista">
@@ -25,6 +27,11 @@ export function CameraModeBar({ mode, onChangeMode, onStep, onNearest }: Props) 
       <button type="button" className={`btn${following ? " btn-primary" : ""}`} aria-pressed={following} onClick={() => onChangeMode("follow")}>
         🐾 Terza persona
       </button>
+      {onEnterImmersive && (
+        <button type="button" className="btn" onClick={onEnterImmersive}>
+          ⛶ Schermo intero
+        </button>
+      )}
       {following && (
         <>
           <button type="button" className="btn" onClick={() => onStep(-1)} aria-label="Animale precedente">
