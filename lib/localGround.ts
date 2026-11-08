@@ -51,9 +51,13 @@ export interface LocalGround {
   centerY: number;
   cellsWidth: number;
   cellsHeight: number;
+  /** v1.9.0 — area di una cella sulla superficie del pianeta, in unità² del mondo 3D (per la densità delle piante). */
+  cellAreaUnits: number;
 }
 
-export function createLocalGround(vf: ViewportFrame, planetWidth: number, planetHeight: number): LocalGround {
+const DEFAULT_PLANET_RADIUS = 5;
+
+export function createLocalGround(vf: ViewportFrame, planetWidth: number, planetHeight: number, planetRadius = DEFAULT_PLANET_RADIUS): LocalGround {
   return {
     vf,
     planetWidth,
@@ -62,6 +66,7 @@ export function createLocalGround(vf: ViewportFrame, planetWidth: number, planet
     centerY: vf.originY + vf.cellsHeight / 2,
     cellsWidth: vf.cellsWidth,
     cellsHeight: vf.cellsHeight,
+    cellAreaUnits: ((2 * Math.PI * planetRadius) / Math.max(1, planetWidth)) * ((Math.PI * planetRadius) / Math.max(1, planetHeight)),
   };
 }
 

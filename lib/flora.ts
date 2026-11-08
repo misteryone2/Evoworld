@@ -25,6 +25,7 @@ import {
   hash2,
 } from "./localGround";
 import { wrappedDelta } from "./creatureHeading";
+import { UNITS_PER_METER } from "./worldScale";
 
 export type PlantKind = "grass" | "bush" | "broadleaf" | "palm" | "acacia" | "conifer" | "cactus";
 
@@ -151,6 +152,19 @@ export function floraCandidates(terrain: number, vegetation: number, climate: nu
   }
 }
 
+const plantAreaCache = new Map<PlantKind, number>();
+
+/** Area di suolo (unità² del mondo 3D) che occupa una pianta adulta media del suo tipo: il quadrato del diametro della chioma. */
+export function plantAreaUnits(kind: PlantKind): number {
+  let area = plantAreaCache.get(kind);
+  if (area === undefined) {
+    const shape = plantShape(kind, { height: 0.5, crown: 0.5, lean: 0, hue: 0, vigor: 0.8 });
+    area = Math.max(1e-4, (2 * shape.crownRadius) ** 2);
+    plantAreaCache.set(kind, area);
+  }
+  return area;
+}
+
 const KIND_SALT: Record<PlantKind, number> = { grass: 1, bush: 2, broadleaf: 3, palm: 4, acacia: 5, conifer: 6, cactus: 7 };
 const MAX_SLOTS = 3;
 
@@ -193,8 +207,11 @@ export function plantsInCell(ground: LocalGround, cellX: number, cellY: number):
   const out: PlantPlacement[] = [];
   for (const candidate of floraCandidates(terrain, vegetation, climate, elevation)) {
     if (candidate.expected <= 0) continue;
-    const slots = Math.min(MAX_SLOTS, Math.ceil(candidate.expected));
-    const p = candidate.expected / slots;
+    // v1.9.0 — `expected` è quanto il terreno è "pieno" (0 vuoto, 1 fitto); le piante per cella vengono
+    // dall'area della cella e da quella che serve a una pianta adulta: stessa foresta con qualunque dimensione del mondo.
+    const expected = (candidate.expected * ground.cellAreaUnits) / plantAreaUnits(candidate.kind);
+    const slots = Math.min(MAX_SLOTS, Math.ceil(expected));
+    const p = expected / slots;
     const salt = KIND_SALT[candidate.kind] * 17;
     for (let s = 0; s < slots; s++) {
       if (hash2(cellX, cellY, salt + s * 3) >= p) continue;
@@ -276,22 +293,29 @@ export interface PlantShape {
   crownRadius: number;
 }
 
-const BASE_HEIGHT: Record<PlantKind, number> = { grass: 0.07, bush: 0.12, broadleaf: 0.36, palm: 0.42, acacia: 0.3, conifer: 0.46, cactus: 0.2 };
+/**
+ * v1.9.0 — altezze tipiche in metri (con i geni medi), convertite nelle unità del mondo 3D da UNITS_PER_METER:
+ * una creatura di taglia 1 è circa 1 m, quindi un latifoglia (14 m) è circa 14 volte un animale medio.
+ */
+const BASE_HEIGHT_M: Record<PlantKind, number> = { grass: 0.55, bush: 1.4, broadleaf: 14, palm: 16, acacia: 8, conifer: 20, cactus: 4 };
+const BASE_HEIGHT: Record<PlantKind, number> = Object.fromEntries(
+  (Object.keys(BASE_HEIGHT_M) as PlantKind[]).map((k) => [k, BASE_HEIGHT_M[k] * UNITS_PER_METER]),
+) as Record<PlantKind, number>;
 
 export function plantShape(kind: PlantKind, genes: PlantGenes): PlantShape {
   const h = BASE_HEIGHT[kind] * (0.7 + 0.6 * genes.height) * (0.7 + 0.5 * genes.vigor);
   const w = 0.85 + 0.35 * genes.crown;
   switch (kind) {
     case "broadleaf":
-      return { height: h, trunkHeight: h * 0.45, trunkRadius: h * 0.045, crownRadius: h * 0.3 * w };
+      return { height: h, trunkHeight: h * 0.45, trunkRadius: h * 0.032, crownRadius: h * 0.3 * w };
     case "palm":
-      return { height: h, trunkHeight: h * 0.8, trunkRadius: h * 0.035, crownRadius: h * 0.25 * w };
+      return { height: h, trunkHeight: h * 0.8, trunkRadius: h * 0.016, crownRadius: h * 0.25 * w };
     case "acacia":
-      return { height: h, trunkHeight: h * 0.6, trunkRadius: h * 0.04, crownRadius: h * 0.42 * w };
+      return { height: h, trunkHeight: h * 0.6, trunkRadius: h * 0.03, crownRadius: h * 0.42 * w };
     case "conifer":
-      return { height: h, trunkHeight: h * 0.18, trunkRadius: h * 0.04, crownRadius: h * 0.26 * w };
+      return { height: h, trunkHeight: h * 0.18, trunkRadius: h * 0.022, crownRadius: h * 0.17 * w };
     case "cactus":
-      return { height: h, trunkHeight: h, trunkRadius: h * 0.14 * w, crownRadius: h * 0.14 * w };
+      return { height: h, trunkHeight: h, trunkRadius: h * 0.07 * w, crownRadius: h * 0.07 * w };
     case "bush":
       return { height: h, trunkHeight: 0, trunkRadius: 0, crownRadius: h * 0.55 * w };
     default:

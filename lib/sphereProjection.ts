@@ -167,6 +167,18 @@ export function projectToSphere(
   gridHeight: number,
   radius: number,
 ): SpherePoint {
+  return projectToSphereInto({ x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 }, gridX, gridY, gridWidth, gridHeight, radius);
+}
+
+/** Come projectToSphere, ma scrive in `out` (v1.9.0: nessuna allocazione nei cicli per frame). */
+export function projectToSphereInto(
+  out: SpherePoint,
+  gridX: number,
+  gridY: number,
+  gridWidth: number,
+  gridHeight: number,
+  radius: number,
+): SpherePoint {
   const u = (((gridX % gridWidth) + gridWidth) % gridWidth) / gridWidth;
   const v = (((gridY % gridHeight) + gridHeight) % gridHeight) / gridHeight;
 
@@ -178,12 +190,11 @@ export function projectToSphere(
   const normalY = Math.cos(phi);
   const normalZ = Math.sin(theta) * sinPhi;
 
-  return {
-    x: normalX * radius,
-    y: normalY * radius,
-    z: normalZ * radius,
-    normalX,
-    normalY,
-    normalZ,
-  };
+  out.x = normalX * radius;
+  out.y = normalY * radius;
+  out.z = normalZ * radius;
+  out.normalX = normalX;
+  out.normalY = normalY;
+  out.normalZ = normalZ;
+  return out;
 }

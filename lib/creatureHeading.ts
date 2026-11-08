@@ -40,3 +40,34 @@ export function nextHeading(prev: Heading | null, dx: number, dy: number, blend 
   if (bl < 1e-6) return { hx: nx, hy: ny }; // exact U-turn: just take the new direction
   return { hx: bx / bl, hy: by / bl };
 }
+
+/** Stato di orientamento modificabile sul posto (v1.9.0: evita un oggetto nuovo per creatura a ogni frame). */
+export interface MutableHeading {
+  hasHeading: boolean;
+  hx: number;
+  hy: number;
+}
+
+/** Come nextHeading, ma scrive il risultato in `state` invece di restituire un oggetto nuovo. */
+export function advanceHeading(state: MutableHeading, dx: number, dy: number, blend = 0.4): void {
+  const len = Math.hypot(dx, dy);
+  if (len < HEADING_MIN_MOVEMENT) return;
+  const nx = dx / len;
+  const ny = dy / len;
+  if (!state.hasHeading) {
+    state.hx = nx;
+    state.hy = ny;
+    state.hasHeading = true;
+    return;
+  }
+  const bx = state.hx * (1 - blend) + nx * blend;
+  const by = state.hy * (1 - blend) + ny * blend;
+  const bl = Math.hypot(bx, by);
+  if (bl < 1e-6) {
+    state.hx = nx;
+    state.hy = ny;
+    return;
+  }
+  state.hx = bx / bl;
+  state.hy = by / bl;
+}
