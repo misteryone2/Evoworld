@@ -14,7 +14,7 @@ import * as THREE from "three";
 import type { ViewportFrame } from "../../types";
 import type { QualityProfile } from "../../lib/qualityProfile";
 import { projectToSphere } from "../../lib/sphereProjection";
-import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
+import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB, applyRockBySlopeRGB } from "../../lib/terrainColor";
 import { yearPhase } from "../../simulation/planet/seasons";
 import {
   type LocalGround,
@@ -182,6 +182,15 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
         const vegetation = groundChannel(ground, vf.vegetation, gx, gy);
         const temperature = groundChannel(ground, vf.temperature, gx, gy);
         let rgb = terrainColorRGB(terrain, vegetation);
+        // v1.9.3 — Materiali: i pendii ripidi diventano roccia. Pendenza dalle
+        // differenze centrali dello spostamento reale del terreno, per cella
+        // della simulazione; 0.04 unità di rilievo per cella = pendio pieno.
+        const step = vf.cellsWidth / segments;
+        const slopePerCell =
+          (Math.abs(groundDisplacement(ground, gx + step, gy) - groundDisplacement(ground, gx - step, gy)) +
+            Math.abs(groundDisplacement(ground, gx, gy + step) - groundDisplacement(ground, gx, gy - step))) /
+          (2 * step);
+        rgb = applyRockBySlopeRGB(rgb, slopePerCell / 0.04, terrain);
         rgb = applyWaterOverlayRGB(rgb, groundChannel(ground, vf.riverFlow, gx, gy), groundCode(ground, vf.lake, gx, gy) === 1);
         const wrappedY = ((gy % planetHeight) + planetHeight) % planetHeight;
         rgb = applySeasonalTintRGB(rgb, terrain, vegetation, temperature, wrappedY < planetHeight / 2 ? phase : (phase + 0.5) % 1);
@@ -338,4 +347,5 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     },
   };
 }
+
 
