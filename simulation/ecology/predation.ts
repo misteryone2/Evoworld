@@ -3,6 +3,7 @@ import { Random } from "../core/random";
 import { Planet } from "../planet/planet";
 import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped } from "./spatialIndex";
 import { recordDangerMemory } from "./behavior";
+import { areTouching, maxContactCells } from "./collision";
 
 const MAX_ENERGY = 150;
 
@@ -89,8 +90,10 @@ function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, 
  *
  * Returns the number of successful kills, for statistics.
  */
-export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tick = 0): number {
-  const bucketSize = HUNT_RADIUS;
+export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tick = 0, collisions = false): number {
+  // v1.9.1 — con le collisioni, due corpi grossi non possono stare più vicini della somma dei raggi: chi si tocca
+  // può sempre cacciare, anche se il raggio di caccia in celle è più corto. Le ricerche dei vicini si allargano di conseguenza.
+  const bucketSize = collisions ? Math.max(HUNT_RADIUS, maxContactCells(organisms, planet)) : HUNT_RADIUS;
   const buckets = buildBuckets(organisms, bucketSize);
   let kills = 0;
 
@@ -115,7 +118,7 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
       if (other.genome.carnivory < predator.genome.carnivory) availablePrey++;
       if (other.genome.carnivory >= predator.genome.carnivory) continue;
       const d = distanceWrapped(predator.position.x, predator.position.y, other.position.x, other.position.y, planet);
-      if (d <= HUNT_RADIUS && d < bestDistance) {
+      if ((d <= HUNT_RADIUS || (collisions && areTouching(predator, other, planet))) && d < bestDistance) {
         bestDistance = d;
         target = other;
       }
