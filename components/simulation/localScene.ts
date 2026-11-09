@@ -33,8 +33,12 @@ import { floraBudget, foliageColor, planFlora, plantShape, type PlantPlacement }
 /** Quanto si abbassa l'anello esterno della mesh, per nascondere la fessura con la mesh globale. */
 export const TERRAIN_SKIRT = 0.1;
 
-/** v1.9.4 — Quanto la superficie dell'acqua si alza sopra il letto (fiumi/laghi), in unità del mondo. */
-export const WATER_LIFT = 0.012;
+/**
+ * v1.9.6 — Quanto la superficie dell'acqua si alza sopra il letto (fiumi/laghi),
+ * in unità del mondo. Abbastanza da coprire le zampe: chi cammina in acqua
+ * la guada invece di sembrare a passeggio sulla superficie.
+ */
+export const WATER_LIFT = 0.03;
 
 export interface LocalSceneStats {
   terrainVertices: number;
@@ -140,7 +144,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   // ---- v1.9.4 — acqua: superficie sopra fiumi e laghi ----
   // v1.9.5 — le onde sono condivise con l'oceano in orbita: lib/waveNormals.ts
   const waveTexture = createWaveNormalTexture();
-  waveTexture.repeat.set(6, 6);
+  waveTexture.repeat.set(10, 10); // onde più piccole e numerose: il movimento si vede
 
   const waterGeometry = new THREE.BufferGeometry();
   const waterPositions = new Float32Array(vertexCount * 3);
@@ -160,11 +164,11 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   const waterMaterial = new THREE.MeshStandardMaterial({
     color: 0x1e5a96,
     transparent: true,
-    opacity: 0.82,
+    opacity: 0.72,
     roughness: 0.12,
     metalness: 0.05,
     normalMap: waveTexture,
-    normalScale: new THREE.Vector2(0.5, 0.5),
+    normalScale: new THREE.Vector2(0.8, 0.8),
   });
   const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
   waterMesh.frustumCulled = false;
@@ -409,7 +413,8 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
       waterMesh.visible = false;
     },
     updateWater(timeSec) {
-      waveTexture.offset.set((timeSec * 0.033) % 1, (timeSec * 0.021) % 1);
+      // v1.9.6 — scorrimento deciso: un'onda al secondo circa, impossibile non vederlo.
+      waveTexture.offset.set((timeSec * 0.09) % 1, (timeSec * 0.055) % 1);
     },
     stats() {
       return { terrainVertices: vertexCount, plants: state.plants, instances: state.instances };
