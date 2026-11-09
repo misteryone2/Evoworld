@@ -12,6 +12,7 @@ import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
 import { pushOutOfTrunks, type XY } from "../../lib/trunkAvoid";
 import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB, applyRockBySlopeRGB, applyMicroVariationRGB } from "../../lib/terrainColor";
+import { createWaveNormalTexture } from "../../lib/waveNormals";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, projectToSphereInto, type SpherePoint, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
@@ -444,6 +445,26 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     planetMesh.receiveShadow = shadows;
     planetMesh.castShadow = shadows; // le montagne si gettano ombra addosso
     scene.add(planetMesh);
+
+    // v1.9.5 — Oceano attivo: l'acqua non è più solo colore dipinto sulla texture,
+    // ma una vera superficie sferica al livello del mare, appena sopra il raggio base
+    // (la terra emersa è più in alto e la nasconde, gli oceani dipinti sono più in
+    // basso e traspaiono: la trasparenza dà la profondità). Onde animate sempre.
+    const oceanWaves = createWaveNormalTexture();
+    oceanWaves.repeat.set(20, 12);
+    const oceanMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1c4f7f,
+      transparent: true,
+      opacity: 0.6,
+      roughness: 0.22,
+      metalness: 0.08,
+      normalMap: oceanWaves,
+      normalScale: new THREE.Vector2(0.25, 0.25),
+    });
+    const oceanMesh = new THREE.Mesh(new THREE.SphereGeometry(PLANET_RADIUS + 0.004, 96, 64), oceanMaterial);
+    oceanMesh.receiveShadow = shadows;
+    oceanMesh.renderOrder = 1; // sopra la superficie del pianeta, sotto le creature
+    scene.add(oceanMesh);
     // v1.2.2 — pristine copy of the freshly-built sphere's vertex
     // positions, before any displacement is ever applied — see
     // SceneRefs.basePositions's doc comment for why this must never be
@@ -570,6 +591,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       planetMaterial.polygonOffsetFactor = 2;
       planetMaterial.polygonOffsetUnits = 2;
       local?.setVisible(true);
+      // da vicino pensa all'acqua la scena locale: la sfera d'oceano si nasconde.
+      oceanMesh.visible = false;
       localCenter = null;
       lastLocalAt = 0;
     };
@@ -591,6 +614,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (sun.castShadow) setSunShadowExtent(sun, PLANET_RADIUS * 1.3);
       local?.setVisible(false);
       local?.clear();
+      oceanMesh.visible = true;
       // l'ultimo ViewportFrame era locale: si torna a chiedere quello del pianeta intero
       maybeRequestViewport(true);
     };
@@ -616,6 +640,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       } else {
         controls.update();
       }
+      // v1.9.5 — l'oceano respira sempre: in orbita scorre anche quando la camera
+      // è ferma e il tick non rinfresca la texture (in follow ci pensa updateWater).
+      if (!followActive) oceanWaves.offset.set((nowMs / 1000 * 0.011) % 1, (nowMs / 1000 * 0.007) % 1);
       renderer.render(scene, camera);
       if (lastFrameAt > 0) {
         const dt = nowMs - lastFrameAt;
@@ -804,6 +831,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       planetMaterial.dispose();
       sceneRef.current?.planetTexture.dispose();
       sceneRef.current?.roughnessTexture.dispose();
+      oceanWaves.dispose();
+      oceanMaterial.dispose();
+      oceanMesh.geometry.dispose();
       bodyGeometry.dispose();
       bodyMaterial.dispose();
       headGeometry.dispose();
