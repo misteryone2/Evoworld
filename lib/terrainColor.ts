@@ -113,8 +113,50 @@ export function applySeasonalTintRGB(
   return mixRGB(color, SNOW_COLOR, ((1 - temperature) / 8) * 0.9);
 }
 
+/**
+ * v1.9.3 — Materiali. Rocce sui pendii: un terreno in pendenza viene sfumato
+ * verso un colore di roccia, con una zona morta (sotto slope01 = 0.25 nessun
+ * effetto: le pianure restano verdi) e una curva morbida, così il confine
+ * tra prato e roccia è sfumato, non netto. Oceano e tundra restano
+ * invariati: il primo non ha pendii dipingibili, la seconda è già chiara.
+ * `slope01` è la pendenza normalizzata 0..1 fornita dal chiamante (ogni
+ * vista la misura a modo suo: la texture orbitale dalle differenze centrali
+ * del canale di elevazione, il terreno locale dallo spostamento reale).
+ */
+const ROCK_COLOR: [number, number, number] = [126, 115, 98];
+
+export function applyRockBySlopeRGB(
+  base: [number, number, number],
+  slope01: number,
+  terrainCode: number,
+): [number, number, number] {
+  if (terrainCode === 0 || terrainCode === 5) return base;
+  const s = Math.max(0, Math.min(1, slope01));
+  if (s <= 0.25) return base;
+  const t = (s - 0.25) / 0.75;
+  const k = t * t * (3 - 2 * t) * 0.75; // smoothstep, mai oltre il 75%: la roccia tinge, non sostituisce
+  return mixRGB(base, ROCK_COLOR, k);
+}
+
+/**
+ * v1.9.3 — Materiali. Micro-variazione per texel: lo stesso identico colore
+ * ripetuto su migliaia di texel adiacenti è ciò che rende il terreno "piatto".
+ * Una variazione di luminosità del ±6%, deterministica (il chiamante passa un
+ * hash 0..1 stabile per texel), rompe la tinta unita a costo zero: nessuna
+ * texture in più, solo un moltiplicatore nel ciclo di pittura che già esiste.
+ */
+export function applyMicroVariationRGB(base: [number, number, number], hash01: number): [number, number, number] {
+  const k = 1 + (Math.max(0, Math.min(1, hash01)) - 0.5) * 0.12;
+  return [
+    Math.min(255, Math.round(base[0] * k)),
+    Math.min(255, Math.round(base[1] * k)),
+    Math.min(255, Math.round(base[2] * k)),
+  ];
+}
+
 /** Same mapping as terrainColorRGB, formatted as a CSS rgb() string for canvas 2D fillStyle use. */
 export function terrainColorCSS(terrainCode: number, vegetation: number): string {
   const [r, g, b] = terrainColorRGB(terrainCode, vegetation);
   return `rgb(${r}, ${g}, ${b})`;
 }
+
