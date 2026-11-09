@@ -157,17 +157,6 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     }
   }
   waterGeometry.setAttribute("uv", new THREE.BufferAttribute(waterUvs, 2));
-  // v1.9.4b — senza UV la normal map campiona sempre lo stesso punto: onde ferme e
-  // niente riflesso. La griglia è regolare, quindi gli UV sono banali.
-  const waterUvs = new Float32Array(vertexCount * 2);
-  for (let j = 0; j <= segments; j++) {
-    for (let i = 0; i <= segments; i++) {
-      const k = j * vertsPerSide + i;
-      waterUvs[k * 2] = i / segments;
-      waterUvs[k * 2 + 1] = j / segments;
-    }
-  }
-  waterGeometry.setAttribute("uv", new THREE.BufferAttribute(waterUvs, 2));
   const waterMaterial = new THREE.MeshStandardMaterial({
     color: 0x1e5a96,
     transparent: true,
