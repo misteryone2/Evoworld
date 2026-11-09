@@ -26,6 +26,7 @@ import {
 } from "./localGround";
 import { wrappedDelta } from "./creatureHeading";
 import { UNITS_PER_METER } from "./worldScale";
+import { PLANT_TRAIT_NAMES, PLANT_TRAIT_RANGES, type PlantGenome } from "../simulation/biology/plantGenome";
 
 export type PlantKind = "grass" | "bush" | "broadleaf" | "palm" | "acacia" | "conifer" | "cactus";
 
@@ -53,6 +54,8 @@ export interface PlantPlacement {
   /** Rotazione del fusto attorno alla verticale, in radianti. */
   yaw: number;
   genes: PlantGenes;
+  /** v1.10.0 — il genoma completo della pianta (inerte: solo il disegno ne legge la parte visiva, vedi `genes`). */
+  genome: PlantGenome;
   cellX: number;
   cellY: number;
   terrain: number;
@@ -168,20 +171,43 @@ export function plantAreaUnits(kind: PlantKind): number {
 const KIND_SALT: Record<PlantKind, number> = { grass: 1, bush: 2, broadleaf: 3, palm: 4, acacia: 5, conifer: 6, cactus: 7 };
 const MAX_SLOTS = 3;
 
+/** Salti di hash per i tratti che non erano già nel "genoma visivo" della v1.8.0 (quelli vecchi tengono i loro, così le piante restano identiche). */
+const TRAIT_HASH_OFFSET: Partial<Record<keyof PlantGenome, number>> = { height: 1, crown: 2, lean: 3, hue: 4 };
+
 /**
- * Il genoma visivo di una pianta, ricavato dalla sua cella. È il punto in cui,
- * in futuro, entrerà un genoma vero.
+ * v1.10.0 — Il genoma di una pianta, ricavato in modo deterministico dalla sua cella: ogni tratto è un valore
+ * dell'intervallo del tratto scelto dall'hash. Finché le piante non sono individui che si riproducono, è questo
+ * il punto da cui nascono; poi basterà leggere il genoma da un'altra parte. I quattro tratti visivi vengono
+ * esattamente dagli stessi hash di prima: le piante non cambiano aspetto.
+ */
+export function plantGenomeForCell(cellX: number, cellY: number, kind: PlantKind): PlantGenome {
+  const s = KIND_SALT[kind] * 101;
+  const g = {} as PlantGenome;
+  let extra = 10;
+  for (const trait of PLANT_TRAIT_NAMES) {
+    const { min, max } = PLANT_TRAIT_RANGES[trait];
+    const offset = TRAIT_HASH_OFFSET[trait] ?? extra++;
+    g[trait] = min + hash2(cellX, cellY, s + offset) * (max - min);
+  }
+  return g;
+}
+
+/** La parte visiva del genoma più il vigore, che non è un gene ma dipende da vegetazione e clima della cella. */
+export function visualGenes(genome: PlantGenome, vegetation: number, climate: number): PlantGenes {
+  return {
+    height: genome.height,
+    crown: genome.crown,
+    lean: genome.lean,
+    hue: genome.hue,
+    vigor: Math.min(1, Math.max(0, vegetation * 0.7 + climate * 0.3)),
+  };
+}
+
+/**
+ * Il genoma visivo di una pianta, ricavato dalla sua cella (v1.10.0: dal suo genoma completo).
  */
 export function plantGenesFor(cellX: number, cellY: number, kind: PlantKind, vegetation: number, climate: number): PlantGenes {
-  const s = KIND_SALT[kind] * 101;
-  const vigor = Math.min(1, Math.max(0, vegetation * 0.7 + climate * 0.3));
-  return {
-    height: hash2(cellX, cellY, s + 1),
-    crown: hash2(cellX, cellY, s + 2),
-    lean: hash2(cellX, cellY, s + 3) * 2 - 1,
-    hue: hash2(cellX, cellY, s + 4) * 2 - 1,
-    vigor,
-  };
+  return visualGenes(plantGenomeForCell(cellX, cellY, kind), vegetation, climate);
 }
 
 /** Le piante di una cella (di solito nessuna, a volte una o più). Deterministico. */
@@ -215,12 +241,14 @@ export function plantsInCell(ground: LocalGround, cellX: number, cellY: number):
     const salt = KIND_SALT[candidate.kind] * 17;
     for (let s = 0; s < slots; s++) {
       if (hash2(cellX, cellY, salt + s * 3) >= p) continue;
+      const genome = plantGenomeForCell(cellX + s * 7919, cellY, candidate.kind);
       out.push({
         kind: candidate.kind,
         gx: cellX + 0.1 + 0.8 * hash2(cellX, cellY, salt + s * 3 + 1),
         gy: cellY + 0.1 + 0.8 * hash2(cellX, cellY, salt + s * 3 + 2),
         yaw: hash2(cellX, cellY, salt + s * 3 + 900) * Math.PI * 2,
-        genes: plantGenesFor(cellX + s * 7919, cellY, candidate.kind, vegetation, climate),
+        genes: visualGenes(genome, vegetation, climate),
+        genome,
         cellX,
         cellY,
         terrain,
