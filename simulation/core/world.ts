@@ -11,6 +11,7 @@ import { Planet } from "../planet/planet";
 import { createRandomOrganism, upkeepCost, dispersalCost, DISPERSAL_HOME_RADIUS, isDying } from "../biology/organism";
 import { averageGenome, randomGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
+import { resolveCollisions } from "../ecology/collision";
 import { feedOrganisms, regionKey, FEEDING_REGION_SIZE } from "../ecology/feeding";
 import { huntPrey } from "../ecology/predation";
 import { buildOrganismBuckets } from "../ecology/spatialIndex";
@@ -79,16 +80,22 @@ export class World {
    * identical to pre-settlement-mechanism behavior).
    */
   private regionEstablishment: RegionEstablishment | null;
+  /**
+   * v1.9.1 — gli animali occupano uno spazio: non si attraversano, se si toccano si spingono (vedi
+   * ecology/collision.ts). Attivo di default; resta un'opzione per poter confrontare con e senza.
+   */
+  private enableCollisions: boolean;
 
   constructor(
     config: PlanetConfig,
     initialPopulation: number,
-    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean },
+    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean; enableCollisions?: boolean },
   ) {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
     this.speciesRegistry = new Map();
     this.enableDispersalCost = options?.enableDispersalCost ?? false;
+    this.enableCollisions = options?.enableCollisions ?? true;
     this.regionEstablishment = (options?.enableSettlement ?? false) ? new RegionEstablishment() : null;
     this.seedPopulation(initialPopulation);
     // v1.2 — the founding population represents organisms already settled
@@ -196,11 +203,14 @@ export class World {
       moveOrganism(o, this.planet, this.rng, behaviorBuckets, BEHAVIOR_BUCKET_SIZE, this.tick);
     }
 
+    // 3b. (v1.9.1) collisioni: chi si è sovrapposto muovendosi viene spinto via.
+    if (this.enableCollisions) resolveCollisions(this.organisms, this.planet);
+
     // 4. feeding (vegetation, weighted by 1 - carnivory)
     feedOrganisms(this.organisms, this.planet, this.regionEstablishment ?? undefined);
 
     // 4b. predation (v0.3): carnivorous organisms may hunt nearby prey
-    const predationKills = huntPrey(this.organisms, this.planet, this.rng, this.tick);
+    const predationKills = huntPrey(this.organisms, this.planet, this.rng, this.tick, this.enableCollisions);
 
     // 5. death + removal (includes organisms killed by predation above)
     let deaths = 0;
@@ -235,7 +245,7 @@ export class World {
     }
 
     // 6 & 7. reproduction + mutation (mate compatibility is genetic-distance-based)
-    const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++);
+    const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++, this.enableCollisions);
     if (offspring.length > 0) this.organisms.push(...offspring);
 
     // 8a. species bookkeeping: population counts + extinction detection
@@ -324,6 +334,7 @@ export class World {
     // World: dispersal cost and settlement are experimental tuning knobs,
     // off by default (see the constructor), not part of a saved snapshot.
     world.enableDispersalCost = false;
+    world.enableCollisions = true; // v1.9.1 — i mondi salvati riprendono con le collisioni, come uno nuovo
     world.regionEstablishment = null;
     world.lastStats = world.computeStats(0, 0, 0);
     return world;
