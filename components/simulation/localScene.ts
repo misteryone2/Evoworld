@@ -27,6 +27,7 @@ import {
   valueNoise,
 } from "../../lib/localGround";
 import { createTrunkField, type TrunkField } from "../../lib/trunkAvoid";
+import { createWaveNormalTexture } from "../../lib/waveNormals";
 import { floraBudget, foliageColor, planFlora, plantShape, type PlantPlacement } from "../../lib/flora";
 
 /** Quanto si abbassa l'anello esterno della mesh, per nascondere la fessura con la mesh globale. */
@@ -137,34 +138,25 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   group.add(terrainMesh);
 
   // ---- v1.9.4 — acqua: superficie sopra fiumi e laghi ----
-  // Normal map procedurale 64x64 (somma di onde sinusoidali incrociate, tileabile):
-  // generata una volta, poi si anima spostando l'offset della texture, che è gratis.
-  const WAVE_TEX = 64;
-  const waveData = new Uint8Array(WAVE_TEX * WAVE_TEX * 4);
-  for (let wy = 0; wy < WAVE_TEX; wy++) {
-    for (let wx = 0; wx < WAVE_TEX; wx++) {
-      const u = wy / WAVE_TEX;
-      const v = wx / WAVE_TEX;
-      const dx = Math.cos((u * 2 + v) * Math.PI * 2) * 0.35 + Math.cos((u + v) * Math.PI * 8) * 0.12;
-      const dy = Math.cos((v * 2 - u) * Math.PI * 2) * 0.35 + Math.cos((u - v) * Math.PI * 8) * 0.12;
-      const len = Math.sqrt(dx * dx + dy * dy + 1);
-      const k = (wy * WAVE_TEX + wx) * 4;
-      waveData[k] = Math.round((-dx / len * 0.5 + 0.5) * 255);
-      waveData[k + 1] = Math.round((-dy / len * 0.5 + 0.5) * 255);
-      waveData[k + 2] = Math.round((1 / len * 0.5 + 0.5) * 255);
-      waveData[k + 3] = 255;
-    }
-  }
-  const waveTexture = new THREE.DataTexture(waveData, WAVE_TEX, WAVE_TEX, THREE.RGBAFormat);
-  waveTexture.wrapS = THREE.RepeatWrapping;
-  waveTexture.wrapT = THREE.RepeatWrapping;
+  // v1.9.5 — le onde sono condivise con l'oceano in orbita: lib/waveNormals.ts
+  const waveTexture = createWaveNormalTexture();
   waveTexture.repeat.set(6, 6);
-  waveTexture.needsUpdate = true;
 
   const waterGeometry = new THREE.BufferGeometry();
   const waterPositions = new Float32Array(vertexCount * 3);
   const waterFlags = new Uint8Array(vertexCount); // 1 = il vertice è su una cella d'acqua
   waterGeometry.setAttribute("position", new THREE.BufferAttribute(waterPositions, 3));
+  // v1.9.4b — senza UV la normal map campiona sempre lo stesso punto: onde ferme e
+  // niente riflesso. La griglia è regolare, quindi gli UV sono banali.
+  const waterUvs = new Float32Array(vertexCount * 2);
+  for (let j = 0; j <= segments; j++) {
+    for (let i = 0; i <= segments; i++) {
+      const k = j * vertsPerSide + i;
+      waterUvs[k * 2] = i / segments;
+      waterUvs[k * 2 + 1] = j / segments;
+    }
+  }
+  waterGeometry.setAttribute("uv", new THREE.BufferAttribute(waterUvs, 2));
   // v1.9.4b — senza UV la normal map campiona sempre lo stesso punto: onde ferme e
   // niente riflesso. La griglia è regolare, quindi gli UV sono banali.
   const waterUvs = new Float32Array(vertexCount * 2);
