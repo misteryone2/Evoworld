@@ -11,7 +11,7 @@ import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followC
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
 import { pushOutOfTrunks, type XY } from "../../lib/trunkAvoid";
-import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
+import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB, applyRockBySlopeRGB, applyMicroVariationRGB } from "../../lib/terrainColor";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, projectToSphereInto, type SpherePoint, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
 import { computeRenderStride } from "../../lib/renderSampling";
@@ -896,8 +896,25 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const ty = Math.floor(i / texWidth);
       const worldY = (((originY + ((ty + 0.5) / texHeight) * cellsHeight) % planetHeight) + planetHeight) % planetHeight;
       const seasonPhase = worldY < planetHeight / 2 ? yearPhase : (yearPhase + 0.5) % 1;
+      // v1.9.3 — Materiali: pendenza dalle differenze centrali del canale di
+      // elevazione (wrap orizzontale come il mondo), rocce sui pendii ripidi
+      // e micro-variazione deterministica per texel: la tinta unita sparisce.
+      const tx = i % texWidth;
+      const tyRow = Math.floor(i / texWidth);
+      const xm = (tx - 1 + texWidth) % texWidth;
+      const xp = (tx + 1) % texWidth;
+      const ymRow = Math.max(0, tyRow - 1);
+      const ypRow = Math.min(texHeight - 1, tyRow + 1);
+      const slope =
+        Math.abs(elevation[tyRow * texWidth + xp] - elevation[tyRow * texWidth + xm]) +
+        Math.abs(elevation[ypRow * texWidth + tx] - elevation[ymRow * texWidth + tx]);
+      const hash01 = (((tx * 73856093) ^ (tyRow * 19349663)) >>> 0) % 1024 / 1023;
       const [r, g, b] = applySeasonalTintRGB(
-        applyWaterOverlayRGB(terrainColorRGB(terrain[i], vegetation[i]), riverFlow[i], lake[i] === 1),
+        applyWaterOverlayRGB(
+          applyMicroVariationRGB(applyRockBySlopeRGB(terrainColorRGB(terrain[i], vegetation[i]), slope / 0.3, terrain[i]), hash01),
+          riverFlow[i],
+          lake[i] === 1,
+        ),
         terrain[i],
         vegetation[i],
         temperature[i],
@@ -1606,4 +1623,5 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
+
 
