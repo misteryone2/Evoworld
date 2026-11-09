@@ -451,7 +451,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // (la terra emersa è più in alto e la nasconde, gli oceani dipinti sono più in
     // basso e traspaiono: la trasparenza dà la profondità). Onde animate sempre.
     const oceanWaves = createWaveNormalTexture();
-    oceanWaves.repeat.set(20, 12);
+    oceanWaves.repeat.set(28, 18);
     const oceanMaterial = new THREE.MeshStandardMaterial({
       color: 0x1c4f7f,
       transparent: true,
@@ -459,7 +459,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       roughness: 0.22,
       metalness: 0.08,
       normalMap: oceanWaves,
-      normalScale: new THREE.Vector2(0.25, 0.25),
+      normalScale: new THREE.Vector2(0.4, 0.4),
     });
     const oceanMesh = new THREE.Mesh(new THREE.SphereGeometry(PLANET_RADIUS + 0.004, 96, 64), oceanMaterial);
     oceanMesh.receiveShadow = shadows;
@@ -642,7 +642,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       }
       // v1.9.5 — l'oceano respira sempre: in orbita scorre anche quando la camera
       // è ferma e il tick non rinfresca la texture (in follow ci pensa updateWater).
-      if (!followActive) oceanWaves.offset.set((nowMs / 1000 * 0.011) % 1, (nowMs / 1000 * 0.007) % 1);
+      if (!followActive) oceanWaves.offset.set((nowMs / 1000 * 0.02) % 1, (nowMs / 1000 * 0.013) % 1);
       renderer.render(scene, camera);
       if (lastFrameAt > 0) {
         const dt = nowMs - lastFrameAt;
