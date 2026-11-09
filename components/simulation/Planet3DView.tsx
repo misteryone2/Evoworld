@@ -200,6 +200,9 @@ export interface SceneRefs {
   planetMesh: THREE.Mesh;
   planetTexture: THREE.DataTexture;
   textureData: Uint8Array;
+  /** v1.9.4 — Acqua: roughnessMap del pianeta (verde: 255 = terra opaca, ~45 = acqua lucida). */
+  roughnessTexture: THREE.DataTexture;
+  roughnessData: Uint8Array;
   /** v1.2.2 — pristine, undisplaced unit-sphere vertex positions (direction * PLANET_RADIUS) for the CURRENT geometry, captured fresh whenever the geometry is (re)built at a new LOD tessellation. Displacement is always computed from this, never from the previous frame's already-displaced positions, so repeated updates don't compound. */
   basePositions: Float32Array;
   /** v1.2.2 — tessellation (segmentsWidth) the current planetMesh.geometry was built at, to detect when a LOD tier change requires rebuilding the geometry rather than just re-displacing it. */
@@ -425,11 +428,18 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const planetTexture = new THREE.DataTexture(placeholderData, 1, 1, THREE.RGBAFormat);
     planetTexture.flipY = false;
     planetTexture.needsUpdate = true;
+    // v1.9.4 — Acqua: placeholder 1x1 tutto opaco finché non arriva il primo viewport.
+    const roughnessData = new Uint8Array([235, 235, 235, 255]);
+    const roughnessTexture = new THREE.DataTexture(roughnessData, 1, 1, THREE.RGBAFormat);
+    roughnessTexture.flipY = false;
+    roughnessTexture.needsUpdate = true;
 
     const tiers = tiersForProfile(quality);
     const initialTier = tiers[tiers.length - 1];
     const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, initialTier.segmentsWidth, initialTier.segmentsHeight);
-    const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughness: 0.9, metalness: 0.05 });
+    // v1.9.4 — Acqua: la roughnessMap moltiplica la roughness base (1): i texel d'acqua
+    // (canale verde ~45/255) diventano lucidi e riflettono il sole, la terra resta opaca.
+    const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughnessMap: roughnessTexture, roughness: 1, metalness: 0.05 });
     const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
     planetMesh.receiveShadow = shadows;
     planetMesh.castShadow = shadows; // le montagne si gettano ombra addosso
@@ -600,6 +610,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           if (replacement !== null) onSelectRef.current?.(replacement);
           // Il sole segue chi guarda: dall'altra parte del pianeta sarebbe notte e non si vedrebbe niente.
           placeFollowSun(sun, camera.position, follow.target, follow.up);
+          // v1.9.4 — Acqua: la superficie locale scorre col tempo reale, non col tick.
+          local?.updateWater(nowMs / 1000);
         }
       } else {
         controls.update();
@@ -699,6 +711,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       planetMesh,
       planetTexture,
       textureData: placeholderData,
+      roughnessTexture,
+      roughnessData,
       basePositions: initialBasePositions,
       currentSegmentsWidth: initialTier.segmentsWidth,
       heightmap: null,
@@ -789,6 +803,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       sceneRef.current?.planetMesh.geometry.dispose();
       planetMaterial.dispose();
       sceneRef.current?.planetTexture.dispose();
+      sceneRef.current?.roughnessTexture.dispose();
       bodyGeometry.dispose();
       bodyMaterial.dispose();
       headGeometry.dispose();
@@ -879,16 +894,25 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const newData = new Uint8Array(texWidth * texHeight * 4);
       const newTexture = new THREE.DataTexture(newData, texWidth, texHeight, THREE.RGBAFormat);
       newTexture.flipY = false;
+      // v1.9.4 — Acqua: la roughnessMap raddoppia con la map, stessa griglia.
+      const newRoughnessData = new Uint8Array(texWidth * texHeight * 4);
+      const newRoughnessTexture = new THREE.DataTexture(newRoughnessData, texWidth, texHeight, THREE.RGBAFormat);
+      newRoughnessTexture.flipY = false;
       const material = refs.planetMesh.material as THREE.MeshStandardMaterial;
       material.map = newTexture;
+      material.roughnessMap = newRoughnessTexture;
       material.needsUpdate = true;
       refs.planetTexture.dispose();
       refs.planetTexture = newTexture;
       refs.textureData = newData;
+      refs.roughnessTexture.dispose();
+      refs.roughnessTexture = newRoughnessTexture;
+      refs.roughnessData = newRoughnessData;
       lastTextureSize.current = { width: texWidth, height: texHeight };
     }
 
     const data = refs.textureData;
+    const roughnessData = refs.roughnessData;
     // v1.3.0 — Stagioni: each texel's own season (mirrored in the southern
     // hemisphere) drives its snow / sea ice / autumn tint.
     const yearPhase = (tick % TICKS_PER_YEAR) / TICKS_PER_YEAR;
@@ -924,8 +948,16 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       data[i * 4 + 1] = g;
       data[i * 4 + 2] = b;
       data[i * 4 + 3] = 255;
+      // v1.9.4 — Acqua: oceano, laghi e fiumi diventano riflettenti, la terra resta opaca.
+      // La MeshStandardMaterial legge solo il canale verde della roughnessMap.
+      const rough = terrain[i] === 0 || riverFlow[i] > 0 || lake[i] === 1 ? 45 : 235;
+      roughnessData[i * 4] = rough;
+      roughnessData[i * 4 + 1] = rough;
+      roughnessData[i * 4 + 2] = rough;
+      roughnessData[i * 4 + 3] = 255;
     }
     refs.planetTexture.needsUpdate = true;
+    refs.roughnessTexture.needsUpdate = true;
 
     // v1.2.2 — rebuild the mesh at a new tessellation only when the LOD
     // tier genuinely changed (texWidth uniquely identifies a tier — see
@@ -1623,5 +1655,4 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
-
 
