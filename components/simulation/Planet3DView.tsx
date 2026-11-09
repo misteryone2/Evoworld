@@ -429,7 +429,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     planetTexture.flipY = false;
     planetTexture.needsUpdate = true;
     // v1.9.4 — Acqua: placeholder 1x1 tutto opaco finché non arriva il primo viewport.
-    const roughnessData = new Uint8Array([235, 235, 235, 255]);
+    const roughnessData = new Uint8Array([0, 235, 0, 255]); // R inutilizzato, G = roughness, B = metalness
     const roughnessTexture = new THREE.DataTexture(roughnessData, 1, 1, THREE.RGBAFormat);
     roughnessTexture.flipY = false;
     roughnessTexture.needsUpdate = true;
@@ -439,7 +439,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, initialTier.segmentsWidth, initialTier.segmentsHeight);
     // v1.9.4 — Acqua: la roughnessMap moltiplica la roughness base (1): i texel d'acqua
     // (canale verde ~45/255) diventano lucidi e riflettono il sole, la terra resta opaca.
-    const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughnessMap: roughnessTexture, roughness: 1, metalness: 0.05 });
+    const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughnessMap: roughnessTexture, metalnessMap: roughnessTexture, roughness: 1, metalness: 1 });
     const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
     planetMesh.receiveShadow = shadows;
     planetMesh.castShadow = shadows; // le montagne si gettano ombra addosso
@@ -948,12 +948,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       data[i * 4 + 1] = g;
       data[i * 4 + 2] = b;
       data[i * 4 + 3] = 255;
-      // v1.9.4 — Acqua: oceano, laghi e fiumi diventano riflettenti, la terra resta opaca.
-      // La MeshStandardMaterial legge solo il canale verde della roughnessMap.
-      const rough = terrain[i] === 0 || riverFlow[i] > 0 || lake[i] === 1 ? 45 : 235;
-      roughnessData[i * 4] = rough;
-      roughnessData[i * 4 + 1] = rough;
-      roughnessData[i * 4 + 2] = rough;
+      // v1.9.4b — Acqua: oceano, laghi e fiumi diventano riflettenti, la terra resta opaca.
+      // La roughnessMap legge il canale VERDE, la metalnessMap il BLU: con l'acqua liscia
+      // (30/255) e leggermente metallica (51/255) il sole ci si specchia; la terra resta
+      // ruvida (235) e non metallica (0) esattamente come prima.
+      const isWaterTexel = terrain[i] === 0 || riverFlow[i] > 0 || lake[i] === 1;
+      roughnessData[i * 4] = 0;
+      roughnessData[i * 4 + 1] = isWaterTexel ? 30 : 235;
+      roughnessData[i * 4 + 2] = isWaterTexel ? 51 : 0;
       roughnessData[i * 4 + 3] = 255;
     }
     refs.planetTexture.needsUpdate = true;
@@ -1655,4 +1657,3 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
-
