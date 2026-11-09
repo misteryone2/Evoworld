@@ -165,14 +165,25 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   const waterPositions = new Float32Array(vertexCount * 3);
   const waterFlags = new Uint8Array(vertexCount); // 1 = il vertice è su una cella d'acqua
   waterGeometry.setAttribute("position", new THREE.BufferAttribute(waterPositions, 3));
+  // v1.9.4b — senza UV la normal map campiona sempre lo stesso punto: onde ferme e
+  // niente riflesso. La griglia è regolare, quindi gli UV sono banali.
+  const waterUvs = new Float32Array(vertexCount * 2);
+  for (let j = 0; j <= segments; j++) {
+    for (let i = 0; i <= segments; i++) {
+      const k = j * vertsPerSide + i;
+      waterUvs[k * 2] = i / segments;
+      waterUvs[k * 2 + 1] = j / segments;
+    }
+  }
+  waterGeometry.setAttribute("uv", new THREE.BufferAttribute(waterUvs, 2));
   const waterMaterial = new THREE.MeshStandardMaterial({
     color: 0x1e5a96,
     transparent: true,
     opacity: 0.82,
-    roughness: 0.16,
-    metalness: 0,
+    roughness: 0.12,
+    metalness: 0.05,
     normalMap: waveTexture,
-    normalScale: new THREE.Vector2(0.35, 0.35),
+    normalScale: new THREE.Vector2(0.5, 0.5),
   });
   const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
   waterMesh.frustumCulled = false;
@@ -417,7 +428,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
       waterMesh.visible = false;
     },
     updateWater(timeSec) {
-      waveTexture.offset.set((timeSec * 0.021) % 1, (timeSec * 0.013) % 1);
+      waveTexture.offset.set((timeSec * 0.033) % 1, (timeSec * 0.021) % 1);
     },
     stats() {
       return { terrainVertices: vertexCount, plants: state.plants, instances: state.instances };
@@ -435,5 +446,3 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     },
   };
 }
-
-
