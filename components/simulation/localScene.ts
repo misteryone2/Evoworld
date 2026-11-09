@@ -32,6 +32,9 @@ import { floraBudget, foliageColor, planFlora, plantShape, type PlantPlacement }
 /** Quanto si abbassa l'anello esterno della mesh, per nascondere la fessura con la mesh globale. */
 export const TERRAIN_SKIRT = 0.1;
 
+/** v1.9.4 — Quanto la superficie dell'acqua si alza sopra il letto (fiumi/laghi), in unità del mondo. */
+export const WATER_LIFT = 0.012;
+
 export interface LocalSceneStats {
   terrainVertices: number;
   plants: number;
@@ -42,6 +45,8 @@ export interface LocalScene {
   group: THREE.Group;
   /** v1.9.1 — i tronchi degli alberi attuali, per far girare le creature intorno (solo nel disegno). */
   trunks: TrunkField;
+  /** v1.9.4 — fa scorrere le onde: chiamato a ogni frame dalla vista (tempo in secondi). */
+  updateWater(timeSec: number): void;
   /** Il terreno locale attuale (null finché non è arrivato il primo ViewportFrame locale). */
   ground: LocalGround | null;
   update(vf: ViewportFrame, planetWidth: number, planetHeight: number, focusX: number, focusY: number): void;
@@ -131,6 +136,51 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   terrainMesh.receiveShadow = shadows;
   group.add(terrainMesh);
 
+  // ---- v1.9.4 — acqua: superficie sopra fiumi e laghi ----
+  // Normal map procedurale 64x64 (somma di onde sinusoidali incrociate, tileabile):
+  // generata una volta, poi si anima spostando l'offset della texture, che è gratis.
+  const WAVE_TEX = 64;
+  const waveData = new Uint8Array(WAVE_TEX * WAVE_TEX * 4);
+  for (let wy = 0; wy < WAVE_TEX; wy++) {
+    for (let wx = 0; wx < WAVE_TEX; wx++) {
+      const u = wy / WAVE_TEX;
+      const v = wx / WAVE_TEX;
+      const dx = Math.cos((u * 2 + v) * Math.PI * 2) * 0.35 + Math.cos((u + v) * Math.PI * 8) * 0.12;
+      const dy = Math.cos((v * 2 - u) * Math.PI * 2) * 0.35 + Math.cos((u - v) * Math.PI * 8) * 0.12;
+      const len = Math.sqrt(dx * dx + dy * dy + 1);
+      const k = (wy * WAVE_TEX + wx) * 4;
+      waveData[k] = Math.round((-dx / len * 0.5 + 0.5) * 255);
+      waveData[k + 1] = Math.round((-dy / len * 0.5 + 0.5) * 255);
+      waveData[k + 2] = Math.round((1 / len * 0.5 + 0.5) * 255);
+      waveData[k + 3] = 255;
+    }
+  }
+  const waveTexture = new THREE.DataTexture(waveData, WAVE_TEX, WAVE_TEX, THREE.RGBAFormat);
+  waveTexture.wrapS = THREE.RepeatWrapping;
+  waveTexture.wrapT = THREE.RepeatWrapping;
+  waveTexture.repeat.set(6, 6);
+  waveTexture.needsUpdate = true;
+
+  const waterGeometry = new THREE.BufferGeometry();
+  const waterPositions = new Float32Array(vertexCount * 3);
+  const waterFlags = new Uint8Array(vertexCount); // 1 = il vertice è su una cella d'acqua
+  waterGeometry.setAttribute("position", new THREE.BufferAttribute(waterPositions, 3));
+  const waterMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1e5a96,
+    transparent: true,
+    opacity: 0.82,
+    roughness: 0.16,
+    metalness: 0,
+    normalMap: waveTexture,
+    normalScale: new THREE.Vector2(0.35, 0.35),
+  });
+  const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+  waterMesh.frustumCulled = false;
+  waterMesh.receiveShadow = shadows;
+  waterMesh.renderOrder = 1; // dopo il terreno: la trasparenza si ordina bene
+  waterMesh.visible = false;
+  group.add(waterMesh);
+
   // ---- flora ----
   const budget = floraBudget(quality.floraMax);
   const treeCap = budget.trees;
@@ -178,6 +228,17 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
         positions[k * 3 + 1] = p.y;
         positions[k * 3 + 2] = p.z;
 
+        // v1.9.4 — Acqua: la superficie è lo stesso vertice spinto in fuori di WATER_LIFT
+        // lungo la sua stessa direzione radiale (niente seconda proiezione). La posizione
+        // si scrive sempre, così i quad d'acqua non ereditano mai coordinate vecchie.
+        const isRiver = groundChannel(ground, vf.riverFlow, gx, gy) > 0.03;
+        const isLake = groundCode(ground, vf.lake, gx, gy) === 1;
+        waterFlags[k] = isRiver || isLake ? 1 : 0;
+        const waterScale = (r + WATER_LIFT) / r;
+        waterPositions[k * 3] = p.x * waterScale;
+        waterPositions[k * 3 + 1] = p.y * waterScale;
+        waterPositions[k * 3 + 2] = p.z * waterScale;
+
         const terrain = groundCode(ground, vf.terrain, gx, gy);
         const vegetation = groundChannel(ground, vf.vegetation, gx, gy);
         const temperature = groundChannel(ground, vf.temperature, gx, gy);
@@ -204,6 +265,25 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     (terrainGeometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     (terrainGeometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
     terrainGeometry.computeVertexNormals();
+
+    // v1.9.4 — Acqua: si disegnano solo i quad con almeno 2 vertici su acqua (le rive
+    // restano sfumate dalla trasparenza); il resto della griglia non costa nulla.
+    const wIndex: number[] = [];
+    for (let j = 0; j < segments; j++) {
+      for (let i = 0; i < segments; i++) {
+        const a = j * vertsPerSide + i;
+        const b = a + 1;
+        const c = a + vertsPerSide;
+        const d = c + 1;
+        if (waterFlags[a] + waterFlags[b] + waterFlags[c] + waterFlags[d] >= 2) {
+          wIndex.push(a, c, b, b, c, d);
+        }
+      }
+    }
+    waterGeometry.setIndex(wIndex);
+    (waterGeometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    if (wIndex.length > 0) waterGeometry.computeVertexNormals();
+    waterMesh.visible = wIndex.length > 0;
   }
 
   // contatori di istanze scritte per ciascuna mesh nell'aggiornamento corrente
@@ -333,6 +413,11 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
       state.plants = 0;
       state.instances = 0;
       for (const m of floraMeshes) m.count = 0;
+      waterGeometry.setIndex([]);
+      waterMesh.visible = false;
+    },
+    updateWater(timeSec) {
+      waveTexture.offset.set((timeSec * 0.021) % 1, (timeSec * 0.013) % 1);
     },
     stats() {
       return { terrainVertices: vertexCount, plants: state.plants, instances: state.instances };
@@ -340,6 +425,9 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     dispose() {
       terrainGeometry.dispose();
       terrainMaterial.dispose();
+      waterGeometry.dispose();
+      waterMaterial.dispose();
+      waveTexture.dispose();
       for (const m of floraMeshes) m.geometry.dispose();
       solid.dispose();
       flatLeaf.dispose();
