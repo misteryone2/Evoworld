@@ -372,6 +372,16 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatioCap));
     renderer.setSize(width, height);
     renderer.setClearColor(0x05070a, 1);
+    // v1.9.2 — Atmosfera: tone mapping filmico (colori meno piatti, costo quasi nullo) e,
+    // solo al livello "Completa", ombre morbide PCF. Negli altri profili il renderer resta
+    // com'era: il telefono è il vincolo, le ombre sono l'extra del dispositivo potente.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    const shadows = quality.level === "alto";
+    if (shadows) {
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -391,10 +401,23 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       controls.autoRotate = false;
     });
 
-    scene.add(new THREE.AmbientLight(0x8899aa, 0.7));
-    const sun = new THREE.DirectionalLight(0xfff2d9, 1.1);
-    sun.position.set(6, 4, 8);
+    // v1.9.2 — Atmosfera: la luce ambientale uniforme diventa una hemisphere light
+    // (cielo sopra, suolo sotto): stesso costo, ma il volume delle forme si vede.
+    // Il sole guadagna intensità perché il tone mapping ACES scurisce i mezzi toni.
+    scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x8a7a5a, 0.55));
+    const sun = new THREE.DirectionalLight(0xfff2d9, 1.45);
+    sun.position.set(...SUN_ORBIT_POSITION);
     scene.add(sun);
+    if (shadows) {
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048);
+      sun.shadow.bias = -0.0006;
+      sun.shadow.normalBias = 0.05;
+      const sc = sun.shadow.camera as THREE.OrthographicCamera;
+      sc.near = 0.1;
+      sc.far = Math.hypot(...SUN_ORBIT_POSITION) + PLANET_RADIUS * 1.6;
+      setSunShadowExtent(sun, PLANET_RADIUS * 1.3);
+    }
 
     // 1x1 placeholder texture; replaced with real per-cell data on the
     // first frame update effect below (near-instant in practice).
@@ -408,6 +431,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, initialTier.segmentsWidth, initialTier.segmentsHeight);
     const planetMaterial = new THREE.MeshStandardMaterial({ map: planetTexture, roughness: 0.9, metalness: 0.05 });
     const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
+    planetMesh.receiveShadow = shadows;
+    planetMesh.castShadow = shadows; // le montagne si gettano ombra addosso
     scene.add(planetMesh);
     // v1.2.2 — pristine copy of the freshly-built sphere's vertex
     // positions, before any displacement is ever applied — see
@@ -436,6 +461,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, instances: number, colored: boolean) => {
       const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, instances));
       if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, instances) * 3), 3);
+      // v1.9.2 — le creature proiettano ombra quando le ombre sono attive (solo "Completa").
+      mesh.castShadow = shadows;
       mesh.count = 0;
       configureInstancedMesh(mesh);
       scene.add(mesh);
@@ -486,6 +513,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       polygonOffsetUnits: -2,
     });
     const shadowMesh = makeMesh(shadowGeometry, shadowMaterial, detail >= 2 ? capacity : 1, false);
+    shadowMesh.castShadow = false; // è già un'ombra disegnata: non ne proietta una seconda
 
     // v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito.
     const local = quality.localTerrainSegments > 0 ? createLocalScene(quality, PLANET_RADIUS) : null;
@@ -526,6 +554,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       // ad alto dettaglio con le sue piante, e la mesh globale spinta indietro in profondità.
       renderer.setClearColor(SKY_COLOR, 1);
       scene.fog = new THREE.Fog(SKY_COLOR, FOLLOW_FOG_NEAR, FOLLOW_FOG_FAR);
+      // v1.9.2 — da vicino le stesse 2048x2048 pixel d'ombra si concentrano su pochi metri e restano nitide.
+      if (sun.castShadow) setSunShadowExtent(sun, 6);
       planetMaterial.polygonOffset = true;
       planetMaterial.polygonOffsetFactor = 2;
       planetMaterial.polygonOffsetUnits = 2;
@@ -548,6 +578,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       scene.fog = null;
       planetMaterial.polygonOffset = false;
       sun.position.set(...SUN_ORBIT_POSITION);
+      if (sun.castShadow) setSunShadowExtent(sun, PLANET_RADIUS * 1.3);
       local?.setVisible(false);
       local?.clear();
       // l'ultimo ViewportFrame era locale: si torna a chiedere quello del pianeta intero
@@ -1047,6 +1078,21 @@ export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGe
 
 const sunDir = new THREE.Vector3();
 const sunSide = new THREE.Vector3();
+
+/**
+ * v1.9.2 — Ampiezza dell'area coperta dalle ombre del sole: semi-lato della camera
+ * ortografica dell'ombra. In orbita copre l'intero pianeta (le montagne si gettano
+ * ombra addosso); in terza persona si restringe all'area locale, così le stesse
+ * 2048x2048 pixel d'ombra si concentrano su pochi metri e restano nitide.
+ */
+export function setSunShadowExtent(sun: THREE.DirectionalLight, half: number): void {
+  const sc = sun.shadow.camera as THREE.OrthographicCamera;
+  sc.left = -half;
+  sc.right = half;
+  sc.top = half;
+  sc.bottom = -half;
+  sc.updateProjectionMatrix();
+}
 
 /** v1.8.0 — In terza persona il sole sta sopra chi guarda, un po' di lato, così il suolo è sempre illuminato. */
 export function placeFollowSun(sun: THREE.DirectionalLight, cameraPosition: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3): void {
@@ -1560,3 +1606,4 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
+
