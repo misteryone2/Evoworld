@@ -126,6 +126,9 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
       : new THREE.MeshLambertMaterial({ vertexColors: true });
   const terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
   terrainMesh.frustumCulled = false;
+  // v1.9.2 — al livello "Completa" il terreno riceve le ombre del sole e gli alberi le proiettano.
+  const shadows = quality.level === "alto";
+  terrainMesh.receiveShadow = shadows;
   group.add(terrainMesh);
 
   // ---- flora ----
@@ -141,6 +144,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   const coneMesh = instanced(baseUnit(new THREE.ConeGeometry(1, 1, 7)), solid, floraEnabled ? treeCap * 2 : 0);
   const cactusMesh = instanced(baseUnit(new THREE.CylinderGeometry(0.85, 1, 1, 6)), solid, floraEnabled ? treeCap * 3 : 0);
   const grassMesh = instanced(createGrassTuftGeometry(), flatLeaf, floraEnabled ? budget.grass : 0);
+  for (const m of [trunkMesh, crownMesh, coneMesh, cactusMesh]) m.castShadow = shadows; // l'erba no: troppo sottile
   const floraMeshes = [trunkMesh, crownMesh, coneMesh, cactusMesh, grassMesh];
   for (const m of floraMeshes) group.add(m);
 
@@ -334,3 +338,4 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     },
   };
 }
+
