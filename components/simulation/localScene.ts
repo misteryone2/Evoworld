@@ -26,6 +26,7 @@ import {
   hash2,
   valueNoise,
 } from "../../lib/localGround";
+import { createTrunkField, type TrunkField } from "../../lib/trunkAvoid";
 import { floraBudget, foliageColor, planFlora, plantShape, type PlantPlacement } from "../../lib/flora";
 
 /** Quanto si abbassa l'anello esterno della mesh, per nascondere la fessura con la mesh globale. */
@@ -39,6 +40,8 @@ export interface LocalSceneStats {
 
 export interface LocalScene {
   group: THREE.Group;
+  /** v1.9.1 — i tronchi degli alberi attuali, per far girare le creature intorno (solo nel disegno). */
+  trunks: TrunkField;
   /** Il terreno locale attuale (null finché non è arrivato il primo ViewportFrame locale). */
   ground: LocalGround | null;
   update(vf: ViewportFrame, planetWidth: number, planetHeight: number, focusX: number, focusY: number): void;
@@ -132,6 +135,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
   const solid = new THREE.MeshLambertMaterial();
   const crownDetail = quality.level === "alto" ? 1 : 0;
   const floraEnabled = quality.floraMax > 0;
+  const trunks: TrunkField = createTrunkField(budget.trees);
   const trunkMesh = instanced(baseUnit(new THREE.CylinderGeometry(0.7, 1, 1, 6)), solid, floraEnabled ? treeCap : 0);
   const crownMesh = instanced(new THREE.IcosahedronGeometry(1, crownDetail), solid, floraEnabled ? treeCap + budget.bushes : 0);
   const coneMesh = instanced(baseUnit(new THREE.ConeGeometry(1, 1, 7)), solid, floraEnabled ? treeCap * 2 : 0);
@@ -263,12 +267,24 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
 
   function writeFlora(ground: LocalGround, focusX: number, focusY: number): void {
     used.trunk = used.crown = used.cone = used.cactus = used.grass = 0;
+    trunks.count = 0;
+    trunks.planetWidth = ground.planetWidth;
+    trunks.planetHeight = ground.planetHeight;
+    trunks.cellX = (2 * Math.PI * planetRadius) / Math.max(1, ground.planetWidth);
+    trunks.cellY = (Math.PI * planetRadius) / Math.max(1, ground.planetHeight);
     const plan = floraEnabled ? planFlora(ground, focusX, focusY, budget) : [];
     const phase = yearPhase(ground.vf.tick);
     for (const plant of plan) {
       // la stagione di ogni pianta dipende dal suo emisfero, come per il terreno
       const wrappedY = ((plant.gy % ground.planetHeight) + ground.planetHeight) % ground.planetHeight;
       writePlant(ground, plant, wrappedY < ground.planetHeight / 2 ? phase : (phase + 0.5) % 1);
+      // v1.9.1 — i tronchi (non erba né cespugli: quelli si attraversano) fermano le creature.
+      if (plant.kind !== "grass" && plant.kind !== "bush" && trunks.count < trunks.gx.length) {
+        const k = trunks.count++;
+        trunks.gx[k] = plant.gx;
+        trunks.gy[k] = plant.gy;
+        trunks.radius[k] = plantShape(plant.kind, plant.genes).trunkRadius;
+      }
     }
     trunkMesh.count = used.trunk;
     crownMesh.count = used.crown;
@@ -285,6 +301,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
 
   return {
     group,
+    trunks,
     get ground() {
       return state.ground;
     },
@@ -299,6 +316,7 @@ export function createLocalScene(quality: QualityProfile, planetRadius: number):
     },
     clear() {
       state.ground = null;
+      trunks.count = 0;
       state.plants = 0;
       state.instances = 0;
       for (const m of floraMeshes) m.count = 0;

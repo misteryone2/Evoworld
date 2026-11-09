@@ -9,6 +9,8 @@ import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../
 import { advanceHeading, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
+import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
+import { pushOutOfTrunks, type XY } from "../../lib/trunkAvoid";
 import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB } from "../../lib/terrainColor";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 import { projectToSphere, projectToSphereInto, type SpherePoint, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
@@ -27,7 +29,7 @@ import { createLocalScene, type LocalScene } from "./localScene";
 import { groundContains, groundRadius, isLocalViewport, localPatchRadiusCells } from "../../lib/localGround";
 import { QUALITY_PROFILES, shouldDowngrade, type QualityProfile } from "../../lib/qualityProfile";
 
-const PLANET_RADIUS = 5;
+const PLANET_RADIUS = WORLD_RADIUS_UNITS;
 /**
  * v1.6.0 — Modalità leggera. How many creatures get an instance, how detailed
  * each one is, the resolution of the screen buffer and of the terrain all come
@@ -186,6 +188,7 @@ export interface CreatureTrack extends MutableHeading {
 }
 
 let trackGeneration = 0;
+const tmpDrawn: XY = { x: 0, y: 0 };
 const tmpPoint: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
 const tmpAhead: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
 
@@ -1324,11 +1327,21 @@ export function updateCreatureInstances(
       i = candidates ? candidates[sampled] : sampled;
     }
     const id = organismsId[i];
+    // v1.9.1 — x, y: dove sta la creatura nella simulazione (serve a orientarla e a farla camminare);
+    // drawX, drawY: dove la si disegna, che differisce solo se un tronco le sta in mezzo (gira intorno all'albero).
     const x = organismsX[i];
     const y = organismsY[i];
+    let drawX = x;
+    let drawY = y;
+    const trunks = refs.local?.trunks;
+    if (trunks && trunks.count > 0 && refs.local?.ground && groundContains(refs.local.ground, x, y)) {
+      pushOutOfTrunks(trunks, x, y, bodyRadiusUnits(organismsSize[i]), tmpDrawn);
+      drawX = tmpDrawn.x;
+      drawY = tmpDrawn.y;
+    }
 
-    const restingR = restingRadius(refs, x, y, 0.02);
-    const point = projectToSphereInto(tmpPoint, x, y, planetWidth, planetHeight, restingR);
+    const restingR = restingRadius(refs, drawX, drawY, 0.02);
+    const point = projectToSphereInto(tmpPoint, drawX, drawY, planetWidth, planetHeight, restingR);
     tmpPosition.set(point.x, point.y, point.z);
     tmpNormal.set(point.normalX, point.normalY, point.normalZ);
 
@@ -1353,7 +1366,7 @@ export function updateCreatureInstances(
     }
     track.gen = generation;
     const phase = track.phase;
-    const ahead = projectToSphereInto(tmpAhead, x + (track.hasHeading ? track.hx : 0) * 0.5, y + (track.hasHeading ? track.hy : -1) * 0.5, planetWidth, planetHeight, restingR);
+    const ahead = projectToSphereInto(tmpAhead, drawX + (track.hasHeading ? track.hx : 0) * 0.5, drawY + (track.hasHeading ? track.hy : -1) * 0.5, planetWidth, planetHeight, restingR);
     tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
     tmpTangent.addScaledVector(tmpNormal, -tmpTangent.dot(tmpNormal));
     if (tmpTangent.lengthSq() < 1e-12) {
