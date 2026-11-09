@@ -219,3 +219,130 @@ describe("v1.9.0 — funzioni senza allocazioni equivalenti alle originali", () 
     }
   });
 });
+
+// ---- v1.9.1 — i tronchi fermano le creature (solo nel disegno) ----
+import { createTrunkField, pushOutOfTrunks } from "../lib/trunkAvoid";
+import { bodyRadiusUnits } from "../simulation/core/scale";
+import { createLocalScene } from "../components/simulation/localScene";
+import { QUALITY_PROFILES } from "../lib/qualityProfile";
+import { cellLengthsUnits } from "../simulation/core/scale";
+
+describe("v1.9.1 — tronchi", () => {
+  const field = () => {
+    const f = createTrunkField(4);
+    const c = cellLengthsUnits(W, H);
+    f.cellX = c.x;
+    f.cellY = c.y;
+    f.planetWidth = W;
+    f.planetHeight = H;
+    f.gx[0] = 200;
+    f.gy[0] = 256;
+    f.radius[0] = 0.05;
+    f.count = 1;
+    return f;
+  };
+  const out = { x: 0, y: 0 };
+
+  it("una creatura lontana dal tronco non viene spostata", () => {
+    pushOutOfTrunks(field(), 230, 256, bodyRadiusUnits(1), out);
+    expect(out).toEqual({ x: 230, y: 256 });
+  });
+
+  it("una creatura sul tronco viene spinta fuori, fino a toccarlo", () => {
+    const f = field();
+    pushOutOfTrunks(f, 200.5, 256, bodyRadiusUnits(1), out);
+    const dx = (out.x - 200) * f.cellX;
+    const dy = (out.y - 256) * f.cellY;
+    expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(bodyRadiusUnits(1) + 0.05 - 1e-6);
+    // e lo scarto è piccolo: al massimo raggio del corpo più raggio del tronco
+    expect(Math.abs(out.x - 200.5) * f.cellX).toBeLessThanOrEqual(bodyRadiusUnits(1) + 0.05 + 1e-6);
+  });
+
+  it("proprio sul centro del tronco: spinta in una direzione definita, senza numeri non validi", () => {
+    pushOutOfTrunks(field(), 200, 256, bodyRadiusUnits(1), out);
+    expect(Number.isFinite(out.x) && Number.isFinite(out.y)).toBe(true);
+    expect(out.x).not.toBe(200);
+  });
+
+  it("senza tronchi non cambia nulla", () => {
+    const f = field();
+    f.count = 0;
+    pushOutOfTrunks(f, 200, 256, bodyRadiusUnits(3), out);
+    expect(out).toEqual({ x: 200, y: 256 });
+  });
+
+  it("la scena locale elenca i tronchi degli alberi e li azzera con clear", () => {
+    const s = createLocalScene(QUALITY_PROFILES.alto, R);
+    // una foresta tropicale fitta e un'area abbastanza larga: ci sono alberi anche con la densità per area
+    const vf = makeVf({ terrain: 4, vegetation: 1, originY: 230, cells: 192 });
+    s.update(vf, W, H, 132, 262);
+    expect(s.trunks.count).toBeGreaterThan(0);
+    for (let k = 0; k < s.trunks.count; k++) {
+      expect(s.trunks.radius[k]).toBeGreaterThan(0);
+      expect(Number.isFinite(s.trunks.gx[k])).toBe(true);
+    }
+    s.clear();
+    expect(s.trunks.count).toBe(0);
+    s.dispose();
+  });
+});
+
+describe("v1.9.1 — una creatura non si disegna dentro un tronco", () => {
+  it("con un tronco nel suo punto, la creatura è disegnata altrove; la sua traccia resta alla posizione vera", async () => {
+    const { createLocalGround } = await import("../lib/localGround");
+    const CAP = 64;
+    const mesh = (n: number) => new THREE.InstancedMesh(new THREE.SphereGeometry(1, 4, 3), new THREE.MeshBasicMaterial(), n);
+    const frame = {
+      planetWidth: W,
+      planetHeight: H,
+      organismsX: new Float32Array([132]),
+      organismsY: new Float32Array([262]),
+      organismsSpecies: new Uint16Array(1),
+      organismsSize: new Float32Array([1]),
+      organismsSpeed: new Float32Array([1]),
+      organismsCarnivory: new Float32Array(1),
+      organismsVision: new Float32Array([1]),
+      organismsEvasion: new Float32Array(1),
+      organismsHuntingSkill: new Float32Array([1]),
+      organismsId: new Uint32Array([5]),
+    } as unknown as RenderFrame;
+    const mk = (withTrunk: boolean) => {
+      const trunks = createTrunkField(2);
+      const c = cellLengthsUnits(W, H);
+      Object.assign(trunks, { cellX: c.x, cellY: c.y, planetWidth: W, planetHeight: H });
+      if (withTrunk) {
+        trunks.gx[0] = 132;
+        trunks.gy[0] = 262;
+        trunks.radius[0] = 0.05;
+        trunks.count = 1;
+      }
+      const ground = createLocalGround(makeVf({ originX: 100, originY: 230, cells: 64 }), W, H);
+      return {
+        bodyMesh: mesh(CAP),
+        headMesh: mesh(CAP),
+        eyeMesh: mesh(CAP * 2),
+        tailMesh: mesh(CAP),
+        jawMesh: mesh(CAP),
+        spikeMesh: mesh(CAP * 3),
+        legMesh: mesh(CAP * 4),
+        earMesh: mesh(CAP * 2),
+        shadowMesh: mesh(CAP),
+        creatureTrack: new Map(),
+        instanceOrganismId: new Uint32Array(CAP),
+        heightmap: null,
+        local: { trunks, ground },
+        capacity: CAP,
+        maxCreatures: 50,
+        detail: 1,
+      } as unknown as SceneRefs;
+    };
+    const posOf = (refs: SceneRefs) => new THREE.Vector3().setFromMatrixPosition(((): THREE.Matrix4 => { const m = new THREE.Matrix4(); refs.bodyMesh.getMatrixAt(0, m); return m; })());
+    const free = mk(false);
+    const blocked = mk(true);
+    updateCreatureInstances(free, frame, null);
+    updateCreatureInstances(blocked, frame, null);
+    expect(posOf(blocked).distanceTo(posOf(free))).toBeGreaterThan(0.05);
+    expect(blocked.creatureTrack.get(5)!.x).toBe(132); // la simulazione non vede lo scarto
+    expect(blocked.creatureTrack.get(5)!.y).toBe(262);
+  });
+});
