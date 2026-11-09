@@ -1,38 +1,23 @@
-EvoWorld v1.9.1 - Collisioni: gli animali occupano spazio
+EvoWorld v1.10.0 - Genoma delle piante (scollegato dalla simulazione)
 
-Pacchetto incrementale sulla v1.9.0 (carica prima la v1.9.0, poi questo).
-Carica TUTTI i file prima del deploy (da telefono: una cartella alla volta,
-"Add file" > "Upload files" nella stessa cartella > "Commit changes").
+Pacchetto incrementale sulla v1.9.1 (carica prima v1.9.0 e v1.9.1, poi questo).
+Carica TUTTI i file prima del deploy (una cartella alla volta).
 
-simulation/core/
-  scale.ts (NUOVO)
-  world.ts (sostituisce)
-
-simulation/ecology/
-  collision.ts (NUOVO)
-  predation.ts (sostituisce)
-
-simulation/evolution/
-  reproduction.ts (sostituisce)
+simulation/biology/
+  plantGenome.ts (NUOVO)
 
 lib/
-  trunkAvoid.ts (NUOVO)
-  worldScale.ts (sostituisce)
-
-components/simulation/
-  localScene.ts (sostituisce)
-  Planet3DView.tsx (sostituisce)
+  flora.ts (sostituisce)
 
 tests/
-  collision.test.ts (NUOVO)
-  v190.test.ts (sostituisce)
+  plantGenome.test.ts (NUOVO)
+  flora.test.ts (sostituisce)
 
-Cosa fa: gli animali non si attraversano, se si toccano si spingono (chi e'
-piu' grosso si sposta meno). Caccia e accoppiamento funzionano anche a contatto.
-Gli alberi hanno un tronco: nel disegno la creatura gira intorno (la posizione
-nella simulazione non cambia). Le collisioni sono attive di default.
+Cosa fa: 17 tratti ereditabili per le piante (morfologia ed ecologia), con
+mutazione, ricombinazione, distanza genetica e genoma medio. La flora 3D ora
+ricava ogni pianta da questo genoma, ma l'aspetto e' identico a prima
+(verificato su oltre mille celle e tutti i tipi di pianta). Nessuna parte della
+simulazione lo legge: le piante non evolvono ancora e i tratti ecologici sono inerti.
 
-Verifiche in sandbox: type-check e build verdi; test 460 su 462 (le 2 failure
-note sono in tests/reproduction.test.ts, gia' presenti nella v1.8.0). Prova a
-mondi da 256, 512 e 1024 celle, 3 semi, con e senza collisioni: nessun crollo
-delle popolazioni, tempi per tick uguali. La grafica non e' stata vista su uno schermo.
+Verifiche in sandbox: type-check e build verdi; test 473 su 475 (le 2 failure
+note sono in tests/reproduction.test.ts, gia' presenti nella v1.8.0).
