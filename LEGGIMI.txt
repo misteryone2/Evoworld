@@ -1,35 +1,38 @@
-EvoWorld v1.9.0 - Schermo intero, proporzioni realistiche, terza persona più leggera
+EvoWorld v1.9.1 - Collisioni: gli animali occupano spazio
 
-Pacchetto incrementale sulla v1.8.0. Carica TUTTI i file prima del deploy
-(da telefono: una cartella alla volta, "Add file" > "Upload files" nella stessa
-cartella > "Commit changes"; i file con lo stesso nome vengono sostituiti).
+Pacchetto incrementale sulla v1.9.0 (carica prima la v1.9.0, poi questo).
+Carica TUTTI i file prima del deploy (da telefono: una cartella alla volta,
+"Add file" > "Upload files" nella stessa cartella > "Commit changes").
 
-app/
-  globals.css (sostituisce)
-  page.tsx (sostituisce)
+simulation/core/
+  scale.ts (NUOVO)
+  world.ts (sostituisce)
 
-components/simulation/
-  Planet3DView.tsx (sostituisce)
-  localScene.ts (sostituisce)
+simulation/ecology/
+  collision.ts (NUOVO)
+  predation.ts (sostituisce)
 
-components/ui/
-  CameraModeBar.tsx (sostituisce)
-  ImmersiveHud.tsx (NUOVO)
+simulation/evolution/
+  reproduction.ts (sostituisce)
 
 lib/
-  creatureHeading.ts (sostituisce)
-  flora.ts (sostituisce)
-  localGround.ts (sostituisce)
-  sphereProjection.ts (sostituisce)
-  followCull.ts (NUOVO)
-  useThrottledValue.ts (NUOVO)
-  worldScale.ts (NUOVO)
+  trunkAvoid.ts (NUOVO)
+  worldScale.ts (sostituisce)
+
+components/simulation/
+  localScene.ts (sostituisce)
+  Planet3DView.tsx (sostituisce)
 
 tests/
-  flora.test.ts (sostituisce)
-  localScene.test.ts (sostituisce)
-  v190.test.ts (NUOVO)
+  collision.test.ts (NUOVO)
+  v190.test.ts (sostituisce)
 
-Verifiche in sandbox: type-check e build di produzione verdi; test 439 su 441
-(le 2 failure note sono in tests/reproduction.test.ts, già presenti nella v1.8.0).
-La grafica non è stata vista su uno schermo: va provata su telefono e su PC.
+Cosa fa: gli animali non si attraversano, se si toccano si spingono (chi e'
+piu' grosso si sposta meno). Caccia e accoppiamento funzionano anche a contatto.
+Gli alberi hanno un tronco: nel disegno la creatura gira intorno (la posizione
+nella simulazione non cambia). Le collisioni sono attive di default.
+
+Verifiche in sandbox: type-check e build verdi; test 460 su 462 (le 2 failure
+note sono in tests/reproduction.test.ts, gia' presenti nella v1.8.0). Prova a
+mondi da 256, 512 e 1024 celle, 3 semi, con e senza collisioni: nessun crollo
+delle popolazioni, tempi per tick uguali. La grafica non e' stata vista su uno schermo.
