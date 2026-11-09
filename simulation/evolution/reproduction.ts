@@ -5,6 +5,7 @@ import { inheritBrain, cloneBrainWithMutation } from "../biology/brain";
 import { createOrganism } from "../biology/organism";
 import { Planet } from "../planet/planet";
 import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped as bucketDistanceWrapped } from "../ecology/spatialIndex";
+import { areTouching, maxContactCells } from "../ecology/collision";
 
 const REPRODUCTION_ENERGY_THRESHOLD = 130;
 const REPRODUCTION_ENERGY_COST = 55;
@@ -59,6 +60,8 @@ export function reproduceOrganisms(
   planet: Planet,
   rng: Random,
   nextId: () => number,
+  /** v1.9.1 — con le collisioni, chi si tocca può accoppiarsi anche oltre il raggio di ricerca in celle. */
+  collisions = false,
 ): Organism[] {
   const offspring: Organism[] = [];
   const eligible = organisms.filter(
@@ -68,7 +71,8 @@ export function reproduceOrganisms(
       o.age >= o.genome.lifespan * MIN_REPRODUCTION_AGE_FRACTION,
   );
 
-  const buckets = buildOrganismBuckets(eligible, MATE_SEARCH_RADIUS);
+  const searchBucket = collisions ? Math.max(MATE_SEARCH_RADIUS, maxContactCells(eligible, planet)) : MATE_SEARCH_RADIUS;
+  const buckets = buildOrganismBuckets(eligible, searchBucket);
   const paired = new Set<number>();
 
   for (const organism of eligible) {
@@ -85,14 +89,14 @@ export function reproduceOrganisms(
     // Look for a nearby, genetically compatible, unpaired mate — only
     // among the small set of candidates in the same/adjacent buckets,
     // not the entire eligible population.
-    const candidates = nearbyOrganisms(organism.position, buckets, MATE_SEARCH_RADIUS);
+    const candidates = nearbyOrganisms(organism.position, buckets, searchBucket);
     let mate: Organism | null = null;
     let bestDistance = Infinity;
     for (const other of candidates) {
       if (other.id === organism.id || paired.has(other.id)) continue;
       if (!areGeneticallyCompatible(organism.genome, other.genome)) continue;
       const d = bucketDistanceWrapped(organism.position.x, organism.position.y, other.position.x, other.position.y, planet);
-      if (d <= MATE_SEARCH_RADIUS && d < bestDistance) {
+      if ((d <= MATE_SEARCH_RADIUS || (collisions && areTouching(organism, other, planet))) && d < bestDistance) {
         bestDistance = d;
         mate = other;
       }
