@@ -18,6 +18,16 @@ export function wrappedDelta(from: number, to: number, size: number): number {
   return d;
 }
 
+/**
+ * v1.10.1 — Peso della nuova direzione in un aggiornamento che avviene `dtMs` dopo il precedente, tale che la
+ * rotazione non dipenda da quanto spesso si disegna: 0,4 ogni 100 ms (come prima, a un tick per frame), e lo
+ * stesso effetto complessivo a 60 o a 144 aggiornamenti al secondo.
+ */
+export function headingBlendForDt(dtMs: number, baseBlend = 0.4, referenceMs = 100): number {
+  const dt = Math.max(0, dtMs);
+  return 1 - Math.pow(1 - baseBlend, dt / referenceMs);
+}
+
 /** Movement smaller than this (in cells) between frames does not change a creature's heading. */
 export const HEADING_MIN_MOVEMENT = 1e-3;
 
