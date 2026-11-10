@@ -6,7 +6,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../lib/creatureAnatomy";
-import { advanceHeading, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
+import { advanceHeading, headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
+import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
@@ -337,6 +338,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
+  // v1.10.1 — posizioni precedenti e attuali delle creature, solo per il disegno (non persistono, non entrano nei salvataggi).
+  const motionRef = useRef(createMotionBuffer());
 
   useEffect(() => {
     cameraModeRef.current = cameraMode;
@@ -569,6 +572,18 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     let lastFrameAt = 0;
     let animationFrameId = 0;
 
+    // v1.10.1 — Movimento continuo. Le creature si ridisegnano a ogni frame di rendering con le posizioni
+    // interpolate tra due frame del mondo, non solo quando ne arriva uno nuovo. Si ridisegna solo se c'è
+    // qualcosa da muovere (frame nuovo, interpolazione in corso, cambio di camera o di selezione): da fermo,
+    // in pausa, non si fa nulla.
+    let lastDrawnVersion = -1;
+    let lastDrawnAlpha = 1;
+    let lastDrawnFollowing = false;
+    let lastDrawnSelected: number | null = null;
+    let lastCreatureDrawAt = 0;
+    let creatureCostMs = 0; // costo medio di un aggiornamento delle creature
+    let creatureMinIntervalMs = 0; // se è alto, si ridisegna al massimo a 30 Hz
+
     // v1.7.0 — Terza persona. In modalità "follow" la camera non è più
     // governata da OrbitControls (che a ogni update() riporterebbe la camera
     // sulla sua orbita): la posa viene calcolata da updateFollowCamera.
@@ -624,9 +639,20 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (wantFollow && !followActive) enterFollow();
       else if (!wantFollow && followActive) leaveFollow();
 
+      // v1.10.1 — le posizioni da disegnare in questo istante (i dati reali del frame non si toccano).
+      const sceneRefs = sceneRef.current;
+      const realFrame = frameRef.current;
+      let view = realFrame;
+      let motionAlpha = 1;
+      if (realFrame) {
+        const interpolated = interpolatedFrame(realFrame, motionRef.current, nowMs);
+        view = interpolated.frame;
+        motionAlpha = interpolated.alpha;
+      }
+
       if (followActive) {
-        const refs = sceneRef.current;
-        const f = frameRef.current;
+        const refs = sceneRefs;
+        const f = view;
         const id = selectedIdRef.current;
         if (refs && f && id !== null) {
           const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
@@ -643,6 +669,27 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       // v1.9.5 — l'oceano respira sempre: in orbita scorre anche quando la camera
       // è ferma e il tick non rinfresca la texture (in follow ci pensa updateWater).
       if (!followActive) oceanWaves.offset.set((nowMs / 1000 * 0.02) % 1, (nowMs / 1000 * 0.013) % 1);
+
+      if (sceneRefs && view) {
+        const selected = selectedIdRef.current;
+        const motionVersion = motionRef.current.version;
+        const needsDraw =
+          motionVersion !== lastDrawnVersion || lastDrawnAlpha < 1 || followActive !== lastDrawnFollowing || selected !== lastDrawnSelected;
+        if (needsDraw && nowMs - lastCreatureDrawAt >= creatureMinIntervalMs) {
+          const startedAt = performance.now();
+          const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
+          // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
+          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, headingBlendForDt(dtDraw));
+          updateSelectionRing(sceneRefs, view, followActive ? null : selected);
+          creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
+          creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
+          lastDrawnVersion = motionVersion;
+          lastDrawnAlpha = motionAlpha;
+          lastDrawnFollowing = followActive;
+          lastDrawnSelected = selected;
+          lastCreatureDrawAt = nowMs;
+        }
+      }
       renderer.render(scene, camera);
       if (lastFrameAt > 0) {
         const dt = nowMs - lastFrameAt;
@@ -866,20 +913,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Per-frame: update creature instances and reposition the selection
-  // ring from the latest RenderFrame — without rebuilding any Three.js
-  // objects. v1.1 — no longer repaints the terrain texture here (that's
-  // driven by viewportFrame below, on its own on-demand cadence).
+  // v1.10.1 — A ogni frame nuovo del mondo si registrano le posizioni (la precedente diventa il punto di
+  // partenza dell'interpolazione). Il disegno delle creature e dell'anello di selezione non avviene più
+  // qui: lo fa il ciclo di rendering a ogni frame, con le posizioni interpolate (vedi renderLoop).
+  // v1.1 — il terreno non si ridipinge qui (lo guida viewportFrame, qui sotto, con una cadenza sua).
   useEffect(() => {
-    const refs = sceneRef.current;
-    if (!refs || !frame) return;
-
-    // v1.7.0 — in terza persona l'animale seguito va sempre disegnato (anche se il
-    // campionamento per densità lo escluderebbe) e non ha l'anello di selezione.
-    const following = cameraMode === "follow";
-    updateCreatureInstances(refs, frame, following ? selectedIdRef.current : null, following ? FOLLOW_CREATURE_RANGE_UNITS : null);
-    updateSelectionRing(refs, frame, following ? null : selectedIdRef.current);
-  }, [frame, cameraMode]);
+    if (!frame) return;
+    ingestMotionFrame(motionRef.current, frame, performance.now());
+  }, [frame]);
 
   // v1.1 — repaints the terrain texture only when a new ViewportFrame
   // arrives (on LOD-tier change or periodic refresh — see the mount
@@ -1296,7 +1337,7 @@ export function updateFollowCamera(
       const x = frame.organismsX[index];
       const y = frame.organismsY[index];
       if (state.hasPosition) {
-        state.heading = nextHeading(state.heading, wrappedDelta(state.x, x, planetWidth), wrappedDelta(state.y, y, planetHeight));
+        state.heading = nextHeading(state.heading, wrappedDelta(state.x, x, planetWidth), wrappedDelta(state.y, y, planetHeight), headingBlendForDt(dtMs));
       }
       state.x = x;
       state.y = y;
@@ -1384,6 +1425,8 @@ export function updateCreatureInstances(
   forceOrganismId: number | null = null,
   /** v1.9.0 — se indicato (e c'è un animale obbligato), si disegnano solo le creature entro questo raggio da lui. */
   cullRangeUnits: number | null = null,
+  /** v1.10.1 — peso della nuova direzione in questo aggiornamento (dipende dal tempo trascorso, vedi headingBlendForDt). */
+  headingBlend = 0.4,
 ): void {
   const {
     organismsX,
@@ -1480,7 +1523,7 @@ export function updateCreatureInstances(
     if (track) {
       const dxCells = wrappedDelta(track.x, x, planetWidth);
       const dyCells = wrappedDelta(track.y, y, planetHeight);
-      advanceHeading(track, dxCells, dyCells);
+      advanceHeading(track, dxCells, dyCells, headingBlend);
       // v1.8.0 — il passo avanza con la strada fatta: una falcata (mezzo ciclo) ogni ~1,6 lunghezze di corpo.
       const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
       walking = travelled > 1e-5;
