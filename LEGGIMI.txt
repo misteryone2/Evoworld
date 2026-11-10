@@ -1,23 +1,27 @@
-EvoWorld v1.10.0 - Genoma delle piante (scollegato dalla simulazione)
+EvoWorld v1.10.1 - Continuous Movement (Natural Motion & Animation 1/5)
 
-Pacchetto incrementale sulla v1.9.1 (carica prima v1.9.0 e v1.9.1, poi questo).
+Pacchetto incrementale sulla versione attuale del repository (main).
 Carica TUTTI i file prima del deploy (una cartella alla volta).
 
-simulation/biology/
-  plantGenome.ts (NUOVO)
+(radice)
+  CHANGELOG.md (NUOVO)
+
+components/simulation/
+  Planet3DView.tsx (sostituisce)
 
 lib/
-  flora.ts (sostituisce)
+  motionInterpolation.ts (NUOVO)
+  creatureHeading.ts (sostituisce)
 
 tests/
-  plantGenome.test.ts (NUOVO)
-  flora.test.ts (sostituisce)
+  motionInterpolation.test.ts (NUOVO)
 
-Cosa fa: 17 tratti ereditabili per le piante (morfologia ed ecologia), con
-mutazione, ricombinazione, distanza genetica e genoma medio. La flora 3D ora
-ricava ogni pianta da questo genoma, ma l'aspetto e' identico a prima
-(verificato su oltre mille celle e tutti i tipi di pianta). Nessuna parte della
-simulazione lo legge: le piante non evolvono ancora e i tratti ecologici sono inerti.
+ATTENZIONE: Planet3DView.tsx e' la versione di main (con ombre, acqua e onde delle
+v1.9.2-1.9.6) piu' le modifiche della v1.10.1. Se hai modificato Planet3DView.tsx
+dopo il 9 novembre alle 14:00, dimmelo prima di sostituirlo.
 
-Verifiche in sandbox: type-check e build verdi; test 473 su 475 (le 2 failure
-note sono in tests/reproduction.test.ts, gia' presenti nella v1.8.0).
+Cosa fa: le creature si muovono in modo continuo tra un tick e l'altro (interpolazione
+toroidale, solo visiva). Nessun file di simulation/, workers/ o types/ e' cambiato.
+
+Verifiche in sandbox: type-check e build verdi; test 500 su 502 (le 2 failure note sono
+in tests/reproduction.test.ts). Non verificato: la resa su telefono e su PC.
