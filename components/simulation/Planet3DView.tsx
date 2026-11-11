@@ -89,6 +89,12 @@ const FOLLOW_PITCH_MAX = 1.0;
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
+/**
+ * v1.10.8 — Camera libera: velocità del punto d'osservazione verso il punto toccato (unità del mondo
+ * al secondo) e scala della posa (camera più alta e lontana di quella che incornicia una creatura).
+ */
+const FREE_MOVE_UNITS_PER_SEC = 1.6;
+const FREE_CAMERA_SCALE = 2.2;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
@@ -149,8 +155,12 @@ const TERRAIN_SWATCHES: Record<number, string> = {
   6: "#a68a3c",
 };
 
-/** v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato. */
-export type CameraMode = "orbit" | "follow";
+/**
+ * v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato.
+ * v1.10.8 — "free": terza persona SLEGATA dagli esseri: il punto d'osservazione è un punto qualunque della
+ * superficie (non un animale); si sposta verso il punto toccato e la camera lo incornicia da dietro.
+ */
+export type CameraMode = "orbit" | "follow" | "free";
 
 interface Props {
   frame: RenderFrame | null;
@@ -683,9 +693,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     };
 
     const renderLoop = (nowMs: number) => {
+      // v1.10.8 — "free" condivide con "follow" la scena da vicino (cielo, foschia, terreno locale, ombre):
+      // cambia solo chi decide la posa della camera (updateFreeCamera invece di updateFollowCamera).
       const wantFollow = cameraModeRef.current === "follow";
-      if (wantFollow && !followActive) enterFollow();
-      else if (!wantFollow && followActive) leaveFollow();
+      const wantFree = cameraModeRef.current === "free";
+      const wantSurface = wantFollow || wantFree;
+      if (wantSurface && !followActive) enterFollow();
+      else if (!wantSurface && followActive) leaveFollow();
 
       // v1.10.1 — le posizioni da disegnare in questo istante (i dati reali del frame non si toccano).
       const sceneRefs = sceneRef.current;
@@ -702,10 +716,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         const refs = sceneRefs;
         const f = view;
         const id = selectedIdRef.current;
-        if (refs && f && id !== null) {
+        if (refs && f) {
           const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
-          const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
-          if (replacement !== null) onSelectRef.current?.(replacement);
+          if (wantFollow && id !== null) {
+            const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
+            if (replacement !== null) onSelectRef.current?.(replacement);
+          } else if (wantFree) {
+            // v1.10.8 — camera libera: il punto d'osservazione avanza verso il punto toccato.
+            updateFreeCamera(refs, f, follow, nowMs, dt);
+          }
           // Il sole segue chi guarda: dall'altra parte del pianeta sarebbe notte e non si vedrebbe niente.
           placeFollowSun(sun, camera.position, follow.target, follow.up);
           // v1.9.4 — Acqua: la superficie locale scorre col tempo reale, non col tick.
@@ -739,8 +758,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           const startedAt = performance.now();
           const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
           // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
-          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw);
-          updateSelectionRing(sceneRefs, view, followActive ? null : selected);
+          // v1.10.8 — in camera libera nessun animale è obbligato e l'anello di selezione resta visibile.
+          const forcing = followActive && wantFollow;
+          updateCreatureInstances(sceneRefs, view, forcing ? selected : null, forcing ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw);
+          updateSelectionRing(sceneRefs, view, forcing ? null : selected);
           creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
           creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
           lastDrawnVersion = motionVersion;
@@ -913,6 +934,18 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (hits.length > 0 && hits[0].instanceId !== undefined && sceneRef.current) {
         const organismId = sceneRef.current.instanceOrganismId[hits[0].instanceId];
         onSelectRef.current?.(organismId);
+      } else if (cameraModeRef.current === "free") {
+        // v1.10.8 — in camera libera un tocco sul terreno lo raggiunge: il punto d'osservazione ci va da solo.
+        const groundHits = raycaster.intersectObject(planetMesh);
+        if (groundHits.length > 0) {
+          const p = groundHits[0].point;
+          const grid = directionToGrid([p.x, p.y, p.z], frameRef.current?.planetWidth ?? 0, frameRef.current?.planetHeight ?? 0);
+          if (grid.x > 0 || grid.y > 0) {
+            follow.goalX = grid.x;
+            follow.goalY = grid.y;
+            follow.hasGoal = true;
+          }
+        }
       } else if (!followActive) {
         // In terza persona un tocco sul vuoto non deseleziona: si smette di seguire dal pulsante.
         onSelectRef.current?.(null);
@@ -1176,7 +1209,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         aria-label={
           cameraMode === "follow"
             ? "Vista in terza persona su un animale — trascina per guardarti intorno, tocca un altro animale per seguirlo"
-            : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
+            : cameraMode === "free"
+              ? "Vista in terza persona libera — trascina per guardarti intorno, tocca il terreno per andarci"
+              : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
         }
       />
       <ul className="biome-legend" aria-label="Legenda dei biomi">
@@ -1378,6 +1413,10 @@ export interface FollowState {
   lastInteractAt: number;
   /** Da quando (ms) l'animale non c'è più nei frame, o null. */
   missingSince: number | null;
+  /** v1.10.8 — camera libera: punto della superficie verso cui il punto d'osservazione sta andando (coordinate griglia). */
+  goalX: number;
+  goalY: number;
+  hasGoal: boolean;
 }
 
 export function createFollowState(): FollowState {
@@ -1398,6 +1437,9 @@ export function createFollowState(): FollowState {
     dragging: false,
     lastInteractAt: 0,
     missingSince: null,
+    goalX: 0,
+    goalY: 0,
+    hasGoal: false,
   };
 }
 
@@ -1412,6 +1454,7 @@ export function resetFollowState(state: FollowState): void {
   state.pitch = 0;
   state.dragging = false;
   state.missingSince = null;
+  state.hasGoal = false;
 }
 
 /** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
@@ -1550,6 +1593,106 @@ export function updateFollowCamera(
   refs.camera.up.copy(state.up);
   refs.camera.lookAt(state.target);
   return replacement;
+}
+
+/**
+ * v1.10.8 — Camera libera: terza persona slegata dagli esseri. Il punto d'osservazione è un punto
+ * qualunque della superficie (non un animale): avanza da solo verso il punto toccato (state.hasGoal)
+ * e la camera lo incornicia da dietro, con la stessa matematica di posa, smorzamento e collisione
+ * col terreno della terza persona (computeFollowPose, clampCameraRadius). Trascinando si guarda
+ * intorno come in "follow"; senza tocchi la camera torna dietro il punto d'osservazione.
+ * Scrive anche state.x/y, così il terreno locale ad alto dettaglio segue il punto d'osservazione.
+ */
+export function updateFreeCamera(
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
+  frame: RenderFrame,
+  state: FollowState,
+  nowMs: number,
+  dtMs: number,
+): void {
+  const { planetWidth, planetHeight } = frame;
+
+  // All'ingresso (o al cambio di mondo) il punto d'osservazione parte dal centro della mappa, guardando nord.
+  if (!state.hasPosition) {
+    state.x = planetWidth / 2;
+    state.y = planetHeight / 2;
+    state.hasPosition = true;
+    state.heading = { hx: 0, hy: -1 };
+    state.hasGoal = false;
+  }
+
+  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap, a velocità costante.
+  if (state.hasGoal) {
+    const dx = wrappedDelta(state.x, state.goalX, planetWidth);
+    const dy = wrappedDelta(state.y, state.goalY, planetHeight);
+    const distCells = Math.hypot(dx, dy);
+    const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
+    const stepCells = (FREE_MOVE_UNITS_PER_SEC * (dtMs / 1000)) / cellUnits;
+    if (distCells <= stepCells || distCells < 1e-9) {
+      state.x = state.goalX;
+      state.y = state.goalY;
+      state.hasGoal = false;
+    } else {
+      const k = stepCells / distCells;
+      state.x += dx * k;
+      state.y += dy * k;
+      // mentre va, la camera guarda dove sta andando
+      state.heading = nextHeading(state.heading, dx * k, dy * k, headingBlendForDt(dtMs));
+    }
+  }
+
+  // Dopo un po' senza tocchi la camera torna dietro il punto d'osservazione (come in follow).
+  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
+    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
+    state.yaw = easeAngleToZero(state.yaw, a);
+    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
+  }
+
+  const restingR = restingRadius(refs, state.x, state.y, 0.02);
+  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
+  fcNormal.set(point.normalX, point.normalY, point.normalZ);
+  const hx = state.heading?.hx ?? 0;
+  const hy = state.heading?.hy ?? -1;
+  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
+  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
+  if (fcTangent.lengthSq() < 1e-12) {
+    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+  }
+  fcTangent.normalize();
+
+  const pose = computeFollowPose({
+    point: [point.x, point.y, point.z],
+    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
+    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
+    scale: FREE_CAMERA_SCALE,
+    yaw: state.yaw,
+    pitch: state.pitch,
+  });
+
+  // La camera non deve finire dentro una collina (come in follow).
+  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
+  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(FREE_CAMERA_SCALE);
+  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
+
+  fcDesired.set(cam[0], cam[1], cam[2]);
+  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
+
+  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
+    state.position.copy(fcDesired);
+    state.target.copy(fcDesiredTarget);
+    state.up.copy(fcNormal);
+    state.hasPose = true;
+  } else {
+    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
+    state.position.lerp(fcDesired, a);
+    state.target.lerp(fcDesiredTarget, a);
+    state.up.lerp(fcNormal, a).normalize();
+  }
+
+  refs.camera.position.copy(state.position);
+  refs.camera.up.copy(state.up);
+  refs.camera.lookAt(state.target);
 }
 
 /**
@@ -1902,3 +2045,4 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
+
