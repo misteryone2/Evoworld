@@ -1,3 +1,5 @@
+import { normalizedSpeed } from "../lib/bodyAnimation";
+import { creatureScale } from "../lib/worldScale";
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import {
@@ -163,10 +165,19 @@ describe("v1.8.0 — fauna: zampe, ombra, orecchie, sfumatura", () => {
     expect(swings.size).toBeGreaterThan(4);
   });
 
-  it("in diagonale: zampa 0 e 3 oscillano in fase, 0 e 1 in controfase", () => {
+  it("in diagonale: zampa 0 e 3 oscillano in fase, 0 e 1 in controfase (al trotto)", () => {
     const r = makeRefs(3);
-    updateCreatureInstances(r, frameAt(100, 200));
-    updateCreatureInstances(r, frameAt(100.6, 200));
+    // v1.10.3 — l'andatura dipende dalla velocità: si porta la creatura a una velocità di trotto (non più un trotto fisso).
+    let x = 100;
+    updateCreatureInstances(r, frameAt(x, 200));
+    for (let k = 0; k < 30; k++) {
+      x += 0.55;
+      updateCreatureInstances(r, frameAt(x, 200));
+    }
+    const track = [...r.creatureTrack.values()][0];
+    const vn = normalizedSpeed(track.motion.visSpeed, creatureScale(frameAt(x, 200).organismsSize[0]));
+    expect(vn).toBeGreaterThan(0.55);
+    expect(vn).toBeLessThan(0.85);
     // angolo di rotazione attorno a X di ciascuna zampa, dalla matrice locale rispetto al corpo
     const angle = (n: number) => {
       const q = new THREE.Quaternion();
@@ -176,10 +187,28 @@ describe("v1.8.0 — fauna: zampe, ombra, orecchie, sfumatura", () => {
       const rel = body.clone().invert().multiply(q);
       return 2 * Math.atan2(rel.x, rel.w);
     };
-    expect(angle(0)).toBeCloseTo(angle(3), 5);
-    expect(angle(1)).toBeCloseTo(angle(2), 5);
-    expect(angle(0)).toBeCloseTo(-angle(1), 5);
-    expect(Math.abs(angle(0))).toBeGreaterThan(0.01);
+    // (il corpo si inclina un poco in accelerazione: l'angolo relativo al corpo resta quello delle zampe)
+    expect(angle(0)).toBeCloseTo(angle(3), 2);
+    expect(angle(1)).toBeCloseTo(angle(2), 2);
+    expect(angle(0)).toBeCloseTo(-angle(1), 2);
+  });
+
+  it("v1.10.3 — a bassa velocità si cammina (sequenza laterale), non si trotta", () => {
+    const r = makeRefs(3);
+    let x = 100;
+    updateCreatureInstances(r, frameAt(x, 200));
+    for (let k = 0; k < 30; k++) {
+      x += 0.15;
+      updateCreatureInstances(r, frameAt(x, 200));
+    }
+    const angle = (n: number) => {
+      const q = new THREE.Quaternion();
+      matrixAt(r.legMesh, n).decompose(new THREE.Vector3(), q, new THREE.Vector3());
+      const body = new THREE.Quaternion();
+      matrixAt(r.bodyMesh, 0).decompose(new THREE.Vector3(), body, new THREE.Vector3());
+      return 2 * Math.atan2(body.clone().invert().multiply(q).x, body.clone().invert().multiply(q).w);
+    };
+    expect(Math.abs(angle(0) - angle(3))).toBeGreaterThan(1e-3); // le diagonali non vanno più insieme
   });
 
   it("gli erbivori hanno le orecchie, i predatori no (solo al dettaglio 3)", () => {
