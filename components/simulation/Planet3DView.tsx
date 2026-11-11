@@ -6,8 +6,10 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../lib/creatureAnatomy";
-import { advanceHeading, headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
+import { headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
+import { createVisualMotion, stepVisualMotion, type VisualMotion } from "../../lib/naturalMotion";
+import { advancePhase, computeBodyPose, createBodyPose } from "../../lib/bodyAnimation";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
@@ -176,6 +178,8 @@ interface HeightmapSample {
  * niente oggetti nuovi per creatura, e quindi meno lavoro per il garbage collector.
  */
 export interface CreatureTrack extends MutableHeading {
+  /** v1.10.2 — rotazione, velocità e inclinazione visive (temporanee, solo per il disegno). */
+  motion: VisualMotion;
   x: number;
   y: number;
   phase: number;
@@ -191,6 +195,18 @@ export interface CreatureTrack extends MutableHeading {
 
 let trackGeneration = 0;
 const tmpDrawn: XY = { x: 0, y: 0 };
+// v1.10.3 — animazione del corpo: posa e matrici di lavoro riusate per ogni creatura (nessuna allocazione per frame)
+const tmpPose = createBodyPose();
+const tmpHeadParent = new THREE.Matrix4();
+const tmpHeadLocal = new THREE.Matrix4();
+const tmpNeckBack = new THREE.Matrix4();
+const tmpHeadQuat = new THREE.Quaternion();
+const tmpTailQuat = new THREE.Quaternion();
+const tmpPoseEuler = new THREE.Euler();
+const tmpPoseVec = new THREE.Vector3();
+const ONE_VEC = new THREE.Vector3(1, 1, 1);
+const tmpLeanEuler = new THREE.Euler();
+const tmpLeanQuat = new THREE.Quaternion();
 const tmpPoint: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
 const tmpAhead: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
 
@@ -679,7 +695,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           const startedAt = performance.now();
           const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
           // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
-          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, headingBlendForDt(dtDraw));
+          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw);
           updateSelectionRing(sceneRefs, view, followActive ? null : selected);
           creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
           creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
@@ -1306,7 +1322,7 @@ const fcDesiredTarget = new THREE.Vector3();
  * altrimenti null. Finché l'animale manca la camera resta dove l'ha visto.
  */
 export function updateFollowCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local" | "creatureTrack">>,
   frame: RenderFrame,
   selectedId: number,
   state: FollowState,
@@ -1362,6 +1378,18 @@ export function updateFollowCamera(
     const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
     state.yaw = easeAngleToZero(state.yaw, a);
     state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
+  }
+
+  // v1.10.2 — la camera guarda dove è girata la creatura (la sua rotazione visiva graduale), non una direzione propria
+  // più veloce: altrimenti la creatura sembrerebbe ruotare rispetto alla camera.
+  const visual = refs.creatureTrack?.get(selectedId)?.motion;
+  if (visual && visual.hasYaw) {
+    if (state.heading) {
+      state.heading.hx = Math.cos(visual.yaw);
+      state.heading.hy = Math.sin(visual.yaw);
+    } else {
+      state.heading = { hx: Math.cos(visual.yaw), hy: Math.sin(visual.yaw) };
+    }
   }
 
   const scale = creatureScale(state.size);
@@ -1425,8 +1453,8 @@ export function updateCreatureInstances(
   forceOrganismId: number | null = null,
   /** v1.9.0 — se indicato (e c'è un animale obbligato), si disegnano solo le creature entro questo raggio da lui. */
   cullRangeUnits: number | null = null,
-  /** v1.10.1 — peso della nuova direzione in questo aggiornamento (dipende dal tempo trascorso, vedi headingBlendForDt). */
-  headingBlend = 0.4,
+  /** v1.10.1/2 — millisecondi dall'aggiornamento precedente: rotazione, velocità e inclinazione visive dipendono dal tempo. */
+  dtMs = 100,
 ): void {
   const {
     organismsX,
@@ -1519,19 +1547,25 @@ export function updateCreatureInstances(
     // (keeps its previous heading while it stands still; first sight of a
     // creature faces north until it moves).
     let track = refs.creatureTrack.get(id);
-    let walking = false;
     if (track) {
       const dxCells = wrappedDelta(track.x, x, planetWidth);
       const dyCells = wrappedDelta(track.y, y, planetHeight);
-      advanceHeading(track, dxCells, dyCells, headingBlend);
+      // v1.10.2 — rotazione graduale e velocità/inclinazione visive (la posizione resta quella interpolata)
+      const travelledUnitsNow = Math.hypot(dxCells, dyCells) * cellUnits;
+      stepVisualMotion(track.motion, dxCells, dyCells, travelledUnitsNow, dtMs, organismsSize[i], creatureScale(organismsSize[i]));
+      if (track.motion.hasYaw) {
+        track.hx = Math.cos(track.motion.yaw);
+        track.hy = Math.sin(track.motion.yaw);
+        track.hasHeading = true;
+      }
       // v1.8.0 — il passo avanza con la strada fatta: una falcata (mezzo ciclo) ogni ~1,6 lunghezze di corpo.
       const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
-      walking = travelled > 1e-5;
-      track.phase = (track.phase + (travelled / (creatureScale(organismsSize[i]) * 1.6)) * Math.PI) % (Math.PI * 2);
+      // v1.10.3 — la fase del passo avanza con la velocità visualizzata: la cadenza è proporzionale alla velocità e, da ferma, si ferma
+      track.phase = advancePhase(track.phase, track.motion.visSpeed, dtMs, creatureScale(organismsSize[i]));
       track.x = x;
       track.y = y;
     } else {
-      track = { x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
+      track = { motion: createVisualMotion(), x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
       refs.creatureTrack.set(id, track);
     }
     track.gen = generation;
@@ -1547,6 +1581,11 @@ export function updateCreatureInstances(
     tmpRight.crossVectors(tmpNormal, tmpTangent);
     tmpBasis.makeBasis(tmpRight, tmpNormal, tmpTangent);
     tmpQuaternion.setFromRotationMatrix(tmpBasis);
+    // v1.10.2 — il corpo si inclina in curva (attorno all'asse di marcia) e in accelerazione/frenata (attorno a quello trasversale)
+    if (track.motion.roll !== 0 || track.motion.pitch !== 0) {
+      tmpLeanQuat.setFromEuler(tmpLeanEuler.set(track.motion.pitch, 0, track.motion.roll, "XYZ"));
+      tmpQuaternion.multiply(tmpLeanQuat);
+    }
 
     // v1.9.0 — l'anatomia dipende solo dai geni: si ricalcola solo se sono cambiati.
     const gSpeed = organismsSpeed[i];
@@ -1574,16 +1613,32 @@ export function updateCreatureInstances(
     const hasLegs = refs.detail >= 2;
     const lift = hasLegs ? anatomy.legLength * 0.97 + anatomy.bodyHalfHeight * 0.4 : anatomy.bodyHalfHeight * 0.8;
 
-    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, 0, lift, 0, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
-    setPart(refs.headMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
+    // v1.10.3 — posa del corpo in cammino: zampe, corpo, testa e coda (dallo stato visivo, vedi lib/bodyAnimation.ts)
+    computeBodyPose(tmpPose, phase, track.motion, baseScale, anatomy);
+    // La testa (con occhi, mandibola e orecchie) ruota attorno al collo e segue il corpo; se non c'è movimento si usa la matrice della creatura.
+    let headParent = tmpCreatureMatrix;
+    if (tmpPose.headPitch !== 0 || tmpPose.headYaw !== 0 || tmpPose.bobY !== 0 || tmpPose.swayX !== 0 || tmpPose.surgeZ !== 0) {
+      const neckY = lift + anatomy.headY * 0.5;
+      const neckZ = anatomy.bodyHalfLength * 0.85;
+      tmpHeadQuat.setFromEuler(tmpPoseEuler.set(tmpPose.headPitch, tmpPose.headYaw, 0, "YXZ"));
+      tmpHeadLocal.compose(tmpPoseVec.set(tmpPose.swayX, neckY + tmpPose.bobY, neckZ + tmpPose.surgeZ), tmpHeadQuat, ONE_VEC);
+      tmpHeadLocal.multiply(tmpNeckBack.makeTranslation(0, -neckY, -neckZ));
+      tmpHeadParent.multiplyMatrices(tmpCreatureMatrix, tmpHeadLocal);
+      headParent = tmpHeadParent;
+    }
+
+    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, tmpPose.surgeZ, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
+    setPart(refs.headMesh, writeIndex, headParent, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
     // v1.6.0 — lighter profiles skip the finer parts entirely: eyes, tail
     // and jaw from detail 2, dorsal spikes only at detail 3.
     if (refs.detail >= 2) {
-      setPart(refs.eyeMesh, writeIndex * 2, tmpCreatureMatrix, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
-      setPart(refs.eyeMesh, writeIndex * 2 + 1, tmpCreatureMatrix, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
-      setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, 0, lift, anatomy.tailZ, Q_TIP_BACK, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
+      setPart(refs.eyeMesh, writeIndex * 2, headParent, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+      setPart(refs.eyeMesh, writeIndex * 2 + 1, headParent, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+      // la coda oscilla col passo e fa da contrappeso in curva (la rotazione si compone con quella che la fa puntare indietro)
+      tmpTailQuat.setFromEuler(tmpPoseEuler.set(tmpPose.tailPitch, tmpPose.tailYaw, 0, "YXZ")).multiply(Q_TIP_BACK);
+      setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, anatomy.tailZ + tmpPose.surgeZ, tmpTailQuat, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
       if (anatomy.jawVisible) {
-        setPart(refs.jawMesh, writeIndex, tmpCreatureMatrix, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
+        setPart(refs.jawMesh, writeIndex, headParent, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
       } else {
         refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
       }
@@ -1594,8 +1649,8 @@ export function updateCreatureInstances(
       for (let n = 0; n < LEGS_PER_CREATURE; n++) {
         const side = n % 2 === 0 ? -1 : 1;
         const front = n < 2;
-        const swing = walking ? Math.sin(phase + (n === 0 || n === 3 ? 0 : Math.PI)) * 0.55 : 0;
-        tmpLegQuat.setFromAxisAngle(AXIS_X, swing);
+        // v1.10.3 — oscillazione dalla posa: andatura (passo, trotto, galoppo) e ampiezza che va a zero da ferma
+        tmpLegQuat.setFromAxisAngle(AXIS_X, tmpPose.legSwing[n]);
         setPart(
           refs.legMesh,
           writeIndex * LEGS_PER_CREATURE + n,
@@ -1619,7 +1674,7 @@ export function updateCreatureInstances(
         if (anatomy.earVisible) {
           const side = n === 0 ? -1 : 1;
           tmpLegQuat.setFromAxisAngle(AXIS_Z, -side * 0.35);
-          setPart(refs.earMesh, slot, tmpCreatureMatrix, side * anatomy.earX, lift + anatomy.earY, anatomy.earZ, tmpLegQuat, anatomy.earRadius / CONE_BASE_RADIUS, anatomy.earHeight, anatomy.earRadius / CONE_BASE_RADIUS);
+          setPart(refs.earMesh, slot, headParent, side * anatomy.earX, lift + anatomy.earY, anatomy.earZ, tmpLegQuat, anatomy.earRadius / CONE_BASE_RADIUS, anatomy.earHeight, anatomy.earRadius / CONE_BASE_RADIUS);
         } else {
           refs.earMesh.setMatrixAt(slot, ZERO_MATRIX);
         }
@@ -1655,9 +1710,9 @@ export function updateCreatureInstances(
           refs.spikeMesh,
           slot,
           tmpCreatureMatrix,
-          0,
-          lift + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45,
-          spike.z,
+          tmpPose.swayX,
+          lift + tmpPose.bobY + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45,
+          spike.z + tmpPose.surgeZ,
           Q_IDENTITY,
           spike.radius / CONE_BASE_RADIUS,
           spike.height,
