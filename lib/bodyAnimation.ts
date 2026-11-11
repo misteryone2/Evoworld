@@ -78,6 +78,8 @@ export interface BodyPose {
   /** Coda: oscillazione orizzontale e verticale (rad). */
   tailYaw: number;
   tailPitch: number;
+  /** v1.10.4 — respirazione: variazione relativa della sezione del torace (0 = a riposo, ±0,03 circa). */
+  breath: number;
 }
 
 export function createBodyPose(): BodyPose {
@@ -94,6 +96,7 @@ export function createBodyPose(): BodyPose {
     headYaw: 0,
     tailYaw: 0,
     tailPitch: 0,
+    breath: 0,
   };
 }
 
@@ -129,6 +132,7 @@ function clearPose(out: BodyPose): void {
   out.bobY = out.swayX = out.surgeZ = 0;
   out.headPitch = out.headYaw = 0;
   out.tailYaw = out.tailPitch = 0;
+  out.breath = 0;
 }
 
 /**
@@ -176,6 +180,7 @@ export function computeBodyPose(out: BodyPose, phase: number, motion: MotionInpu
   const tailScale = 0.8 / Math.sqrt(Math.max(0.4, anatomy.tailLength));
   out.tailYaw = 0.22 * tailScale * vigor * Math.sin(TWO_PI * cycle + Math.PI) + clamp(turnSign * motion.turnRate * 0.05, -0.35, 0.35) * Math.min(1, 0.4 + vn);
   out.tailPitch = 0.1 * tailScale * vigor * Math.sin(2 * TWO_PI * cycle + Math.PI / 2);
+  out.breath = 0;
 }
 
 /**

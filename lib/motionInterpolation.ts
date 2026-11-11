@@ -37,6 +37,9 @@ export interface MotionState {
   prevY: number;
   currX: number;
   currY: number;
+  /** v1.10.4 — energia vista nell'ultimo frame e guadagno per tick rispetto al frame prima (0 se non c'è il dato). */
+  energy: number;
+  gain: number;
   /** Frame in cui la creatura è stata vista l'ultima volta (per scartare chi non c'è più). */
   gen: number;
 }
@@ -60,6 +63,8 @@ export interface MotionBuffer {
   outY: Float32Array;
   viewX: Float32Array;
   viewY: Float32Array;
+  outGain: Float32Array;
+  viewGain: Float32Array;
 }
 
 export function createMotionBuffer(): MotionBuffer {
@@ -78,6 +83,8 @@ export function createMotionBuffer(): MotionBuffer {
     outY: new Float32Array(0),
     viewX: new Float32Array(0),
     viewY: new Float32Array(0),
+    outGain: new Float32Array(0),
+    viewGain: new Float32Array(0),
   };
 }
 
@@ -116,6 +123,8 @@ export interface MotionFrameInput {
   organismsId: ArrayLike<number>;
   organismsX: ArrayLike<number>;
   organismsY: ArrayLike<number>;
+  /** v1.10.4 — facoltativa. */
+  organismsEnergy?: ArrayLike<number>;
 }
 
 /**
@@ -137,6 +146,7 @@ export function ingestMotionFrame(buffer: MotionBuffer, frame: MotionFrameInput,
   const alphaNow = motionAlpha(buffer, nowMs); // dov'è disegnata ora ciascuna creatura, per ripartire da lì
   const jumpLimit = MAX_CELLS_PER_TICK * Math.max(1, tickAdvance) + JUMP_MARGIN_CELLS;
 
+  const energies = frame.organismsEnergy;
   const generation = ++buffer.generation;
   if (buffer.slots.length < n) buffer.slots.length = n;
   else buffer.slots.length = n;
@@ -148,7 +158,7 @@ export function ingestMotionFrame(buffer: MotionBuffer, frame: MotionFrameInput,
     let state = buffer.states.get(id);
     if (!state) {
       // Nascita (o prima volta che si vede): compare dov'è, senza strada da fare.
-      state = { prevX: x, prevY: y, currX: x, currY: y, gen: generation };
+      state = { prevX: x, prevY: y, currX: x, currY: y, energy: energies ? energies[i] : 0, gain: 0, gen: generation };
       buffer.states.set(id, state);
     } else if (snapAll) {
       state.prevX = x;
@@ -171,6 +181,14 @@ export function ingestMotionFrame(buffer: MotionBuffer, frame: MotionFrameInput,
       }
       state.currX = x;
       state.currY = y;
+    }
+    // v1.10.4 — energia guadagnata per tick tra l'ultimo frame e questo (solo per l'animazione: mangia / non mangia)
+    if (energies) {
+      const e = energies[i];
+      state.gain = state.gen === generation - 1 && tickAdvance > 0 ? (e - state.energy) / tickAdvance : 0;
+      state.energy = e;
+    } else {
+      state.gain = 0;
     }
     state.gen = generation;
     buffer.slots[i] = state;
@@ -198,6 +216,8 @@ export function ingestMotionFrame(buffer: MotionBuffer, frame: MotionFrameInput,
 export interface InterpolatedPositions {
   x: Float32Array;
   y: Float32Array;
+  /** v1.10.4 — energia guadagnata per tick (per l'animazione). */
+  gain: Float32Array;
   alpha: number;
 }
 
@@ -211,20 +231,25 @@ export function interpolatedPositions(buffer: MotionBuffer, nowMs: number): Inte
     const capacity = Math.max(n, buffer.outX.length * 2, 64);
     buffer.outX = new Float32Array(capacity);
     buffer.outY = new Float32Array(capacity);
+    buffer.outGain = new Float32Array(capacity);
     buffer.viewX = buffer.outX.subarray(0, n);
     buffer.viewY = buffer.outY.subarray(0, n);
+    buffer.viewGain = buffer.outGain.subarray(0, n);
   } else if (buffer.viewX.length !== n || buffer.viewX.buffer !== buffer.outX.buffer) {
     buffer.viewX = buffer.outX.subarray(0, n);
     buffer.viewY = buffer.outY.subarray(0, n);
+    buffer.viewGain = buffer.outGain.subarray(0, n);
   }
   const alpha = motionAlpha(buffer, nowMs);
   const W = buffer.planetWidth;
   const H = buffer.planetHeight;
   const outX = buffer.outX;
   const outY = buffer.outY;
+  const outGain = buffer.outGain;
   const slots = buffer.slots;
   for (let i = 0; i < n; i++) {
     const s = slots[i];
+    outGain[i] = s.gain;
     if (alpha >= 1 || (s.prevX === s.currX && s.prevY === s.currY)) {
       outX[i] = s.currX;
       outY[i] = s.currY;
@@ -233,7 +258,7 @@ export function interpolatedPositions(buffer: MotionBuffer, nowMs: number): Inte
       outY[i] = lerpWrapped(s.prevY, s.currY, alpha, H);
     }
   }
-  return { x: buffer.viewX, y: buffer.viewY, alpha };
+  return { x: buffer.viewX, y: buffer.viewY, gain: buffer.viewGain, alpha };
 }
 
 /**
@@ -242,10 +267,10 @@ export function interpolatedPositions(buffer: MotionBuffer, nowMs: number): Inte
  * stato registrato) si restituisce il frame com'è: meglio posizioni a scatti che posizioni sbagliate.
  * `alpha` dice a che punto è l'interpolazione (1 = arrivata).
  */
-export function interpolatedFrame<T extends MotionFrameInput>(frame: T, buffer: MotionBuffer, nowMs: number): { frame: T; alpha: number } {
+export function interpolatedFrame<T extends MotionFrameInput>(frame: T, buffer: MotionBuffer, nowMs: number): { frame: T & { organismsEnergyGain?: Float32Array }; alpha: number } {
   if (!buffer.hasFrame || buffer.slots.length !== frame.organismsId.length || buffer.lastTick !== frame.tick) {
     return { frame, alpha: 1 };
   }
   const p = interpolatedPositions(buffer, nowMs);
-  return { frame: { ...frame, organismsX: p.x, organismsY: p.y }, alpha: p.alpha };
+  return { frame: { ...frame, organismsX: p.x, organismsY: p.y, organismsEnergyGain: p.gain }, alpha: p.alpha };
 }
