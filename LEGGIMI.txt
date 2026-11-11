@@ -1,27 +1,26 @@
-EvoWorld v1.10.1 - Continuous Movement (Natural Motion & Animation 1/5)
+EvoWorld v1.10.3 - Procedural Body Animation (Natural Motion & Animation 3/5)
 
-Pacchetto incrementale sulla versione attuale del repository (main).
+Pacchetto incrementale: carica PRIMA v1.10.1 e v1.10.2, poi questo.
 Carica TUTTI i file prima del deploy (una cartella alla volta).
 
 (radice)
-  CHANGELOG.md (NUOVO)
+  CHANGELOG.md (sostituisce)
 
 components/simulation/
   Planet3DView.tsx (sostituisce)
 
 lib/
-  motionInterpolation.ts (NUOVO)
-  creatureHeading.ts (sostituisce)
+  bodyAnimation.ts (NUOVO)
 
 tests/
-  motionInterpolation.test.ts (NUOVO)
+  bodyAnimation.test.ts (NUOVO)
+  fauna180.test.ts (sostituisce: il test delle zampe in diagonale ora vale al trotto)
 
-ATTENZIONE: Planet3DView.tsx e' la versione di main (con ombre, acqua e onde delle
-v1.9.2-1.9.6) piu' le modifiche della v1.10.1. Se hai modificato Planet3DView.tsx
-dopo il 9 novembre alle 14:00, dimmelo prima di sostituirlo.
+Cosa fa: zampe con tre andature (passo, trotto, galoppo) e ampiezza che va a zero da ferme;
+cadenza proporzionale alla velocita'; corpo che rimbalza e ondeggia; testa che fa cenni e si
+volge in curva; coda che oscilla e fa da contrappeso. Nessun gene nuovo, nessun file di
+simulation/, workers/ o types/ cambiato.
 
-Cosa fa: le creature si muovono in modo continuo tra un tick e l'altro (interpolazione
-toroidale, solo visiva). Nessun file di simulation/, workers/ o types/ e' cambiato.
-
-Verifiche in sandbox: type-check e build verdi; test 500 su 502 (le 2 failure note sono
-in tests/reproduction.test.ts). Non verificato: la resa su telefono e su PC.
+Verifiche in sandbox: type-check e build verdi; nessuna failure nuova (restano le 2 note in
+tests/reproduction.test.ts). Non verificato: la resa su telefono e su PC; la taratura delle
+ampiezze e' fatta a occhio dal codice, non vista a schermo.
