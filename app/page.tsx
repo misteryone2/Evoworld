@@ -139,6 +139,22 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKey);
     document.addEventListener("fullscreenchange", onFullscreenChange);
+    // v1.10.7c — iOS, soprattutto nella web-app "Aggiungi a schermo Home": senza queste regole il tocco
+    // prolungato seleziona il testo come in una pagina web e i tocchi vengono trattati come selezione
+    // invece che come pressioni dei pulsanti. Disattiviamo selezione, callout ed evidenziazione del tocco
+    // dentro la modalità immersiva, e forziamo touch-action sui pulsanti.
+    const style = document.createElement("style");
+    style.textContent = [
+      ".canvas-column.immersive, .canvas-column.immersive * {",
+      "  -webkit-user-select: none !important;",
+      "  user-select: none !important;",
+      "  -webkit-touch-callout: none !important;",
+      "  -webkit-tap-highlight-color: transparent;",
+      "  touch-action: manipulation;",
+      "}",
+      ".canvas-column.immersive button { touch-action: manipulation; cursor: pointer; }",
+    ].join("\n");
+    document.head.appendChild(style);
     // v1.10.7 — rileva "telefono in verticale": pointer grosso (touch) + orientamento portrait.
     // Piccolo ritardo per dare il tempo al blocco orizzontale (dove esiste) di agire prima del messaggio.
     const checkOrientation = () => {
@@ -152,6 +168,7 @@ export default function Home() {
     window.addEventListener("orientationchange", checkOrientationDelayed);
     return () => {
       window.clearTimeout(orientationTimer);
+      style.remove();
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
