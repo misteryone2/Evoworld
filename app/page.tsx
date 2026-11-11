@@ -231,6 +231,12 @@ export default function Home() {
     setCameraMode("free");
   }, [activePlanet?.id]);
 
+  // v1.10.9 — in schermo intero, toccare un essere vivente lo seleziona e apre subito i suoi dati
+  // (il pannello resta chiudibile col pulsante "ℹ Dati animale").
+  useEffect(() => {
+    if (immersive && selectedOrganismId !== null) setDrawerOpen(true);
+  }, [immersive, selectedOrganismId]);
+
   const changeCameraMode = (mode: CameraMode) => {
     // v1.10.8 — la camera libera non ha bisogno di un animale: si entra e si esce liberamente.
     if (mode === "orbit" || mode === "free") {
