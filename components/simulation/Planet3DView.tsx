@@ -92,10 +92,13 @@ const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
 /**
  * v1.10.8 — Camera libera: velocità del punto d'osservazione verso il punto toccato (unità del mondo
- * al secondo) e scala della posa (camera più alta e lontana di quella che incornicia una creatura).
+ * al secondo). v1.10.8b — la "scala" qui sotto non è quella di una creatura: decide distanza E punto
+ * guardato (target a scala*1.1 dal suolo). Con 2.2 la camera guardava un punto a 2,4 unità d'altezza:
+ * solo cielo. Con 0.55 la distanza resta al massimo (2,2 unità, vista panoramica) e il punto guardato
+ * sta a ~0,6 dal suolo: si vede il terreno e le creature attorno.
  */
 const FREE_MOVE_UNITS_PER_SEC = 1.6;
-const FREE_CAMERA_SCALE = 2.2;
+const FREE_CAMERA_SCALE = 0.55;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
