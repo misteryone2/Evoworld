@@ -106,9 +106,14 @@ describe("v1.5.0 — 3D creature instances", () => {
     const refs = makeRefs();
     updateCreatureInstances(refs, frame(256, 256));
     updateCreatureInstances(refs, frame(258, 256));
+    const yawWhenStopped = [...refs.creatureTrack.values()][0].motion.yaw;
+    // v1.10.2 — dopo l'arresto il corpo si raddrizza dal beccheggio di frenata (visivo, graduale): si lascia assestare...
+    for (let k = 0; k < 40; k++) updateCreatureInstances(refs, frame(258, 256));
     const before = pos(refs.headMesh, 0).clone().sub(pos(refs.bodyMesh, 0)).normalize();
     updateCreatureInstances(refs, frame(258, 256));
     const after = pos(refs.headMesh, 0).clone().sub(pos(refs.bodyMesh, 0)).normalize();
+    // ...ma la direzione verso cui è girata non cambia, e a pose assestata la creatura non si muove più.
+    expect([...refs.creatureTrack.values()][0].motion.yaw).toBe(yawWhenStopped);
     expect(before.dot(after)).toBeGreaterThan(0.999);
   });
 
