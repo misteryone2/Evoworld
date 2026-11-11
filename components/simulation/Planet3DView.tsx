@@ -809,7 +809,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
       if (followActive && globalTerrainBuiltRef.current) return;
-      if (followActive) return;
       const distance = controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
