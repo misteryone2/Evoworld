@@ -91,7 +91,13 @@ export default function Home() {
   const enterImmersive = useCallback(() => {
     setImmersive(true);
     const root = document.documentElement;
-    if (root.requestFullscreen) {
+    // v1.10.7b — iPhone e iPod: NIENTE fullscreen nativo. Su iOS 16.4+ requestFullscreen esiste e ha
+    // successo, ma WebKit in modalità fullscreen nativa non consegna i tocchi sugli elementi sovrapposti
+    // (HUD, pulsanti): il gioco si vede ma i pulsanti non rispondono. Si usa lo schermo intero "di pagina"
+    // (il pannello fixed inset 0 qui sotto), dove i tocchi funzionano. Android e PC tengono il nativo,
+    // e con esso il blocco dell'orientamento in orizzontale.
+    const isIphoneLike = /iP(hone|od)/.test(navigator.userAgent);
+    if (!isIphoneLike && root.requestFullscreen) {
       root
         .requestFullscreen()
         .then(() => {
