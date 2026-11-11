@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef } from "react";
@@ -375,6 +376,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
+  // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
+  const globalTerrainBuiltRef = useRef(false);
+  const globalPlanetKeyRef = useRef("");
   // v1.10.1 — posizioni precedenti e attuali delle creature, solo per il disegno (non persistono, non entrano nei salvataggi).
   const motionRef = useRef(createMotionBuffer());
 
@@ -797,10 +801,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS and the profile's terrainRefreshMs.
     let lastTierKey = "";
     let lastRequestAt = 0;
+    // v1.10.8 — bugfix "si vede solo il cielo": partendo direttamente in vista libera (o terza persona),
+    // la richiesta del pianeta globale (mappa altezze + texture) veniva saltata per sempre, la camera
+    // non conosceva le colline e nasceva DENTRO il terreno. Il pianeta globale viene quindi costruito
+    // comunque la prima volta, anche da vicino; dopo, si torna a risparmiare (c'è il terreno locale).
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
-      // In terza persona il pianeta intero non serve: c'è il terreno locale (maybeRequestLocal).
+      if (followActive && globalTerrainBuiltRef.current) return;
       if (followActive) return;
       const distance = controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
@@ -1054,6 +1062,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       );
       return;
     }
+
+    // v1.10.8 — è arrivato un ViewportFrame del pianeta intero: la mappa altezze globale esiste, la camera
+    // in vista libera/terza persona può fidarsi. Al cambio di mondo la bandierina si azzera e si ricostruisce.
+    const planetKey = `${viewportFrame.planetWidth}x${viewportFrame.planetHeight}`;
+    if (globalPlanetKeyRef.current !== planetKey) {
+      globalPlanetKeyRef.current = planetKey;
+      globalTerrainBuiltRef.current = false;
+    }
+    globalTerrainBuiltRef.current = true;
 
     const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, temperature, planetHeight, tick, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
 
