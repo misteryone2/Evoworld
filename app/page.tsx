@@ -154,6 +154,8 @@ export default function Home() {
       "  touch-action: manipulation;",
       "}",
       ".canvas-column.immersive button { touch-action: manipulation; cursor: pointer; }",
+      // v1.10.8b — i pulsanti dell'HUD restano sopra il pannello dati (che altrimenti li copre quando è aperto).
+      ".canvas-column.immersive .immersive-hud { position: relative; z-index: 120; }",
     ].join("\n");
     document.head.appendChild(style);
     // v1.10.7 — rileva "telefono in verticale": pointer grosso (touch) + orientamento portrait.
@@ -438,8 +440,11 @@ export default function Home() {
                 onTogglePause={() => togglePause(activePlanet.id)}
                 onExit={exitImmersive}
                 canShowDetails={selectedOrganismId !== null}
-                detailsOpen={drawerOpen ?? !isMobileLayout}
-                onToggleDetails={() => setDrawerOpen(!(drawerOpen ?? !isMobileLayout))}
+                // v1.10.8b — in schermo intero il pannello dati parte sempre CHIUSO: in orizzontale il telefono
+                // è largo e il pannello si apriva di default come fiancata laterale fissa, coprendo anche i
+                // pulsanti per chiuderlo. Si apre solo col pulsante "ℹ Dati animale".
+                detailsOpen={drawerOpen ?? false}
+                onToggleDetails={() => setDrawerOpen(!(drawerOpen ?? false))}
               />
             )}
             {!immersive && activePlanet && (
