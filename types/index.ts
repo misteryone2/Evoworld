@@ -395,6 +395,16 @@ export interface RenderFrame {
   // Per-organism id (v1.0.4), needed to identify which specific organism
   // was clicked/tapped in the 3D view and request its full detail.
   organismsId: Uint32Array;
+  /**
+   * v1.10.4 — energia attuale di ogni organismo. Sola lettura, solo per l'animazione (mangia, riposa): non entra
+   * nei salvataggi e non cambia nulla nella simulazione. Facoltativa: senza, le creature ferme sono "ferme" e basta.
+   */
+  organismsEnergy?: Float32Array;
+  /**
+   * v1.10.4 — NON viene dal mondo: la calcola il rendering (lib/motionInterpolation.ts) come energia guadagnata per
+   * tick tra gli ultimi due frame. Positiva = sta mangiando più di quanto consuma.
+   */
+  organismsEnergyGain?: Float32Array;
   // Full species genealogy, small enough to send as a plain array every frame.
   speciesTree: SpeciesRecord[];
   // Per-species genetic analysis (v0.4.1): current trait stats, drift from
