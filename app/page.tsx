@@ -63,7 +63,8 @@ export default function Home() {
   const [view, setView] = useState<ViewMode>("planet");
   const [selectedOrganismId, setSelectedOrganismId] = useState<number | null>(null);
   // v1.7.0 — vista dall'alto o terza persona sull'animale selezionato (solo con il rendering 3D).
-  const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
+  // v1.10.8 — la vista predefinita è la camera libera: terza persona slegata dagli esseri.
+  const [cameraMode, setCameraMode] = useState<CameraMode>("free");
   const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
   const [organismLoading, setOrganismLoading] = useState(false);
   // v1.0.5 — the start screen is shown until the person explicitly chooses
@@ -218,18 +219,20 @@ export default function Home() {
     }
   }, [isMobileLayout, selectedOrganismId, cameraMode]);
 
-  // v1.7.0 — la terza persona esiste solo con un animale selezionato e con il rendering 3D.
+  // v1.7.0 — la terza persona legata esiste solo con un animale selezionato e con il rendering 3D.
   const canFollow = quality.profile.renderer !== "canvas2d";
+  // v1.10.8 — se l'animale seguito sparisce o non c'è, si torna alla camera libera (non alla vista dall'alto).
   useEffect(() => {
-    if (cameraMode === "follow" && (selectedOrganismId === null || !canFollow)) setCameraMode("orbit");
+    if (cameraMode === "follow" && (selectedOrganismId === null || !canFollow)) setCameraMode("free");
   }, [cameraMode, selectedOrganismId, canFollow]);
   useEffect(() => {
-    setCameraMode("orbit");
+    setCameraMode("free");
   }, [activePlanet?.id]);
 
   const changeCameraMode = (mode: CameraMode) => {
-    if (mode === "orbit") {
-      setCameraMode("orbit");
+    // v1.10.8 — la camera libera non ha bisogno di un animale: si entra e si esce liberamente.
+    if (mode === "orbit" || mode === "free") {
+      setCameraMode(mode);
       return;
     }
     // Entrando in terza persona senza un animale scelto, se ne sceglie uno a caso.
