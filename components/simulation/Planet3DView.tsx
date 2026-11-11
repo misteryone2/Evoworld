@@ -1201,17 +1201,19 @@ export function configureInstancedMesh(mesh: THREE.InstancedMesh): void {
 }
 
 /**
- * v1.8.0 — Sfumatura ventre-dorso: colori per vertice (1 sul ventre, più scuro sul
- * dorso) che il materiale moltiplica per il colore della specie. Dà volume alle
- * sfere che formano il corpo senza nessuna istanza o luce in più.
+ * v1.10.5 — Contro-ombreggiamento ventre-dorso: colori per vertice che il materiale moltiplica
+ * per il colore della specie. Ventre chiaro e caldo (come il sottopelo di mammiferi e
+ * uccelli reali), dorso scuro e freddo. Stesso costo di prima: solo colori per vertice.
  */
 export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   const position = geometry.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(position.count * 3);
   for (let i = 0; i < position.count; i++) {
     const y = position.getY(i); // sfera unitaria: -1 ventre, +1 dorso
-    const shade = 1 - 0.22 * ((y + 1) / 2);
-    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = shade;
+    const t = (y + 1) / 2; // 0 ventre, 1 dorso
+    colors[i * 3] = 1.08 - 0.34 * t; // ventre caldo e chiaro, dorso molto più scuro
+    colors[i * 3 + 1] = 1.04 - 0.26 * t;
+    colors[i * 3 + 2] = 0.96 - 0.12 * t; // il dorso raffredda (più blu), il ventre scalda
   }
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   return geometry;
