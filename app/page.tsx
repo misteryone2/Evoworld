@@ -86,6 +86,8 @@ export default function Home() {
   const [immersive, setImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState<boolean | null>(null);
   const nativeFullscreen = useRef(false);
+  // v1.10.7 — su telefono in verticale mostro l'invito a ruotare (iPhone non consente di bloccare l'orientamento via codice).
+  const [rotateHint, setRotateHint] = useState(false);
   const enterImmersive = useCallback(() => {
     setImmersive(true);
     const root = document.documentElement;
@@ -94,6 +96,14 @@ export default function Home() {
         .requestFullscreen()
         .then(() => {
           nativeFullscreen.current = true;
+          // v1.10.7 — telefoni: blocca l'orientamento in orizzontale. Funziona solo in schermo intero nativo
+          // (Android e simili); dove non è supportato (iPhone) interviene l'invito a ruotare qui sotto.
+          try {
+            const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+            orientation.lock?.("landscape").catch(() => {});
+          } catch {
+            /* orientamento non bloccabile: nessun problema */
+          }
         })
         .catch(() => {
           // iPhone e alcuni browser non lo permettono: resta lo schermo intero "della pagina".
@@ -123,10 +133,24 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKey);
     document.addEventListener("fullscreenchange", onFullscreenChange);
+    // v1.10.7 — rileva "telefono in verticale": pointer grosso (touch) + orientamento portrait.
+    // Piccolo ritardo per dare il tempo al blocco orizzontale (dove esiste) di agire prima del messaggio.
+    const checkOrientation = () => {
+      const touch = window.matchMedia("(pointer: coarse)").matches;
+      const portrait = window.matchMedia("(orientation: portrait)").matches;
+      setRotateHint(touch && portrait);
+    };
+    const checkOrientationDelayed = () => window.setTimeout(checkOrientation, 600);
+    const orientationTimer = checkOrientationDelayed();
+    window.addEventListener("resize", checkOrientationDelayed);
+    window.addEventListener("orientationchange", checkOrientationDelayed);
     return () => {
+      window.clearTimeout(orientationTimer);
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("resize", checkOrientationDelayed);
+      window.removeEventListener("orientationchange", checkOrientationDelayed);
     };
   }, [immersive, exitImmersive]);
   useEffect(() => {
@@ -196,9 +220,13 @@ export default function Home() {
   if (!started) {
     return (
       <StartScreen
+        // v1.10.7 — il gioco si apre direttamente in schermo intero: il gesto del pulsante della schermata
+        // iniziale è quello che i browser chiedono per lo schermo intero nativo (PC e Android). Su iPhone,
+        // che non lo consente, enterImmersive degrada da sola allo schermo intero "della pagina".
         onNewWorld={(options) => {
           spawnPlanet({ width: defaultWorldSize, height: defaultWorldSize, ...options });
           setStarted(true);
+          enterImmersive();
         }}
         defaultWorldSize={defaultWorldSize}
         qualitySelector={
@@ -213,6 +241,7 @@ export default function Home() {
         onContinue={(session: SavedSession) => {
           loadSession(session);
           setStarted(true);
+          enterImmersive();
         }}
       />
     );
@@ -349,6 +378,32 @@ export default function Home() {
                   if (next !== null) setSelectedOrganismId(next);
                 }}
               />
+            )}
+            {immersive && rotateHint && (
+              <div
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 60,
+                  background: "rgba(0, 0, 0, 0.88)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                  color: "#fff",
+                  textAlign: "center",
+                  padding: 24,
+                }}
+                role="status"
+              >
+                <span style={{ fontSize: 44 }} aria-hidden="true">
+                  🔄
+                </span>
+                <p style={{ margin: 0, fontSize: 16, lineHeight: 1.4 }}>
+                  Ruota il telefono: il gioco si gioca in orizzontale
+                </p>
+              </div>
             )}
             {immersive && activePlanet && (
               <ImmersiveHud
