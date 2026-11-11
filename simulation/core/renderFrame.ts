@@ -96,6 +96,7 @@ export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis):
   const organismsEvasion = new Float32Array(n);
   const organismsHuntingSkill = new Float32Array(n);
   const organismsId = new Uint32Array(n);
+  const organismsEnergy = new Float32Array(n); // v1.10.4 — sola lettura, per l'animazione
   for (let i = 0; i < n; i++) {
     const o = organisms[i];
     organismsX[i] = o.position.x;
@@ -108,6 +109,7 @@ export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis):
     organismsEvasion[i] = o.genome.evasion;
     organismsHuntingSkill[i] = o.genome.huntingSkill;
     organismsId[i] = o.id;
+    organismsEnergy[i] = o.energy;
   }
 
   const stats = world.getStats();
@@ -129,6 +131,7 @@ export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis):
     organismsEvasion,
     organismsHuntingSkill,
     organismsId,
+    organismsEnergy,
     speciesTree: species.speciesTree,
     speciesGenomeStats: species.speciesGenomeStats,
     avgVegetation: sampleAverageVegetation(world),
