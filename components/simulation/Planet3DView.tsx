@@ -9,7 +9,8 @@ import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../
 import { headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
 import { createVisualMotion, stepVisualMotion, type VisualMotion } from "../../lib/naturalMotion";
-import { advancePhase, computeBodyPose, createBodyPose } from "../../lib/bodyAnimation";
+import { advancePhase, computeBodyPose, createBodyPose, normalizedSpeed } from "../../lib/bodyAnimation";
+import { applyLivingPose, createLivingState, stepLiving, type LivingState } from "../../lib/livingBehavior";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
@@ -180,6 +181,8 @@ interface HeightmapSample {
 export interface CreatureTrack extends MutableHeading {
   /** v1.10.2 — rotazione, velocità e inclinazione visive (temporanee, solo per il disegno). */
   motion: VisualMotion;
+  /** v1.10.4 — stato visivo da ferma (respiro, sguardo, mangia, riposa): temporaneo, non persistente. */
+  living: LivingState;
   x: number;
   y: number;
   phase: number;
@@ -1467,6 +1470,7 @@ export function updateCreatureInstances(
     organismsEvasion,
     organismsHuntingSkill,
     organismsId,
+    organismsEnergyGain,
     planetWidth,
     planetHeight,
   } = frame;
@@ -1562,10 +1566,12 @@ export function updateCreatureInstances(
       const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
       // v1.10.3 — la fase del passo avanza con la velocità visualizzata: la cadenza è proporzionale alla velocità e, da ferma, si ferma
       track.phase = advancePhase(track.phase, track.motion.visSpeed, dtMs, creatureScale(organismsSize[i]));
+      // v1.10.4 — respiro, sguardo, mangia, riposa: dallo stato reale (velocità visualizzata, energia guadagnata)
+      stepLiving(track.living, dtMs, normalizedSpeed(track.motion.visSpeed, creatureScale(organismsSize[i])), organismsEnergyGain ? organismsEnergyGain[i] : 0);
       track.x = x;
       track.y = y;
     } else {
-      track = { motion: createVisualMotion(), x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
+      track = { motion: createVisualMotion(), living: createLivingState(id), x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
       refs.creatureTrack.set(id, track);
     }
     track.gen = generation;
@@ -1615,6 +1621,7 @@ export function updateCreatureInstances(
 
     // v1.10.3 — posa del corpo in cammino: zampe, corpo, testa e coda (dallo stato visivo, vedi lib/bodyAnimation.ts)
     computeBodyPose(tmpPose, phase, track.motion, baseScale, anatomy);
+    applyLivingPose(tmpPose, track.living);
     // La testa (con occhi, mandibola e orecchie) ruota attorno al collo e segue il corpo; se non c'è movimento si usa la matrice della creatura.
     let headParent = tmpCreatureMatrix;
     if (tmpPose.headPitch !== 0 || tmpPose.headYaw !== 0 || tmpPose.bobY !== 0 || tmpPose.swayX !== 0 || tmpPose.surgeZ !== 0) {
@@ -1627,7 +1634,7 @@ export function updateCreatureInstances(
       headParent = tmpHeadParent;
     }
 
-    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, tmpPose.surgeZ, Q_IDENTITY, anatomy.bodyHalfWidth, anatomy.bodyHalfHeight, anatomy.bodyHalfLength);
+    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, tmpPose.surgeZ, Q_IDENTITY, anatomy.bodyHalfWidth * (1 + tmpPose.breath), anatomy.bodyHalfHeight * (1 + tmpPose.breath), anatomy.bodyHalfLength * (1 + tmpPose.breath * 0.3));
     setPart(refs.headMesh, writeIndex, headParent, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
     // v1.6.0 — lighter profiles skip the finer parts entirely: eyes, tail
     // and jaw from detail 2, dorsal spikes only at detail 3.
