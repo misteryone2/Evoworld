@@ -1064,12 +1064,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
 
     // v1.10.8 — è arrivato un ViewportFrame del pianeta intero: la mappa altezze globale esiste, la camera
     // in vista libera/terza persona può fidarsi. Al cambio di mondo la bandierina si azzera e si ricostruisce.
-    const planetKey = `${viewportFrame.planetWidth}x${viewportFrame.planetHeight}`;
-    if (globalPlanetKeyRef.current !== planetKey) {
-      globalPlanetKeyRef.current = planetKey;
-      globalTerrainBuiltRef.current = false;
+    // (Le dimensioni del mondo stanno nel RenderFrame, non nel ViewportFrame.)
+    if (currentFrame) {
+      const planetKey = `${currentFrame.planetWidth}x${currentFrame.planetHeight}`;
+      if (globalPlanetKeyRef.current !== planetKey) {
+        globalPlanetKeyRef.current = planetKey;
+        globalTerrainBuiltRef.current = false;
+      }
+      globalTerrainBuiltRef.current = true;
     }
-    globalTerrainBuiltRef.current = true;
 
     const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, temperature, planetHeight, tick, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
 
