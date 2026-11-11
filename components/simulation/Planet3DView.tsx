@@ -97,8 +97,15 @@ const TAP_MOVEMENT_THRESHOLD_PX = 6;
  * solo cielo. Con 0.55 la distanza resta al massimo (2,2 unità, vista panoramica) e il punto guardato
  * sta a ~0,6 dal suolo: si vede il terreno e le creature attorno.
  */
-const FREE_MOVE_UNITS_PER_SEC = 1.6;
+const FREE_MOVE_UNITS_PER_SEC = 2.4;
 const FREE_CAMERA_SCALE = 0.55;
+/**
+ * v1.10.9 — movimento fluido in vista libera: il punto d'osservazione non parte e non arriva più a scatto.
+ * Accelera dolcemente (unità/s²) e frena in proporzionalità inversa alla distanza che resta (v = √(2·a·d)),
+ * così l'arrivo è morbido qualunque sia la lunghezza del viaggio.
+ */
+const FREE_ACCEL_UNITS_PER_S2 = 3;
+const FREE_BRAKE_UNITS_PER_S2 = 3.5;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
@@ -956,6 +963,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
             follow.hasGoal = true;
           }
         }
+        // v1.10.9 — SELEZIONE AL TOCCO, estensibile: qui sopra gli animali (istanze del motore).
+        // Le piante (flora della scena locale) entreranno appena avranno un'identità nella simulazione:
+        // basterà aggiungere la loro mesh a questa catena di raycast, PRIMA del terreno, e chiamare
+        // onSelect con l'id della pianta — il pannello dati e l'anello di selezione li seguiranno.
       } else if (!followActive) {
         // In terza persona un tocco sul vuoto non deseleziona: si smette di seguire dal pulsante.
         onSelectRef.current?.(null);
@@ -1439,6 +1450,8 @@ export interface FollowState {
   goalX: number;
   goalY: number;
   hasGoal: boolean;
+  /** v1.10.9 — camera libera: velocità attuale del punto d'osservazione (unità del mondo al secondo), per accelerare e frenare dolcemente. */
+  freeSpeed: number;
 }
 
 export function createFollowState(): FollowState {
@@ -1462,6 +1475,7 @@ export function createFollowState(): FollowState {
     goalX: 0,
     goalY: 0,
     hasGoal: false,
+    freeSpeed: 0,
   };
 }
 
@@ -1477,6 +1491,7 @@ export function resetFollowState(state: FollowState): void {
   state.dragging = false;
   state.missingSince = null;
   state.hasGoal = false;
+  state.freeSpeed = 0;
 }
 
 /** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
@@ -1643,24 +1658,36 @@ export function updateFreeCamera(
     state.hasGoal = false;
   }
 
-  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap, a velocità costante.
+  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap.
+  // v1.10.9 — partenza e arrivo morbidi: la velocità sale con un'accelerazione limitata e scende
+  // secondo la frenata necessaria a fermarsi sul punto (v = √(2·a·d)), qualunque sia la distanza.
   if (state.hasGoal) {
     const dx = wrappedDelta(state.x, state.goalX, planetWidth);
     const dy = wrappedDelta(state.y, state.goalY, planetHeight);
     const distCells = Math.hypot(dx, dy);
     const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
-    const stepCells = (FREE_MOVE_UNITS_PER_SEC * (dtMs / 1000)) / cellUnits;
-    if (distCells <= stepCells || distCells < 1e-9) {
+    const remainingUnits = distCells * cellUnits;
+    const step = dtMs / 1000;
+    const brakeSpeed = Math.sqrt(2 * FREE_BRAKE_UNITS_PER_S2 * Math.max(0, remainingUnits));
+    const targetSpeed = Math.min(FREE_MOVE_UNITS_PER_SEC, brakeSpeed);
+    const diff = targetSpeed - state.freeSpeed;
+    const maxDelta = (diff > 0 ? FREE_ACCEL_UNITS_PER_S2 : FREE_BRAKE_UNITS_PER_S2) * step;
+    state.freeSpeed += Math.max(-maxDelta, Math.min(maxDelta, diff));
+    const stepUnits = state.freeSpeed * step;
+    if (remainingUnits <= stepUnits || remainingUnits < 1e-9) {
       state.x = state.goalX;
       state.y = state.goalY;
       state.hasGoal = false;
+      state.freeSpeed = 0;
     } else {
-      const k = stepCells / distCells;
+      const k = stepUnits / cellUnits / distCells;
       state.x += dx * k;
       state.y += dy * k;
       // mentre va, la camera guarda dove sta andando
       state.heading = nextHeading(state.heading, dx * k, dy * k, headingBlendForDt(dtMs));
     }
+  } else {
+    state.freeSpeed = 0;
   }
 
   // Dopo un po' senza tocchi la camera torna dietro il punto d'osservazione (come in follow).
