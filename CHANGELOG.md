@@ -64,3 +64,26 @@ aggiornamento e si fermavano di colpo; corpo, testa e coda erano rigidi.
 - Misura grezza (sandbox a una CPU, non rappresentativa di un telefono): un aggiornamento delle creature a dettaglio 3,
   in movimento, passa da 5,6-7,0 a 7,1-8,3 ms con 300-2500 creature.
 - Nessun file in `simulation/`, `workers/` o `types/` è stato modificato.
+
+## v1.10.4 — Living Behaviors
+
+Prima: una creatura ferma era un oggetto fermo (da v1.10.3 le zampe stanno ferme, ma corpo, testa e coda no).
+
+- **Da dove vengono gli stati.** La simulazione non ha stati "mangia" o "riposa" da mostrare e non se ne aggiungono.
+  Gli stati visivi derivano da dati reali: cammina = velocità visualizzata; mangia = ferma e con l'energia che sale
+  più di quanto consuma (guadagno per tick tra gli ultimi frame del mondo); riposa = ferma da più di 4 s di
+  rendering (pieno a 8 s) e non sta mangiando; idle = ferma da poco. Limite: una creatura con l'energia già al massimo
+  (150) che mangia non guadagna e quindi appare ferma/a riposo.
+- **Unica modifica fuori dal rendering (sola lettura):** `RenderFrame` ha un campo in più, `organismsEnergy`
+  (facoltativo; `types/index.ts` e `simulation/core/renderFrame.ts`), che copia l'energia che ogni organismo ha già.
+  Non cambia nulla della simulazione (c'è un test: stesso seme, stesso mondo con e senza costruzione dei frame) e non
+  entra nei salvataggi. `organismsEnergyGain` invece non viene dal mondo: la calcola il rendering
+  (`lib/motionInterpolation.ts`).
+- `lib/livingBehavior.ts` (nuovo, puro): pesi degli stati che seguono il bersaglio in modo esponenziale (nessuno
+  scatto, anche passando da mangia a cammina), respiro (più lento e profondo a riposo; fase sfalsata per creatura dall'id,
+  senza il generatore casuale della simulazione), sguardo che vaga a tratti e piccoli assestamenti (idle), testa giù con
+  morsi ripetuti (mangia), corpo più basso con testa e coda abbandonate (riposa). Nessuna camminata da fermo.
+- `lib/bodyAnimation.ts`: la posa ha il campo `breath`. `Planet3DView.tsx`: il torace respira (scala di corpo), lo stato
+  vive nel tracciato visivo di ogni creatura (temporaneo, non persistente).
+- Nessun file di biologia è stato modificato (genetica, cervello, movimento, energia, collisioni, predazione,
+  riproduzione, speciazione, clima, vegetazione, persistenza).
