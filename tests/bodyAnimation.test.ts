@@ -281,9 +281,14 @@ describe("v1.10.3 — nelle creature disegnate", () => {
     const spread = Math.max(...offsets.slice(10).map((o) => o.distanceTo(offsets[10])));
     expect(spread).toBeGreaterThan(1e-4);
     for (let k = 0; k < 120; k++) updateCreatureInstances(refs, frameAt(pos.x, pos.y), null, null, 16);
-    const a = headRelative(refs);
-    updateCreatureInstances(refs, frameAt(pos.x, pos.y), null, null, 16);
-    expect(headRelative(refs).distanceTo(a)).toBeLessThan(1e-9);
+    // v1.10.4 — da ferma non cammina più, ma non è un oggetto fermo (respira, a tratti si guarda attorno): movimenti piccoli e lenti
+    let previous = headRelative(refs);
+    for (let k = 0; k < 60; k++) {
+      updateCreatureInstances(refs, frameAt(pos.x, pos.y), null, null, 16);
+      const now = headRelative(refs);
+      expect(now.distanceTo(previous)).toBeLessThan(0.01); // niente scatti
+      previous = now;
+    }
   });
 
   it("i profili leggeri (dettaglio 1, senza zampe) funzionano e animano corpo e testa", () => {
