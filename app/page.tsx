@@ -233,8 +233,13 @@ export default function Home() {
 
   // v1.10.9 — in schermo intero, toccare un essere vivente lo seleziona e apre subito i suoi dati
   // (il pannello resta chiudibile col pulsante "ℹ Dati animale").
+  // v1.10.10 — apre SOLO quando la selezione nasce (null → essere): se si entra in schermo intero con un
+  // essere già selezionato (per esempio dopo "Continua"), il pannello resta chiuso come da regola.
+  const prevSelectedRef = useRef<number | null>(null);
   useEffect(() => {
-    if (immersive && selectedOrganismId !== null) setDrawerOpen(true);
+    const prev = prevSelectedRef.current;
+    prevSelectedRef.current = selectedOrganismId;
+    if (immersive && selectedOrganismId !== null && prev === null) setDrawerOpen(true);
   }, [immersive, selectedOrganismId]);
 
   const changeCameraMode = (mode: CameraMode) => {
