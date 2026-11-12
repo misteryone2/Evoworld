@@ -87,3 +87,27 @@ Prima: una creatura ferma era un oggetto fermo (da v1.10.3 le zampe stanno ferme
   vive nel tracciato visivo di ogni creatura (temporaneo, non persistente).
 - Nessun file di biologia è stato modificato (genetica, cervello, movimento, energia, collisioni, predazione,
   riproduzione, speciazione, clima, vegetazione, persistenza).
+
+## v1.10.5 — Animation Optimization & Final Release
+
+- **LOD dell'animazione** (`lib/animationLod.ts`, nuovo): tre livelli con pesi continui che sommano 1 (smoothstep), in funzione
+  della distanza dalla camera misurata in scale della creatura (una creatura grossa resta in dettaglio più lontano).
+  ALTO fino a 30 scale (tutto), sfuma verso MEDIO tra 30 e 55 (zampe e corpo poco ridotti, testa e coda a metà), sfuma verso
+  BASSO tra 110 e 170 (zampe e rimbalzo semplificati, respiro; niente cenni di testa, coda e sguardo, che a quella distanza non si
+  vedono). Nessuna creatura è statica: posizione e rotazione continue valgono a ogni distanza. La geometria non cambia, quindi
+  non ci sono comparse o scomparse di parti. Senza camera (o vicino) il risultato è identico a v1.10.4.
+- **Allocazioni**: il ciclo per creatura chiamava `setPart` una quindicina di volte con sei numeri decimali; V8, non potendo
+  espanderla in linea in una funzione così grande, creava un oggetto temporaneo per ogni numero. Ora posizione e scala locali si
+  scrivono sui vettori di lavoro e si chiama `commitPart`; la scala si calcola una volta per creatura, i delta toroidali e le
+  distanze (senza `Math.hypot`, che alloca) sono in linea. Misurato in un eseguibile autonomo (rolldown + node --expose-gc, non in
+  vitest, che falserebbe le allocazioni): da 1818 a 791 byte per creatura per aggiornamento.
+- Misure, v1.10.4 → v1.10.5 (2 esecuzioni alternate, stessa macchina a una CPU, 2500 creature, dettaglio 3, camera lontana e
+  vicina; tempo di un aggiornamento delle istanze): medio 6,0-6,5 ms → 4,8-5,2 ms; 95° percentile 6,4-9,0 → 5,5-8,2 ms (rumoroso);
+  eventi del garbage collector in 150 aggiornamenti: 51 → 28; memoria allocata per aggiornamento: 4,4 MB → 1,9 MB.
+  Con 1500 creature: medio 3,3-4,2 ms → 2,6-3,7 ms. L'effetto del solo LOD sul tempo è piccolo (il costo è dominato dalle
+  matrici delle parti, che non cambiano): il guadagno viene soprattutto dalle allocazioni.
+- Non misurabili qui (nessuna GPU, nessun browser, nessun telefono): FPS reali, frame time al 95° percentile nel browser, memoria
+  del browser, costo della GPU, stabilità su telefono e PC. Da provare a mano.
+- Regressione: lo stato di animazione non entra nei salvataggi; un salvataggio caricato prosegue come il mondo originale;
+  nessun file di biologia modificato in tutto il progetto (l'unica modifica a `simulation/` è la lettura dell'energia nel
+  frame, v1.10.4).

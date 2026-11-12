@@ -1,6 +1,6 @@
-EvoWorld v1.10.4 - Living Behaviors (Natural Motion & Animation 4/5)
+EvoWorld v1.10.5 - Animation Optimization & Final Release (Natural Motion & Animation 5/5)
 
-Pacchetto incrementale: carica PRIMA v1.10.1, v1.10.2 e v1.10.3, poi questo.
+Pacchetto incrementale: carica PRIMA v1.10.1, v1.10.2, v1.10.3 e v1.10.4, poi questo.
 Carica TUTTI i file prima del deploy (una cartella alla volta).
 
 (radice)
@@ -10,29 +10,17 @@ components/simulation/
   Planet3DView.tsx (sostituisce)
 
 lib/
-  livingBehavior.ts (NUOVO)
+  animationLod.ts (NUOVO)
   bodyAnimation.ts (sostituisce)
-  motionInterpolation.ts (sostituisce)
-
-simulation/core/
-  renderFrame.ts (sostituisce: aggiunge organismsEnergy, SOLA LETTURA)
-
-types/
-  index.ts (sostituisce: RenderFrame ha due campi facoltativi in piu')
+  livingBehavior.ts (sostituisce)
 
 tests/
-  livingBehavior.test.ts (NUOVO)
-  bodyAnimation.test.ts (sostituisce)
+  animationLod.test.ts (NUOVO)
 
-ATTENZIONE: renderFrame.ts e types/index.ts sono nella cartella della simulazione/dei tipi.
-La modifica copia soltanto l'energia che ogni organismo ha gia' nel frame mostrato a schermo
-(per capire quando una creatura ferma sta mangiando). Non cambia la biologia, non entra nei
-salvataggi, ed c'e' un test: stesso seme, stesso mondo con e senza costruzione dei frame.
+Cosa fa: LOD dell'animazione (alto, medio, basso, con pesi continui in base alla distanza dalla
+camera), meno spazzatura per il garbage collector (da 1818 a 791 byte per creatura per
+aggiornamento, misurati), test di regressione su simulazione e salvataggi.
 
-Cosa fa: respiro, sguardo che vaga a tratti e assestamenti (idle), testa giu' con morsi
-(mangia), postura bassa e rilassata (riposa), transizioni graduali.
-Limite: una creatura con l'energia al massimo (150) che mangia non guadagna: appare ferma.
-
-Verifiche in sandbox: type-check e build verdi; 570 test su 573: le 2 failure note
-(tests/reproduction.test.ts) e il timeout dell'idrologia su questa macchina lenta (passa con
-un limite di tempo piu' largo). Non verificato: la resa su telefono e su PC.
+Verifiche in sandbox: type-check e build verdi; 586 test su 588 (le 2 failure note sono in
+tests/reproduction.test.ts). Le misure di FPS, memoria del browser e GPU non sono possibili qui:
+vanno fatte su telefono e su PC.
