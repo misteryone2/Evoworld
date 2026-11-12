@@ -74,7 +74,7 @@ export function CameraModeBar({ mode, onChangeMode, onStep, onNearest, onEnterIm
           <span className="camera-bar-hint">Trascina per guardarti intorno · tocca un altro animale per seguirlo</span>
         </>
       )}
-      {free && <span className="camera-bar-hint">Trascina per guardarti intorno · tocca il terreno per andarci</span>}
+      {free && <span className="camera-bar-hint">Trascina per spostarti nella direzione del gesto · tocca un punto per andarci</span>}
     </div>
   );
 }
