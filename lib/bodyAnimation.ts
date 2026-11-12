@@ -15,6 +15,7 @@
  *  - Nessun generatore casuale, nessuno stato persistente: la pose si ricalcola a ogni frame dallo stato visivo.
  */
 import { GRID_YAW_INCREASING_IS_LEFT } from "./naturalMotion";
+import { FULL_DETAIL, type LodDetail } from "./animationLod";
 
 export const TWO_PI = Math.PI * 2;
 
@@ -140,7 +141,7 @@ function clearPose(out: BodyPose): void {
  * @param phase fase del passo in radianti (un ciclo completo = 2π; avanza con la strada fatta, vedi `advancePhase`).
  * @param scale scala 3D della creatura (per normalizzare la velocità).
  */
-export function computeBodyPose(out: BodyPose, phase: number, motion: MotionInput, scale: number, anatomy: LimbAnatomy): void {
+export function computeBodyPose(out: BodyPose, phase: number, motion: MotionInput, scale: number, anatomy: LimbAnatomy, detail: Readonly<LodDetail> = FULL_DETAIL): void {
   const vn = normalizedSpeed(motion.visSpeed, scale);
   const turning = motion.turnRate !== 0;
   if (vn < MIN_ANIMATED_SPEED && !turning) {
@@ -158,7 +159,7 @@ export function computeBodyPose(out: BodyPose, phase: number, motion: MotionInpu
 
   // Zampe: l'angolo massimo cresce con la lunghezza del passo (corpo lungo) e cala con la lunghezza della zampa.
   const maxSwing = clamp(0.42 * Math.sqrt(anatomy.bodyHalfLength / Math.max(0.2, anatomy.legLength)), 0.3, 0.8);
-  const amplitude = maxSwing * stride * (0.7 + 0.3 * Math.min(1, vn));
+  const amplitude = maxSwing * stride * (0.7 + 0.3 * Math.min(1, vn)) * detail.legs;
   const cycle = phase / TWO_PI;
   for (let n = 0; n < LEG_COUNT; n++) {
     const offset = weights.walk * GAIT_OFFSETS.walk[n] + weights.trot * GAIT_OFFSETS.trot[n] + weights.gallop * GAIT_OFFSETS.gallop[n];
@@ -167,19 +168,38 @@ export function computeBodyPose(out: BodyPose, phase: number, motion: MotionInpu
 
   // Corpo: due rimbalzi per ciclo, ondeggiamento laterale a ogni passo, leggero avanti-indietro. Più marcati col trotto e il galoppo.
   const vigor = stride * (0.6 + 0.4 * Math.min(1, vn));
-  out.bobY = 0.045 * vigor * Math.cos(2 * TWO_PI * cycle);
-  out.swayX = 0.035 * vigor * Math.sin(TWO_PI * cycle);
-  out.surgeZ = 0.03 * vigor * Math.cos(2 * TWO_PI * cycle + Math.PI / 2);
+  // v1.10.5 — LOD: a distanza si calcolano solo i componenti che si vedono (fattore 0 = nessun calcolo)
+  const bodyVigor = vigor * detail.body;
+  out.bobY = 0.045 * bodyVigor * Math.cos(2 * TWO_PI * cycle);
+  // ondeggiamento laterale e avanti-indietro: svaniscono del tutto a BASSO (dove `body` vale 0,35)
+  const swayFactor = (detail.body - 0.35) / 0.65;
+  if (swayFactor > 0) {
+    out.swayX = 0.035 * vigor * swayFactor * Math.sin(TWO_PI * cycle);
+    out.surgeZ = 0.03 * vigor * swayFactor * Math.cos(2 * TWO_PI * cycle + Math.PI / 2);
+  } else {
+    out.swayX = 0;
+    out.surgeZ = 0;
+  }
 
   // Testa: cenno al ritmo del passo; si volge verso la curva (il collo anticipa il corpo).
   const turnSign = GRID_YAW_INCREASING_IS_LEFT ? -1 : 1;
-  out.headPitch = 0.08 * vigor * Math.sin(2 * TWO_PI * cycle + 0.8);
-  out.headYaw = clamp(turnSign * motion.turnRate * 0.06, -0.4, 0.4) * Math.min(1, 0.4 + vn);
+  if (detail.head > 0) {
+    out.headPitch = 0.08 * vigor * Math.sin(2 * TWO_PI * cycle + 0.8) * detail.head;
+    out.headYaw = clamp(turnSign * motion.turnRate * 0.06, -0.4, 0.4) * Math.min(1, 0.4 + vn) * detail.head;
+  } else {
+    out.headPitch = 0;
+    out.headYaw = 0;
+  }
 
   // Coda: oscilla col passo (meno ampia se è lunga) e fa da contrappeso in curva, dalla parte opposta.
-  const tailScale = 0.8 / Math.sqrt(Math.max(0.4, anatomy.tailLength));
-  out.tailYaw = 0.22 * tailScale * vigor * Math.sin(TWO_PI * cycle + Math.PI) + clamp(turnSign * motion.turnRate * 0.05, -0.35, 0.35) * Math.min(1, 0.4 + vn);
-  out.tailPitch = 0.1 * tailScale * vigor * Math.sin(2 * TWO_PI * cycle + Math.PI / 2);
+  if (detail.tail > 0) {
+    const tailScale = 0.8 / Math.sqrt(Math.max(0.4, anatomy.tailLength));
+    out.tailYaw = (0.22 * tailScale * vigor * Math.sin(TWO_PI * cycle + Math.PI) + clamp(turnSign * motion.turnRate * 0.05, -0.35, 0.35) * Math.min(1, 0.4 + vn)) * detail.tail;
+    out.tailPitch = 0.1 * tailScale * vigor * Math.sin(2 * TWO_PI * cycle + Math.PI / 2) * detail.tail;
+  } else {
+    out.tailYaw = 0;
+    out.tailPitch = 0;
+  }
   out.breath = 0;
 }
 

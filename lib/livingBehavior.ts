@@ -16,6 +16,7 @@
  * dall'id), nessuno stato persistente, nessun salvataggio.
  */
 import type { BodyPose } from "./bodyAnimation";
+import { FULL_DETAIL, type LodDetail } from "./animationLod";
 
 /** Guadagno di energia per tick oltre il quale una creatura ferma si considera "a mangiare". */
 export const EAT_GAIN_PER_TICK = 0.05;
@@ -117,7 +118,7 @@ export function livingPresence(state: LivingState): number {
  * qualche assestamento poco frequente (idle); testa giù con piccoli morsi (mangia); postura più bassa e rilassata
  * con respiro lento (riposa). Tutte le ampiezze sono piccole e proporzionate al peso dello stato.
  */
-export function applyLivingPose(out: BodyPose, state: LivingState): void {
+export function applyLivingPose(out: BodyPose, state: LivingState, detail: Readonly<LodDetail> = FULL_DETAIL): void {
   const presence = livingPresence(state);
   if (presence <= 0) return;
   const t = state.clock + state.seed * 100;
@@ -125,31 +126,31 @@ export function applyLivingPose(out: BodyPose, state: LivingState): void {
   const s = state.seed;
 
   // Respiro: la sezione del torace pulsa; più lento e profondo a riposo. Non cambia mentre mangia (resta lieve).
-  const breathAmp = 0.022 * (state.idle + state.eat * 0.7) + 0.032 * state.rest;
+  const breathAmp = (0.022 * (state.idle + state.eat * 0.7) + 0.032 * state.rest) * detail.breath;
   out.breath += breathAmp * Math.sin(state.breathPhase);
 
   // Idle: lo sguardo vaga a tratti (un inviluppo lento lo accende solo ogni tanto), un lieve cenno, un assestamento di peso.
-  if (state.idle > 0) {
+  if (state.idle > 0 && detail.living > 0) {
     const lookEnvelope = Math.pow(Math.max(0, Math.sin(TWO_PI * (t / 19 + s))), 3);
-    out.headYaw += 0.4 * state.idle * lookEnvelope * Math.sin(TWO_PI * (t / 5.3) + s * 6);
-    out.headPitch += 0.05 * state.idle * Math.sin(TWO_PI * (t / 7.1) + s * 3);
-    out.swayX += 0.012 * state.idle * Math.sin(TWO_PI * (t / 11.3) + s * 5);
+    out.headYaw += 0.4 * state.idle * detail.living * lookEnvelope * Math.sin(TWO_PI * (t / 5.3) + s * 6);
+    out.headPitch += 0.05 * state.idle * detail.living * Math.sin(TWO_PI * (t / 7.1) + s * 3);
+    out.swayX += 0.012 * state.idle * detail.living * Math.sin(TWO_PI * (t / 11.3) + s * 5);
     const twitchEnvelope = Math.pow(Math.max(0, Math.sin(TWO_PI * (t / 13 + s * 2))), 6);
-    out.tailYaw += 0.15 * state.idle * twitchEnvelope * Math.sin(TWO_PI * t * 1.7);
+    out.tailYaw += 0.15 * state.idle * detail.living * twitchEnvelope * Math.sin(TWO_PI * t * 1.7);
   }
 
   // Mangia: la testa scende (muso in giù) con piccoli morsi ripetuti e un lieve spostamento laterale.
-  if (state.eat > 0) {
+  if (state.eat > 0 && (detail.head > 0 || detail.body > 0)) {
     const bite = Math.abs(Math.sin(TWO_PI * 1.4 * t + s * 4));
-    out.headPitch += state.eat * (0.5 + 0.12 * bite);
-    out.headYaw += 0.1 * state.eat * Math.sin(TWO_PI * (t / 3.7) + s * 2);
-    out.bobY -= 0.012 * state.eat * bite;
+    out.headPitch += state.eat * (0.5 + 0.12 * bite) * detail.head;
+    out.headYaw += 0.1 * state.eat * detail.living * Math.sin(TWO_PI * (t / 3.7) + s * 2);
+    out.bobY -= 0.012 * state.eat * bite * detail.body;
   }
 
   // Riposa: corpo più basso, testa e coda abbandonate, quasi nessun altro movimento.
   if (state.rest > 0) {
-    out.bobY -= 0.07 * state.rest;
-    out.headPitch += 0.22 * state.rest;
-    out.tailPitch += 0.18 * state.rest;
+    out.bobY -= 0.07 * state.rest * detail.body;
+    out.headPitch += 0.22 * state.rest * detail.head;
+    out.tailPitch += 0.18 * state.rest * detail.tail;
   }
 }
