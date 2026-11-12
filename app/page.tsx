@@ -471,10 +471,10 @@ export default function Home() {
 
           {immersive ? (
             selectedOrganismId !== null && (
-              {/* v1.10.10b — fix P10: anche l'aside deve usare (drawerOpen ?? false), come l'HUD. Con la
-                  vecchia (drawerOpen ?? !isMobileLayout), su desktop/orizzontale prima del primo tocco su
-                  "ℹ Dati" l'aside aveva classe "open" (pannello visibile e coprente) mentre l'HUD lo
-                  mostrava chiuso: pannello "fisso" non chiudibile. Ora stato e classe sono sempre coerenti. */}
+              /* v1.10.10b — fix P10: anche l'aside deve usare (drawerOpen ?? false), come l'HUD. Con la
+                 vecchia (drawerOpen ?? !isMobileLayout), su desktop/orizzontale prima del primo tocco su
+                 "ℹ Dati" l'aside aveva classe "open" (pannello visibile e coprente) mentre l'HUD lo
+                 mostrava chiuso: pannello "fisso" non chiudibile. Ora stato e classe sono sempre coerenti. */
               <aside className={`immersive-drawer${(drawerOpen ?? false) ? " open" : ""}`} aria-label="Dati dell'animale selezionato">
                 <OrganismInspectorMemo
                   organismId={selectedOrganismId}
