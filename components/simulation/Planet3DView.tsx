@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef } from "react";
@@ -106,6 +105,12 @@ const FREE_CAMERA_SCALE = 0.55;
  */
 const FREE_ACCEL_UNITS_PER_S2 = 3;
 const FREE_BRAKE_UNITS_PER_S2 = 3.5;
+/**
+ * v1.10.10 — SCORRIMENTO: in vista libera trascinare (mouse premuto su PC, dito su telefono) sposta il
+ * punto d'osservazione nella direzione del gesto, come su una mappa. Quanti unità del mondo per pixel
+ * trascinati (a ~2,2 unità di distanza della camera, mezzo schermo ≈ qualche unità di terreno).
+ */
+const FREE_DRAG_UNITS_PER_PX = 0.014;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
@@ -926,7 +931,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const dx = e.clientX - lastMovePos.x;
       const dy = e.clientY - lastMovePos.y;
       lastMovePos = { x: e.clientX, y: e.clientY };
-      applyFollowDrag(follow, dx, dy, performance.now());
+      if (cameraModeRef.current === "free") {
+        // v1.10.10 — in vista libera trascinare SPOSTA il punto d'osservazione nella direzione del gesto
+        // (su PC col mouse premuto, su telefono col dito): la camera lo segue e si gira verso dove si va.
+        const refs = sceneRef.current;
+        const f = frameRef.current;
+        if (refs && f) panFreeCamera(refs, f, follow, dx, dy);
+      } else {
+        applyFollowDrag(follow, dx, dy, performance.now());
+      }
     };
 
     const handlePointerEnd = () => {
@@ -1243,7 +1256,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           cameraMode === "follow"
             ? "Vista in terza persona su un animale — trascina per guardarti intorno, tocca un altro animale per seguirlo"
             : cameraMode === "free"
-              ? "Vista in terza persona libera — trascina per guardarti intorno, tocca il terreno per andarci"
+              ? "Vista in terza persona libera — trascina per spostarti nella direzione del gesto, tocca un punto per andarci"
               : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
         }
       />
@@ -1506,6 +1519,9 @@ const fcNormal = new THREE.Vector3();
 const fcTangent = new THREE.Vector3();
 const fcDesired = new THREE.Vector3();
 const fcDesiredTarget = new THREE.Vector3();
+// v1.10.10 — temporanei dello scorrimento in vista libera (panFreeCamera).
+const panRight = new THREE.Vector3();
+const panWorld = new THREE.Vector3();
 
 /**
  * Posiziona la camera dietro e sopra l'animale `selectedId`, guardando
@@ -1742,6 +1758,57 @@ export function updateFreeCamera(
   refs.camera.position.copy(state.position);
   refs.camera.up.copy(state.up);
   refs.camera.lookAt(state.target);
+}
+
+/**
+ * v1.10.10 — SCORRIMENTO in vista libera: un gesto di trascinamento (dx, dy in pixel) sposta il punto
+ * d'osservazione SULLA SUPERFICIE nella direzione del gesto, come si scorre una mappa: dito/mouse su =
+ * avanti, giù = indietro, destra/sinistra = laterale. La direzione è relativa a dove sta guardando la
+ * camera (avanti = la direzione di marcia corrente, proiettata sul piano tangente); il nuovo punto si
+ * ottiene proiettando lo spostamento sulla sfera (directionToGrid normalizza da sola). La direzione di
+ * marcia segue il movimento, così la camera si gira dolcemente verso dove si sta andando.
+ * Il tocco secco resta per "vacci da solo" (hasGoal + frenata dolce di updateFreeCamera).
+ */
+export function panFreeCamera(
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
+  frame: RenderFrame,
+  state: FollowState,
+  dxPx: number,
+  dyPx: number,
+): void {
+  if (!state.hasPosition) return;
+  const { planetWidth, planetHeight } = frame;
+
+  const restingR = restingRadius(refs, state.x, state.y, 0.02);
+  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
+  fcNormal.set(point.normalX, point.normalY, point.normalZ);
+  const hx = state.heading?.hx ?? 0;
+  const hy = state.heading?.hy ?? -1;
+  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
+  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
+  if (fcTangent.lengthSq() < 1e-12) {
+    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+  }
+  fcTangent.normalize();
+
+  // Avanti/indietro lungo la direzione di marcia, destra/sinistra lungo il suo perpendicolare.
+  // (cross(normal, forward) è il lato SINISTRO: per il destro si inverte il verso del prodotto.)
+  panRight.copy(fcTangent).cross(fcNormal);
+  const du = -dyPx * FREE_DRAG_UNITS_PER_PX; // dito/mouse su = avanti
+  const dv = dxPx * FREE_DRAG_UNITS_PER_PX; // destra = destra
+  panWorld.copy(point).addScaledVector(fcTangent, du).addScaledVector(panRight, dv);
+
+  const prevX = state.x;
+  const prevY = state.y;
+  const grid = directionToGrid([panWorld.x, panWorld.y, panWorld.z], planetWidth, planetHeight);
+  state.x = grid.x;
+  state.y = grid.y;
+  state.hasGoal = false;
+  state.freeSpeed = 0;
+  // La direzione di marcia segue il movimento: la camera si gira verso dove si sta andando.
+  state.heading = nextHeading(state.heading, wrappedDelta(prevX, state.x, planetWidth), wrappedDelta(prevY, state.y, planetHeight), 1);
+  state.lastInteractAt = performance.now();
 }
 
 /**
@@ -2094,4 +2161,3 @@ function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: nu
   refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
   refs.selectionRing.visible = true;
 }
-
