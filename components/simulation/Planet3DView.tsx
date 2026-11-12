@@ -11,6 +11,7 @@ import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../
 import { createVisualMotion, stepVisualMotion, type VisualMotion } from "../../lib/naturalMotion";
 import { advancePhase, computeBodyPose, createBodyPose, normalizedSpeed } from "../../lib/bodyAnimation";
 import { applyLivingPose, createLivingState, stepLiving, type LivingState } from "../../lib/livingBehavior";
+import { createLodDetail, createLodWeights, lodDetail, lodWeights, FULL_DETAIL } from "../../lib/animationLod";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
 import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
@@ -62,14 +63,6 @@ const FOLLOW_SNAP_DISTANCE = 2.5;
 /** v1.8.0 — colori del cielo (terza persona) e dello spazio (vista dall'alto), e foschia atmosferica. */
 const SKY_COLOR = 0x9cc3e6;
 const SPACE_COLOR = 0x05070a;
-/** v1.10.6 — Cielo: colore dello zenit e dell'orizzonte (il cielo in terza persona non è più un colore piatto). */
-const SKY_ZENITH = 0x4f83c0;
-const SKY_HORIZON = 0xd7e4ef;
-/** v1.10.6 — Nuvole: quante per livello di qualità, a che altezza, quanto è grande l'area in cui vivono e quanto vento. */
-const CLOUD_COUNTS: Record<QualityProfile["level"], number> = { "2d": 0, basso: 0, medio: 8, alto: 14 };
-const CLOUD_HEIGHT = 7;
-const CLOUD_SPREAD = 22;
-const CLOUD_WIND = 0.12; // unità del mondo al secondo
 const FOLLOW_FOG_NEAR = 1.2;
 const FOLLOW_FOG_FAR = 5.2;
 const SUN_ORBIT_POSITION: [number, number, number] = [6, 4, 8];
@@ -89,28 +82,6 @@ const FOLLOW_PITCH_MAX = 1.0;
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
-/**
- * v1.10.8 — Camera libera: velocità del punto d'osservazione verso il punto toccato (unità del mondo
- * al secondo). v1.10.8b — la "scala" qui sotto non è quella di una creatura: decide distanza E punto
- * guardato (target a scala*1.1 dal suolo). Con 2.2 la camera guardava un punto a 2,4 unità d'altezza:
- * solo cielo. Con 0.55 la distanza resta al massimo (2,2 unità, vista panoramica) e il punto guardato
- * sta a ~0,6 dal suolo: si vede il terreno e le creature attorno.
- */
-const FREE_MOVE_UNITS_PER_SEC = 2.4;
-const FREE_CAMERA_SCALE = 0.55;
-/**
- * v1.10.9 — movimento fluido in vista libera: il punto d'osservazione non parte e non arriva più a scatto.
- * Accelera dolcemente (unità/s²) e frena in proporzionalità inversa alla distanza che resta (v = √(2·a·d)),
- * così l'arrivo è morbido qualunque sia la lunghezza del viaggio.
- */
-const FREE_ACCEL_UNITS_PER_S2 = 3;
-const FREE_BRAKE_UNITS_PER_S2 = 3.5;
-/**
- * v1.10.10 — SCORRIMENTO: in vista libera trascinare (mouse premuto su PC, dito su telefono) sposta il
- * punto d'osservazione nella direzione del gesto, come su una mappa. Quanti unità del mondo per pixel
- * trascinati (a ~2,2 unità di distanza della camera, mezzo schermo ≈ qualche unità di terreno).
- */
-const FREE_DRAG_UNITS_PER_PX = 0.014;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
@@ -171,12 +142,8 @@ const TERRAIN_SWATCHES: Record<number, string> = {
   6: "#a68a3c",
 };
 
-/**
- * v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato.
- * v1.10.8 — "free": terza persona SLEGATA dagli esseri: il punto d'osservazione è un punto qualunque della
- * superficie (non un animale); si sposta verso il punto toccato e la camera lo incornicia da dietro.
- */
-export type CameraMode = "orbit" | "follow" | "free";
+/** v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato. */
+export type CameraMode = "orbit" | "follow";
 
 interface Props {
   frame: RenderFrame | null;
@@ -234,6 +201,8 @@ let trackGeneration = 0;
 const tmpDrawn: XY = { x: 0, y: 0 };
 // v1.10.3 — animazione del corpo: posa e matrici di lavoro riusate per ogni creatura (nessuna allocazione per frame)
 const tmpPose = createBodyPose();
+const tmpLodWeights = createLodWeights();
+const tmpLodDetail = createLodDetail();
 const tmpHeadParent = new THREE.Matrix4();
 const tmpHeadLocal = new THREE.Matrix4();
 const tmpNeckBack = new THREE.Matrix4();
@@ -391,9 +360,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
-  // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
-  const globalTerrainBuiltRef = useRef(false);
-  const globalPlanetKeyRef = useRef("");
   // v1.10.1 — posizioni precedenti e attuali delle creature, solo per il disegno (non persistono, non entrano nei salvataggi).
   const motionRef = useRef(createMotionBuffer());
 
@@ -615,23 +581,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
     selectionRing.visible = false;
     scene.add(selectionRing);
-    // v1.10.6 — cielo con gradiente e nuvole in terza persona (il numero di nuvole dipende dal profilo).
-    const sky = createSkyDome();
-    scene.add(sky);
-    const cloudTexture = createCloudTexture();
-    const cloudCount = CLOUD_COUNTS[quality.level];
-    const clouds: THREE.Sprite[] = [];
-    for (let n = 0; n < cloudCount; n++) {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTexture, transparent: true, opacity: 0.55, depthWrite: false }));
-      sprite.scale.set(3.5 + (n % 3), 1.6 + (n % 3) * 0.5, 1);
-      // posizioni deterministiche sparse intorno all'area, ognuna con la sua quota e la sua velocità del vento
-      const angle = (n / Math.max(1, cloudCount)) * Math.PI * 2 + n * 0.7;
-      sprite.position.set(Math.cos(angle) * (4 + (n % 5)), CLOUD_HEIGHT + (n % 4) * 1.3, Math.sin(angle) * (4 + (n % 5)));
-      sprite.userData.wind = 0.8 + (n % 5) * 0.12;
-      sprite.visible = false;
-      scene.add(sprite);
-      clouds.push(sprite);
-    }
 
     // v1.6.0 — Modalità leggera: watch how long frames really take. If the
     // median stays above ~40 ms (under 25 fps) after the first moments of
@@ -681,8 +630,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.setVisible(true);
       // da vicino pensa all'acqua la scena locale: la sfera d'oceano si nasconde.
       oceanMesh.visible = false;
-      sky.visible = true;
-      for (const cloud of clouds) cloud.visible = true;
       localCenter = null;
       lastLocalAt = 0;
     };
@@ -705,20 +652,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.setVisible(false);
       local?.clear();
       oceanMesh.visible = true;
-      sky.visible = false;
-      for (const cloud of clouds) cloud.visible = false;
       // l'ultimo ViewportFrame era locale: si torna a chiedere quello del pianeta intero
       maybeRequestViewport(true);
     };
 
     const renderLoop = (nowMs: number) => {
-      // v1.10.8 — "free" condivide con "follow" la scena da vicino (cielo, foschia, terreno locale, ombre):
-      // cambia solo chi decide la posa della camera (updateFreeCamera invece di updateFollowCamera).
       const wantFollow = cameraModeRef.current === "follow";
-      const wantFree = cameraModeRef.current === "free";
-      const wantSurface = wantFollow || wantFree;
-      if (wantSurface && !followActive) enterFollow();
-      else if (!wantSurface && followActive) leaveFollow();
+      if (wantFollow && !followActive) enterFollow();
+      else if (!wantFollow && followActive) leaveFollow();
 
       // v1.10.1 — le posizioni da disegnare in questo istante (i dati reali del frame non si toccano).
       const sceneRefs = sceneRef.current;
@@ -735,31 +676,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         const refs = sceneRefs;
         const f = view;
         const id = selectedIdRef.current;
-        if (refs && f) {
+        if (refs && f && id !== null) {
           const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
-          if (wantFollow && id !== null) {
-            const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
-            if (replacement !== null) onSelectRef.current?.(replacement);
-          } else if (wantFree) {
-            // v1.10.8 — camera libera: il punto d'osservazione avanza verso il punto toccato.
-            updateFreeCamera(refs, f, follow, nowMs, dt);
-          }
+          const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
+          if (replacement !== null) onSelectRef.current?.(replacement);
           // Il sole segue chi guarda: dall'altra parte del pianeta sarebbe notte e non si vedrebbe niente.
           placeFollowSun(sun, camera.position, follow.target, follow.up);
           // v1.9.4 — Acqua: la superficie locale scorre col tempo reale, non col tick.
           local?.updateWater(nowMs / 1000);
-          // v1.10.6 — il cielo segue la camera; le nuvole derivano piano col vento e, se escono
-          // dall'area, ricompaiono dall'altra parte (dietro chi guarda non se ne accorge).
-          sky.position.copy(camera.position);
-          for (const cloud of clouds) {
-            cloud.position.x += CLOUD_WIND * (cloud.userData.wind ?? 1) * (dt / 1000);
-            const dx = cloud.position.x - follow.target.x;
-            const dz = cloud.position.z - follow.target.z;
-            if (dx > CLOUD_SPREAD) cloud.position.x -= CLOUD_SPREAD * 2;
-            else if (dx < -CLOUD_SPREAD) cloud.position.x += CLOUD_SPREAD * 2;
-            if (dz > CLOUD_SPREAD) cloud.position.z -= CLOUD_SPREAD * 2;
-            else if (dz < -CLOUD_SPREAD) cloud.position.z += CLOUD_SPREAD * 2;
-          }
         }
       } else {
         controls.update();
@@ -777,10 +701,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
           const startedAt = performance.now();
           const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
           // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
-          // v1.10.8 — in camera libera nessun animale è obbligato e l'anello di selezione resta visibile.
-          const forcing = followActive && wantFollow;
-          updateCreatureInstances(sceneRefs, view, forcing ? selected : null, forcing ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw);
-          updateSelectionRing(sceneRefs, view, forcing ? null : selected);
+          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw, camera.position);
+          updateSelectionRing(sceneRefs, view, followActive ? null : selected);
           creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
           creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
           lastDrawnVersion = motionVersion;
@@ -816,14 +738,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS and the profile's terrainRefreshMs.
     let lastTierKey = "";
     let lastRequestAt = 0;
-    // v1.10.8 — bugfix "si vede solo il cielo": partendo direttamente in vista libera (o terza persona),
-    // la richiesta del pianeta globale (mappa altezze + texture) veniva saltata per sempre, la camera
-    // non conosceva le colline e nasceva DENTRO il terreno. Il pianeta globale viene quindi costruito
-    // comunque la prima volta, anche da vicino; dopo, si torna a risparmiare (c'è il terreno locale).
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
-      if (followActive && globalTerrainBuiltRef.current) return;
+      // In terza persona il pianeta intero non serve: c'è il terreno locale (maybeRequestLocal).
+      if (followActive) return;
       const distance = controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
@@ -931,15 +850,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const dx = e.clientX - lastMovePos.x;
       const dy = e.clientY - lastMovePos.y;
       lastMovePos = { x: e.clientX, y: e.clientY };
-      if (cameraModeRef.current === "free") {
-        // v1.10.10 — in vista libera trascinare SPOSTA il punto d'osservazione nella direzione del gesto
-        // (su PC col mouse premuto, su telefono col dito): la camera lo segue e si gira verso dove si va.
-        const refs = sceneRef.current;
-        const f = frameRef.current;
-        if (refs && f) panFreeCamera(refs, f, follow, dx, dy);
-      } else {
-        applyFollowDrag(follow, dx, dy, performance.now());
-      }
+      applyFollowDrag(follow, dx, dy, performance.now());
     };
 
     const handlePointerEnd = () => {
@@ -964,22 +875,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (hits.length > 0 && hits[0].instanceId !== undefined && sceneRef.current) {
         const organismId = sceneRef.current.instanceOrganismId[hits[0].instanceId];
         onSelectRef.current?.(organismId);
-      } else if (cameraModeRef.current === "free") {
-        // v1.10.8 — in camera libera un tocco sul terreno lo raggiunge: il punto d'osservazione ci va da solo.
-        const groundHits = raycaster.intersectObject(planetMesh);
-        if (groundHits.length > 0) {
-          const p = groundHits[0].point;
-          const grid = directionToGrid([p.x, p.y, p.z], frameRef.current?.planetWidth ?? 0, frameRef.current?.planetHeight ?? 0);
-          if (grid.x > 0 || grid.y > 0) {
-            follow.goalX = grid.x;
-            follow.goalY = grid.y;
-            follow.hasGoal = true;
-          }
-        }
-        // v1.10.9 — SELEZIONE AL TOCCO, estensibile: qui sopra gli animali (istanze del motore).
-        // Le piante (flora della scena locale) entreranno appena avranno un'identità nella simulazione:
-        // basterà aggiungere la loro mesh a questa catena di raycast, PRIMA del terreno, e chiamare
-        // onSelect con l'id della pianta — il pannello dati e l'anello di selezione li seguiranno.
       } else if (!followActive) {
         // In terza persona un tocco sul vuoto non deseleziona: si smette di seguire dal pulsante.
         onSelectRef.current?.(null);
@@ -1029,10 +924,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.dispose();
       ringGeometry.dispose();
       ringMaterial.dispose();
-      sky.geometry.dispose();
-      (sky.material as THREE.Material).dispose();
-      cloudTexture.dispose();
-      for (const cloud of clouds) cloud.material.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -1087,18 +978,6 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         viewportFrame.originY + viewportFrame.cellsHeight / 2,
       );
       return;
-    }
-
-    // v1.10.8 — è arrivato un ViewportFrame del pianeta intero: la mappa altezze globale esiste, la camera
-    // in vista libera/terza persona può fidarsi. Al cambio di mondo la bandierina si azzera e si ricostruisce.
-    // (Le dimensioni del mondo stanno nel RenderFrame, non nel ViewportFrame.)
-    if (currentFrame) {
-      const planetKey = `${currentFrame.planetWidth}x${currentFrame.planetHeight}`;
-      if (globalPlanetKeyRef.current !== planetKey) {
-        globalPlanetKeyRef.current = planetKey;
-        globalTerrainBuiltRef.current = false;
-      }
-      globalTerrainBuiltRef.current = true;
     }
 
     const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, temperature, planetHeight, tick, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
@@ -1255,9 +1134,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         aria-label={
           cameraMode === "follow"
             ? "Vista in terza persona su un animale — trascina per guardarti intorno, tocca un altro animale per seguirlo"
-            : cameraMode === "free"
-              ? "Vista in terza persona libera — trascina per spostarti nella direzione del gesto, tocca un punto per andarci"
-              : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
+            : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
         }
       />
       <ul className="biome-legend" aria-label="Legenda dei biomi">
@@ -1316,6 +1193,18 @@ function setPart(
 }
 
 /**
+ * v1.10.5 — Come setPart, ma posizione e scala locali si scrivono prima nei vettori di lavoro (`tmpLocalPos`,
+ * `tmpLocalScale`) invece di passarle come argomenti. Nel ciclo per creatura setPart si chiamava una quindicina di
+ * volte con sei numeri decimali, e V8, non potendola espandere in linea in una funzione così grande, creava un
+ * oggetto temporaneo per ognuno: circa 1,4 KB di spazzatura per creatura a ogni aggiornamento. Così no.
+ */
+function commitPart(mesh: THREE.InstancedMesh, index: number, parent: THREE.Matrix4, rotation: THREE.Quaternion): void {
+  tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
+  tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
+  mesh.setMatrixAt(index, tmpPartMatrix);
+}
+
+/**
  * v1.8.0 — Ogni InstancedMesh va esclusa dal frustum culling. Three.js ne calcola
  * la sfera di ingombro una volta sola, quando ha ancora zero istanze: resta una
  * sfera vuota al centro del pianeta. Dalla vista dall'alto il centro è
@@ -1327,87 +1216,22 @@ export function configureInstancedMesh(mesh: THREE.InstancedMesh): void {
 }
 
 /**
- * v1.10.5 — Contro-ombreggiamento ventre-dorso: colori per vertice che il materiale moltiplica
- * per il colore della specie. Ventre chiaro e caldo (come il sottopelo di mammiferi e
- * uccelli reali), dorso scuro e freddo. Stesso costo di prima: solo colori per vertice.
+ * v1.8.0 — Sfumatura ventre-dorso: colori per vertice (1 sul ventre, più scuro sul
+ * dorso) che il materiale moltiplica per il colore della specie. Dà volume alle
+ * sfere che formano il corpo senza nessuna istanza o luce in più.
  */
 export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   const position = geometry.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(position.count * 3);
   for (let i = 0; i < position.count; i++) {
     const y = position.getY(i); // sfera unitaria: -1 ventre, +1 dorso
-    const t = (y + 1) / 2; // 0 ventre, 1 dorso
-    colors[i * 3] = 1.08 - 0.34 * t; // ventre caldo e chiaro, dorso molto più scuro
-    colors[i * 3 + 1] = 1.04 - 0.26 * t;
-    colors[i * 3 + 2] = 0.96 - 0.12 * t; // il dorso raffredda (più blu), il ventre scalda
+    const shade = 1 - 0.22 * ((y + 1) / 2);
+    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = shade;
   }
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   return geometry;
 }
 
-/**
- * v1.10.6 — Cielo con gradiente: una grande sfera rovesciata con colori per vertice
- * (zenit più scuro, orizzonte chiaro, foschia sotto). Una sola draw call, niente luci:
- * MeshBasicMaterial. Segue la camera, così non se ne esce mai guardandosi intorno.
- */
-export function createSkyDome(): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(1, 24, 12);
-  const position = geometry.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(position.count * 3);
-  const zenith = new THREE.Color(SKY_ZENITH);
-  const horizon = new THREE.Color(SKY_HORIZON);
-  const haze = new THREE.Color(SKY_COLOR);
-  const c = new THREE.Color();
-  for (let i = 0; i < position.count; i++) {
-    const t = position.getY(i); // +1 zenit, 0 orizzonte, -1 sotto
-    if (t >= 0) c.copy(horizon).lerp(zenith, Math.pow(t, 0.7));
-    else c.copy(horizon).lerp(haze, Math.min(1, -t * 2)); // sotto l'orizzonte: sfuma nella foschia del suolo
-    colors[i * 3] = c.r;
-    colors[i * 3 + 1] = c.g;
-    colors[i * 3 + 2] = c.b;
-  }
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.scale.setScalar(40);
-  mesh.renderOrder = -10; // dietro a tutto
-  mesh.frustumCulled = false;
-  mesh.visible = false;
-  return mesh;
-}
-
-/**
- * v1.10.6 — Texture morbida di una nuvola: tre blob ellittici sfumati, generata una volta
- * con la sola matematica (niente immagini da caricare, niente canvas 2D).
- */
-export function createCloudTexture(): THREE.Texture {
-  const SIZE = 64;
-  const data = new Uint8Array(SIZE * SIZE * 4);
-  const blobs = [
-    { x: 0.5, y: 0.55, rx: 0.42, ry: 0.22, a: 1 },
-    { x: 0.3, y: 0.5, rx: 0.2, ry: 0.14, a: 0.8 },
-    { x: 0.68, y: 0.5, rx: 0.22, ry: 0.15, a: 0.85 },
-  ];
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
-      let a = 0;
-      for (const b of blobs) {
-        const dx = (x + 0.5) / SIZE - b.x;
-        const dy = (y + 0.5) / SIZE - b.y;
-        const d = Math.sqrt((dx / b.rx) * (dx / b.rx) + (dy / b.ry) * (dy / b.ry));
-        a = Math.max(a, b.a * Math.max(0, 1 - d));
-      }
-      const k = (y * SIZE + x) * 4;
-      data[k] = 255;
-      data[k + 1] = 255;
-      data[k + 2] = 255;
-      data[k + 3] = Math.round(Math.min(1, a * a) * 255); // falloff morbido ai bordi
-    }
-  }
-  const texture = new THREE.DataTexture(data, SIZE, SIZE, THREE.RGBAFormat);
-  texture.needsUpdate = true;
-  return texture;
-}
 const sunDir = new THREE.Vector3();
 const sunSide = new THREE.Vector3();
 
@@ -1459,12 +1283,6 @@ export interface FollowState {
   lastInteractAt: number;
   /** Da quando (ms) l'animale non c'è più nei frame, o null. */
   missingSince: number | null;
-  /** v1.10.8 — camera libera: punto della superficie verso cui il punto d'osservazione sta andando (coordinate griglia). */
-  goalX: number;
-  goalY: number;
-  hasGoal: boolean;
-  /** v1.10.9 — camera libera: velocità attuale del punto d'osservazione (unità del mondo al secondo), per accelerare e frenare dolcemente. */
-  freeSpeed: number;
 }
 
 export function createFollowState(): FollowState {
@@ -1485,10 +1303,6 @@ export function createFollowState(): FollowState {
     dragging: false,
     lastInteractAt: 0,
     missingSince: null,
-    goalX: 0,
-    goalY: 0,
-    hasGoal: false,
-    freeSpeed: 0,
   };
 }
 
@@ -1503,8 +1317,6 @@ export function resetFollowState(state: FollowState): void {
   state.pitch = 0;
   state.dragging = false;
   state.missingSince = null;
-  state.hasGoal = false;
-  state.freeSpeed = 0;
 }
 
 /** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
@@ -1519,9 +1331,6 @@ const fcNormal = new THREE.Vector3();
 const fcTangent = new THREE.Vector3();
 const fcDesired = new THREE.Vector3();
 const fcDesiredTarget = new THREE.Vector3();
-// v1.10.10 — temporanei dello scorrimento in vista libera (panFreeCamera).
-const panRight = new THREE.Vector3();
-const panWorld = new THREE.Vector3();
 
 /**
  * Posiziona la camera dietro e sopra l'animale `selectedId`, guardando
@@ -1649,169 +1458,6 @@ export function updateFollowCamera(
 }
 
 /**
- * v1.10.8 — Camera libera: terza persona slegata dagli esseri. Il punto d'osservazione è un punto
- * qualunque della superficie (non un animale): avanza da solo verso il punto toccato (state.hasGoal)
- * e la camera lo incornicia da dietro, con la stessa matematica di posa, smorzamento e collisione
- * col terreno della terza persona (computeFollowPose, clampCameraRadius). Trascinando si guarda
- * intorno come in "follow"; senza tocchi la camera torna dietro il punto d'osservazione.
- * Scrive anche state.x/y, così il terreno locale ad alto dettaglio segue il punto d'osservazione.
- */
-export function updateFreeCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
-  frame: RenderFrame,
-  state: FollowState,
-  nowMs: number,
-  dtMs: number,
-): void {
-  const { planetWidth, planetHeight } = frame;
-
-  // All'ingresso (o al cambio di mondo) il punto d'osservazione parte dal centro della mappa, guardando nord.
-  if (!state.hasPosition) {
-    state.x = planetWidth / 2;
-    state.y = planetHeight / 2;
-    state.hasPosition = true;
-    state.heading = { hx: 0, hy: -1 };
-    state.hasGoal = false;
-  }
-
-  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap.
-  // v1.10.9 — partenza e arrivo morbidi: la velocità sale con un'accelerazione limitata e scende
-  // secondo la frenata necessaria a fermarsi sul punto (v = √(2·a·d)), qualunque sia la distanza.
-  if (state.hasGoal) {
-    const dx = wrappedDelta(state.x, state.goalX, planetWidth);
-    const dy = wrappedDelta(state.y, state.goalY, planetHeight);
-    const distCells = Math.hypot(dx, dy);
-    const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
-    const remainingUnits = distCells * cellUnits;
-    const step = dtMs / 1000;
-    const brakeSpeed = Math.sqrt(2 * FREE_BRAKE_UNITS_PER_S2 * Math.max(0, remainingUnits));
-    const targetSpeed = Math.min(FREE_MOVE_UNITS_PER_SEC, brakeSpeed);
-    const diff = targetSpeed - state.freeSpeed;
-    const maxDelta = (diff > 0 ? FREE_ACCEL_UNITS_PER_S2 : FREE_BRAKE_UNITS_PER_S2) * step;
-    state.freeSpeed += Math.max(-maxDelta, Math.min(maxDelta, diff));
-    const stepUnits = state.freeSpeed * step;
-    if (remainingUnits <= stepUnits || remainingUnits < 1e-9) {
-      state.x = state.goalX;
-      state.y = state.goalY;
-      state.hasGoal = false;
-      state.freeSpeed = 0;
-    } else {
-      const k = stepUnits / cellUnits / distCells;
-      state.x += dx * k;
-      state.y += dy * k;
-      // mentre va, la camera guarda dove sta andando
-      state.heading = nextHeading(state.heading, dx * k, dy * k, headingBlendForDt(dtMs));
-    }
-  } else {
-    state.freeSpeed = 0;
-  }
-
-  // Dopo un po' senza tocchi la camera torna dietro il punto d'osservazione (come in follow).
-  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
-    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
-    state.yaw = easeAngleToZero(state.yaw, a);
-    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
-  }
-
-  const restingR = restingRadius(refs, state.x, state.y, 0.02);
-  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
-  fcNormal.set(point.normalX, point.normalY, point.normalZ);
-  const hx = state.heading?.hx ?? 0;
-  const hy = state.heading?.hy ?? -1;
-  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
-  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
-  if (fcTangent.lengthSq() < 1e-12) {
-    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-  }
-  fcTangent.normalize();
-
-  const pose = computeFollowPose({
-    point: [point.x, point.y, point.z],
-    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
-    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
-    scale: FREE_CAMERA_SCALE,
-    yaw: state.yaw,
-    pitch: state.pitch,
-  });
-
-  // La camera non deve finire dentro una collina (come in follow).
-  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
-  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(FREE_CAMERA_SCALE);
-  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
-
-  fcDesired.set(cam[0], cam[1], cam[2]);
-  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
-
-  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
-    state.position.copy(fcDesired);
-    state.target.copy(fcDesiredTarget);
-    state.up.copy(fcNormal);
-    state.hasPose = true;
-  } else {
-    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
-    state.position.lerp(fcDesired, a);
-    state.target.lerp(fcDesiredTarget, a);
-    state.up.lerp(fcNormal, a).normalize();
-  }
-
-  refs.camera.position.copy(state.position);
-  refs.camera.up.copy(state.up);
-  refs.camera.lookAt(state.target);
-}
-
-/**
- * v1.10.10 — SCORRIMENTO in vista libera: un gesto di trascinamento (dx, dy in pixel) sposta il punto
- * d'osservazione SULLA SUPERFICIE nella direzione del gesto, come si scorre una mappa: dito/mouse su =
- * avanti, giù = indietro, destra/sinistra = laterale. La direzione è relativa a dove sta guardando la
- * camera (avanti = la direzione di marcia corrente, proiettata sul piano tangente); il nuovo punto si
- * ottiene proiettando lo spostamento sulla sfera (directionToGrid normalizza da sola). La direzione di
- * marcia segue il movimento, così la camera si gira dolcemente verso dove si sta andando.
- * Il tocco secco resta per "vacci da solo" (hasGoal + frenata dolce di updateFreeCamera).
- */
-export function panFreeCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
-  frame: RenderFrame,
-  state: FollowState,
-  dxPx: number,
-  dyPx: number,
-): void {
-  if (!state.hasPosition) return;
-  const { planetWidth, planetHeight } = frame;
-
-  const restingR = restingRadius(refs, state.x, state.y, 0.02);
-  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
-  fcNormal.set(point.normalX, point.normalY, point.normalZ);
-  const hx = state.heading?.hx ?? 0;
-  const hy = state.heading?.hy ?? -1;
-  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
-  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
-  if (fcTangent.lengthSq() < 1e-12) {
-    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-  }
-  fcTangent.normalize();
-
-  // Avanti/indietro lungo la direzione di marcia, destra/sinistra lungo il suo perpendicolare.
-  // (cross(normal, forward) è il lato SINISTRO: per il destro si inverte il verso del prodotto.)
-  panRight.copy(fcTangent).cross(fcNormal);
-  const du = -dyPx * FREE_DRAG_UNITS_PER_PX; // dito/mouse su = avanti
-  const dv = dxPx * FREE_DRAG_UNITS_PER_PX; // destra = destra
-  panWorld.copy(point).addScaledVector(fcTangent, du).addScaledVector(panRight, dv);
-
-  const prevX = state.x;
-  const prevY = state.y;
-  const grid = directionToGrid([panWorld.x, panWorld.y, panWorld.z], planetWidth, planetHeight);
-  state.x = grid.x;
-  state.y = grid.y;
-  state.hasGoal = false;
-  state.freeSpeed = 0;
-  // La direzione di marcia segue il movimento: la camera si gira verso dove si sta andando.
-  state.heading = nextHeading(state.heading, wrappedDelta(prevX, state.x, planetWidth), wrappedDelta(prevY, state.y, planetHeight), 1);
-  state.lastInteractAt = performance.now();
-}
-
-/**
  * v1.5.0 — Creature 3D. Each drawn creature is placed on the (displaced)
  * surface, oriented with its feet on the ground and its nose toward the
  * direction it has been moving, and built from the parts of its genome-
@@ -1827,6 +1473,8 @@ export function updateCreatureInstances(
   cullRangeUnits: number | null = null,
   /** v1.10.1/2 — millisecondi dall'aggiornamento precedente: rotazione, velocità e inclinazione visive dipendono dal tempo. */
   dtMs = 100,
+  /** v1.10.5 — posizione della camera nel mondo 3D: la distanza decide il dettaglio dell'animazione (LOD). Senza, tutto è al massimo dettaglio. */
+  cameraPosition: THREE.Vector3 | null = null,
 ): void {
   const {
     organismsX,
@@ -1869,6 +1517,8 @@ export function updateCreatureInstances(
 
   const stride = computeRenderStride(population, refs.maxCreatures);
   const generation = ++trackGeneration;
+  const halfWidth = planetWidth / 2;
+  const halfHeight = planetHeight / 2;
   const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
 
   let extraIndex = -1;
@@ -1919,24 +1569,29 @@ export function updateCreatureInstances(
     // Heading: face the way this creature has moved since the last frame
     // (keeps its previous heading while it stands still; first sight of a
     // creature faces north until it moves).
+    // v1.10.5 — la scala si calcola una volta per creatura (prima 5 volte) e le funzioni piccole del ciclo non
+    // ricevono più numeri decimali "uno per uno" quando basta scriverli sul posto: meno oggetti temporanei per frame.
+    const scaleI = creatureScale(organismsSize[i]);
     let track = refs.creatureTrack.get(id);
     if (track) {
-      const dxCells = wrappedDelta(track.x, x, planetWidth);
-      const dyCells = wrappedDelta(track.y, y, planetHeight);
+      let dxCells = x - track.x;
+      if (dxCells > halfWidth) dxCells -= planetWidth;
+      else if (dxCells < -halfWidth) dxCells += planetWidth;
+      let dyCells = y - track.y;
+      if (dyCells > halfHeight) dyCells -= planetHeight;
+      else if (dyCells < -halfHeight) dyCells += planetHeight;
       // v1.10.2 — rotazione graduale e velocità/inclinazione visive (la posizione resta quella interpolata)
-      const travelledUnitsNow = Math.hypot(dxCells, dyCells) * cellUnits;
-      stepVisualMotion(track.motion, dxCells, dyCells, travelledUnitsNow, dtMs, organismsSize[i], creatureScale(organismsSize[i]));
+      const travelledUnitsNow = Math.sqrt(dxCells * dxCells + dyCells * dyCells) * cellUnits;
+      stepVisualMotion(track.motion, dxCells, dyCells, travelledUnitsNow, dtMs, organismsSize[i], scaleI);
       if (track.motion.hasYaw) {
         track.hx = Math.cos(track.motion.yaw);
         track.hy = Math.sin(track.motion.yaw);
         track.hasHeading = true;
       }
-      // v1.8.0 — il passo avanza con la strada fatta: una falcata (mezzo ciclo) ogni ~1,6 lunghezze di corpo.
-      const travelled = Math.hypot(dxCells, dyCells) * cellUnits;
       // v1.10.3 — la fase del passo avanza con la velocità visualizzata: la cadenza è proporzionale alla velocità e, da ferma, si ferma
-      track.phase = advancePhase(track.phase, track.motion.visSpeed, dtMs, creatureScale(organismsSize[i]));
+      track.phase = advancePhase(track.phase, track.motion.visSpeed, dtMs, scaleI);
       // v1.10.4 — respiro, sguardo, mangia, riposa: dallo stato reale (velocità visualizzata, energia guadagnata)
-      stepLiving(track.living, dtMs, normalizedSpeed(track.motion.visSpeed, creatureScale(organismsSize[i])), organismsEnergyGain ? organismsEnergyGain[i] : 0);
+      stepLiving(track.living, dtMs, normalizedSpeed(track.motion.visSpeed, scaleI), organismsEnergyGain ? organismsEnergyGain[i] : 0);
       track.x = x;
       track.y = y;
     } else {
@@ -1979,7 +1634,7 @@ export function updateCreatureInstances(
       track.aHunting = gHunting;
     }
 
-    const baseScale = creatureScale(organismsSize[i]);
+    const baseScale = scaleI;
     tmpScale.set(baseScale, baseScale, baseScale);
     tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
 
@@ -1989,8 +1644,17 @@ export function updateCreatureInstances(
     const lift = hasLegs ? anatomy.legLength * 0.97 + anatomy.bodyHalfHeight * 0.4 : anatomy.bodyHalfHeight * 0.8;
 
     // v1.10.3 — posa del corpo in cammino: zampe, corpo, testa e coda (dallo stato visivo, vedi lib/bodyAnimation.ts)
-    computeBodyPose(tmpPose, phase, track.motion, baseScale, anatomy);
-    applyLivingPose(tmpPose, track.living);
+    // v1.10.5 — LOD: il dettaglio dell'animazione dipende dalla distanza dalla camera (in scale della creatura), con pesi continui
+    let detail = FULL_DETAIL;
+    if (cameraPosition) {
+      const cdx = tmpPosition.x - cameraPosition.x;
+      const cdy = tmpPosition.y - cameraPosition.y;
+      const cdz = tmpPosition.z - cameraPosition.z;
+      lodWeights(Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz) / baseScale, tmpLodWeights);
+      detail = lodDetail(tmpLodWeights, tmpLodDetail);
+    }
+    computeBodyPose(tmpPose, phase, track.motion, baseScale, anatomy, detail);
+    applyLivingPose(tmpPose, track.living, detail);
     // La testa (con occhi, mandibola e orecchie) ruota attorno al collo e segue il corpo; se non c'è movimento si usa la matrice della creatura.
     let headParent = tmpCreatureMatrix;
     if (tmpPose.headPitch !== 0 || tmpPose.headYaw !== 0 || tmpPose.bobY !== 0 || tmpPose.swayX !== 0 || tmpPose.surgeZ !== 0) {
@@ -2003,18 +1667,18 @@ export function updateCreatureInstances(
       headParent = tmpHeadParent;
     }
 
-    setPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, tmpPose.surgeZ, Q_IDENTITY, anatomy.bodyHalfWidth * (1 + tmpPose.breath), anatomy.bodyHalfHeight * (1 + tmpPose.breath), anatomy.bodyHalfLength * (1 + tmpPose.breath * 0.3));
-    setPart(refs.headMesh, writeIndex, headParent, 0, lift + anatomy.headY, anatomy.headZ, Q_IDENTITY, anatomy.headRadius, anatomy.headRadius, anatomy.headRadius);
+    { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY; tmpLocalPos.z = tmpPose.surgeZ; tmpLocalScale.x = anatomy.bodyHalfWidth * (1 + tmpPose.breath); tmpLocalScale.y = anatomy.bodyHalfHeight * (1 + tmpPose.breath); tmpLocalScale.z = anatomy.bodyHalfLength * (1 + tmpPose.breath * 0.3); commitPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, Q_IDENTITY); }
+    { tmpLocalPos.x = 0; tmpLocalPos.y = lift + anatomy.headY; tmpLocalPos.z = anatomy.headZ; tmpLocalScale.x = anatomy.headRadius; tmpLocalScale.y = anatomy.headRadius; tmpLocalScale.z = anatomy.headRadius; commitPart(refs.headMesh, writeIndex, headParent, Q_IDENTITY); }
     // v1.6.0 — lighter profiles skip the finer parts entirely: eyes, tail
     // and jaw from detail 2, dorsal spikes only at detail 3.
     if (refs.detail >= 2) {
-      setPart(refs.eyeMesh, writeIndex * 2, headParent, -anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
-      setPart(refs.eyeMesh, writeIndex * 2 + 1, headParent, anatomy.eyeX, lift + anatomy.eyeY, anatomy.eyeZ, Q_IDENTITY, anatomy.eyeRadius, anatomy.eyeRadius, anatomy.eyeRadius);
+      { tmpLocalPos.x = -anatomy.eyeX; tmpLocalPos.y = lift + anatomy.eyeY; tmpLocalPos.z = anatomy.eyeZ; tmpLocalScale.x = anatomy.eyeRadius; tmpLocalScale.y = anatomy.eyeRadius; tmpLocalScale.z = anatomy.eyeRadius; commitPart(refs.eyeMesh, writeIndex * 2, headParent, Q_IDENTITY); }
+      { tmpLocalPos.x = anatomy.eyeX; tmpLocalPos.y = lift + anatomy.eyeY; tmpLocalPos.z = anatomy.eyeZ; tmpLocalScale.x = anatomy.eyeRadius; tmpLocalScale.y = anatomy.eyeRadius; tmpLocalScale.z = anatomy.eyeRadius; commitPart(refs.eyeMesh, writeIndex * 2 + 1, headParent, Q_IDENTITY); }
       // la coda oscilla col passo e fa da contrappeso in curva (la rotazione si compone con quella che la fa puntare indietro)
       tmpTailQuat.setFromEuler(tmpPoseEuler.set(tmpPose.tailPitch, tmpPose.tailYaw, 0, "YXZ")).multiply(Q_TIP_BACK);
-      setPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, tmpPose.swayX, lift + tmpPose.bobY, anatomy.tailZ + tmpPose.surgeZ, tmpTailQuat, anatomy.tailRadius / CONE_BASE_RADIUS, anatomy.tailLength, anatomy.tailRadius / CONE_BASE_RADIUS);
+      { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY; tmpLocalPos.z = anatomy.tailZ + tmpPose.surgeZ; tmpLocalScale.x = anatomy.tailRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.tailLength; tmpLocalScale.z = anatomy.tailRadius / CONE_BASE_RADIUS; commitPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, tmpTailQuat); }
       if (anatomy.jawVisible) {
-        setPart(refs.jawMesh, writeIndex, headParent, 0, lift + anatomy.jawY, anatomy.jawZ, Q_TIP_FORWARD, anatomy.jawRadius / CONE_BASE_RADIUS, anatomy.jawLength, anatomy.jawRadius / CONE_BASE_RADIUS);
+        { tmpLocalPos.x = 0; tmpLocalPos.y = lift + anatomy.jawY; tmpLocalPos.z = anatomy.jawZ; tmpLocalScale.x = anatomy.jawRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.jawLength; tmpLocalScale.z = anatomy.jawRadius / CONE_BASE_RADIUS; commitPart(refs.jawMesh, writeIndex, headParent, Q_TIP_FORWARD); }
       } else {
         refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
       }
@@ -2027,21 +1691,10 @@ export function updateCreatureInstances(
         const front = n < 2;
         // v1.10.3 — oscillazione dalla posa: andatura (passo, trotto, galoppo) e ampiezza che va a zero da ferma
         tmpLegQuat.setFromAxisAngle(AXIS_X, tmpPose.legSwing[n]);
-        setPart(
-          refs.legMesh,
-          writeIndex * LEGS_PER_CREATURE + n,
-          tmpCreatureMatrix,
-          side * anatomy.legX,
-          anatomy.legLength * 0.97,
-          front ? anatomy.legFrontZ : anatomy.legBackZ,
-          tmpLegQuat,
-          anatomy.legRadius,
-          anatomy.legLength,
-          anatomy.legRadius,
-        );
+        { tmpLocalPos.x = side * anatomy.legX; tmpLocalPos.y = anatomy.legLength * 0.97; tmpLocalPos.z = front ? anatomy.legFrontZ : anatomy.legBackZ; tmpLocalScale.x = anatomy.legRadius; tmpLocalScale.y = anatomy.legLength; tmpLocalScale.z = anatomy.legRadius; commitPart(refs.legMesh, writeIndex * LEGS_PER_CREATURE + n, tmpCreatureMatrix, tmpLegQuat); }
       }
       // ombra morbida sul suolo
-      setPart(refs.shadowMesh, writeIndex, tmpCreatureMatrix, 0, 0.05, 0, Q_IDENTITY, anatomy.bodyHalfWidth * 1.5, 1, anatomy.bodyHalfLength * 1.4);
+      { tmpLocalPos.x = 0; tmpLocalPos.y = 0.05; tmpLocalPos.z = 0; tmpLocalScale.x = anatomy.bodyHalfWidth * 1.5; tmpLocalScale.y = 1; tmpLocalScale.z = anatomy.bodyHalfLength * 1.4; commitPart(refs.shadowMesh, writeIndex, tmpCreatureMatrix, Q_IDENTITY); }
     }
     if (refs.detail >= 3) {
       // orecchie per gli erbivori, più grandi con la vista migliore, inclinate verso l'esterno
@@ -2050,7 +1703,7 @@ export function updateCreatureInstances(
         if (anatomy.earVisible) {
           const side = n === 0 ? -1 : 1;
           tmpLegQuat.setFromAxisAngle(AXIS_Z, -side * 0.35);
-          setPart(refs.earMesh, slot, headParent, side * anatomy.earX, lift + anatomy.earY, anatomy.earZ, tmpLegQuat, anatomy.earRadius / CONE_BASE_RADIUS, anatomy.earHeight, anatomy.earRadius / CONE_BASE_RADIUS);
+          { tmpLocalPos.x = side * anatomy.earX; tmpLocalPos.y = lift + anatomy.earY; tmpLocalPos.z = anatomy.earZ; tmpLocalScale.x = anatomy.earRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.earHeight; tmpLocalScale.z = anatomy.earRadius / CONE_BASE_RADIUS; commitPart(refs.earMesh, slot, headParent, tmpLegQuat); }
         } else {
           refs.earMesh.setMatrixAt(slot, ZERO_MATRIX);
         }
@@ -2082,18 +1735,7 @@ export function updateCreatureInstances(
       const slot = writeIndex * MAX_SPIKES + k;
       const spike = anatomy.spikes[k];
       if (spike) {
-        setPart(
-          refs.spikeMesh,
-          slot,
-          tmpCreatureMatrix,
-          tmpPose.swayX,
-          lift + tmpPose.bobY + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45,
-          spike.z + tmpPose.surgeZ,
-          Q_IDENTITY,
-          spike.radius / CONE_BASE_RADIUS,
-          spike.height,
-          spike.radius / CONE_BASE_RADIUS,
-        );
+        { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45; tmpLocalPos.z = spike.z + tmpPose.surgeZ; tmpLocalScale.x = spike.radius / CONE_BASE_RADIUS; tmpLocalScale.y = spike.height; tmpLocalScale.z = spike.radius / CONE_BASE_RADIUS; commitPart(refs.spikeMesh, slot, tmpCreatureMatrix, Q_IDENTITY); }
         refs.spikeMesh.setColorAt(slot, tmpColor2);
       } else {
         refs.spikeMesh.setMatrixAt(slot, ZERO_MATRIX);
