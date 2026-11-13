@@ -63,6 +63,14 @@ const FOLLOW_SNAP_DISTANCE = 2.5;
 /** v1.8.0 — colori del cielo (terza persona) e dello spazio (vista dall'alto), e foschia atmosferica. */
 const SKY_COLOR = 0x9cc3e6;
 const SPACE_COLOR = 0x05070a;
+/** v1.10.6 — Cielo: colore dello zenit e dell'orizzonte (il cielo in terza persona non è più un colore piatto). */
+const SKY_ZENITH = 0x4f83c0;
+const SKY_HORIZON = 0xd7e4ef;
+/** v1.10.6 — Nuvole: quante per livello di qualità, a che altezza, quanto è grande l'area in cui vivono e quanto vento. */
+const CLOUD_COUNTS: Record<QualityProfile["level"], number> = { "2d": 0, basso: 0, medio: 8, alto: 14 };
+const CLOUD_HEIGHT = 7;
+const CLOUD_SPREAD = 22;
+const CLOUD_WIND = 0.12; // unità del mondo al secondo
 const FOLLOW_FOG_NEAR = 1.2;
 const FOLLOW_FOG_FAR = 5.2;
 const SUN_ORBIT_POSITION: [number, number, number] = [6, 4, 8];
@@ -82,6 +90,28 @@ const FOLLOW_PITCH_MAX = 1.0;
 const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
+/**
+ * v1.10.8 — Camera libera: velocità del punto d'osservazione verso il punto toccato (unità del mondo
+ * al secondo). v1.10.8b — la "scala" qui sotto non è quella di una creatura: decide distanza E punto
+ * guardato (target a scala*1.1 dal suolo). Con 2.2 la camera guardava un punto a 2,4 unità d'altezza:
+ * solo cielo. Con 0.55 la distanza resta al massimo (2,2 unità, vista panoramica) e il punto guardato
+ * sta a ~0,6 dal suolo: si vede il terreno e le creature attorno.
+ */
+const FREE_MOVE_UNITS_PER_SEC = 2.4;
+const FREE_CAMERA_SCALE = 0.55;
+/**
+ * v1.10.9 — movimento fluido in vista libera: il punto d'osservazione non parte e non arriva più a scatto.
+ * Accelera dolcemente (unità/s²) e frena in proporzionalità inversa alla distanza che resta (v = √(2·a·d)),
+ * così l'arrivo è morbido qualunque sia la lunghezza del viaggio.
+ */
+const FREE_ACCEL_UNITS_PER_S2 = 3;
+const FREE_BRAKE_UNITS_PER_S2 = 3.5;
+/**
+ * v1.10.10 — SCORRIMENTO: in vista libera trascinare (mouse premuto su PC, dito su telefono) sposta il
+ * punto d'osservazione nella direzione del gesto, come su una mappa. Quanti unità del mondo per pixel
+ * trascinati (a ~2,2 unità di distanza della camera, mezzo schermo ≈ qualche unità di terreno).
+ */
+const FREE_DRAG_UNITS_PER_PX = 0.014;
 
 /**
  * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
@@ -142,8 +172,12 @@ const TERRAIN_SWATCHES: Record<number, string> = {
   6: "#a68a3c",
 };
 
-/** v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato. */
-export type CameraMode = "orbit" | "follow";
+/**
+ * v1.7.0 — "orbit": vista dall'alto, si ruota il pianeta. "follow": terza persona, la camera segue l'animale selezionato.
+ * v1.10.8 — "free": terza persona SLEGATA dagli esseri: il punto d'osservazione è un punto qualunque della
+ * superficie (non un animale); si sposta verso il punto toccato e la camera lo incornicia da dietro.
+ */
+export type CameraMode = "orbit" | "follow" | "free";
 
 interface Props {
   frame: RenderFrame | null;
@@ -360,6 +394,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
+  // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
+  const globalTerrainBuiltRef = useRef(false);
+  const globalPlanetKeyRef = useRef("");
   // v1.10.1 — posizioni precedenti e attuali delle creature, solo per il disegno (non persistono, non entrano nei salvataggi).
   const motionRef = useRef(createMotionBuffer());
 
@@ -581,6 +618,23 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const selectionRing = new THREE.Mesh(ringGeometry, ringMaterial);
     selectionRing.visible = false;
     scene.add(selectionRing);
+    // v1.10.6 — cielo con gradiente e nuvole in terza persona (il numero di nuvole dipende dal profilo).
+    const sky = createSkyDome();
+    scene.add(sky);
+    const cloudTexture = createCloudTexture();
+    const cloudCount = CLOUD_COUNTS[quality.level];
+    const clouds: THREE.Sprite[] = [];
+    for (let n = 0; n < cloudCount; n++) {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTexture, transparent: true, opacity: 0.55, depthWrite: false }));
+      sprite.scale.set(3.5 + (n % 3), 1.6 + (n % 3) * 0.5, 1);
+      // posizioni deterministiche sparse intorno all'area, ognuna con la sua quota e la sua velocità del vento
+      const angle = (n / Math.max(1, cloudCount)) * Math.PI * 2 + n * 0.7;
+      sprite.position.set(Math.cos(angle) * (4 + (n % 5)), CLOUD_HEIGHT + (n % 4) * 1.3, Math.sin(angle) * (4 + (n % 5)));
+      sprite.userData.wind = 0.8 + (n % 5) * 0.12;
+      sprite.visible = false;
+      scene.add(sprite);
+      clouds.push(sprite);
+    }
 
     // v1.6.0 — Modalità leggera: watch how long frames really take. If the
     // median stays above ~40 ms (under 25 fps) after the first moments of
@@ -630,6 +684,8 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.setVisible(true);
       // da vicino pensa all'acqua la scena locale: la sfera d'oceano si nasconde.
       oceanMesh.visible = false;
+      sky.visible = true;
+      for (const cloud of clouds) cloud.visible = true;
       localCenter = null;
       lastLocalAt = 0;
     };
@@ -652,14 +708,20 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.setVisible(false);
       local?.clear();
       oceanMesh.visible = true;
+      sky.visible = false;
+      for (const cloud of clouds) cloud.visible = false;
       // l'ultimo ViewportFrame era locale: si torna a chiedere quello del pianeta intero
       maybeRequestViewport(true);
     };
 
     const renderLoop = (nowMs: number) => {
+      // v1.10.8 — "free" condivide con "follow" la scena da vicino (cielo, foschia, terreno locale, ombre):
+      // cambia solo chi decide la posa della camera (updateFreeCamera invece di updateFollowCamera).
       const wantFollow = cameraModeRef.current === "follow";
-      if (wantFollow && !followActive) enterFollow();
-      else if (!wantFollow && followActive) leaveFollow();
+      const wantFree = cameraModeRef.current === "free";
+      const wantSurface = wantFollow || wantFree;
+      if (wantSurface && !followActive) enterFollow();
+      else if (!wantSurface && followActive) leaveFollow();
 
       // v1.10.1 — le posizioni da disegnare in questo istante (i dati reali del frame non si toccano).
       const sceneRefs = sceneRef.current;
@@ -676,14 +738,31 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         const refs = sceneRefs;
         const f = view;
         const id = selectedIdRef.current;
-        if (refs && f && id !== null) {
+        if (refs && f) {
           const dt = lastFrameAt > 0 ? Math.min(nowMs - lastFrameAt, 250) : 0;
-          const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
-          if (replacement !== null) onSelectRef.current?.(replacement);
+          if (wantFollow && id !== null) {
+            const replacement = updateFollowCamera(refs, f, id, follow, nowMs, dt);
+            if (replacement !== null) onSelectRef.current?.(replacement);
+          } else if (wantFree) {
+            // v1.10.8 — camera libera: il punto d'osservazione avanza verso il punto toccato.
+            updateFreeCamera(refs, f, follow, nowMs, dt);
+          }
           // Il sole segue chi guarda: dall'altra parte del pianeta sarebbe notte e non si vedrebbe niente.
           placeFollowSun(sun, camera.position, follow.target, follow.up);
           // v1.9.4 — Acqua: la superficie locale scorre col tempo reale, non col tick.
           local?.updateWater(nowMs / 1000);
+          // v1.10.6 — il cielo segue la camera; le nuvole derivano piano col vento e, se escono
+          // dall'area, ricompaiono dall'altra parte (dietro chi guarda non se ne accorge).
+          sky.position.copy(camera.position);
+          for (const cloud of clouds) {
+            cloud.position.x += CLOUD_WIND * (cloud.userData.wind ?? 1) * (dt / 1000);
+            const dx = cloud.position.x - follow.target.x;
+            const dz = cloud.position.z - follow.target.z;
+            if (dx > CLOUD_SPREAD) cloud.position.x -= CLOUD_SPREAD * 2;
+            else if (dx < -CLOUD_SPREAD) cloud.position.x += CLOUD_SPREAD * 2;
+            if (dz > CLOUD_SPREAD) cloud.position.z -= CLOUD_SPREAD * 2;
+            else if (dz < -CLOUD_SPREAD) cloud.position.z += CLOUD_SPREAD * 2;
+          }
         }
       } else {
         controls.update();
@@ -695,19 +774,22 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (sceneRefs && view) {
         const selected = selectedIdRef.current;
         const motionVersion = motionRef.current.version;
+        // v1.10.8 — "forcing": solo in terza persona (non in camera libera) un animale è obbligato e la scena è ritagliata attorno a lui
+        const forcing = followActive && wantFollow;
         const needsDraw =
-          motionVersion !== lastDrawnVersion || lastDrawnAlpha < 1 || followActive !== lastDrawnFollowing || selected !== lastDrawnSelected;
+          motionVersion !== lastDrawnVersion || lastDrawnAlpha < 1 || forcing !== lastDrawnFollowing || selected !== lastDrawnSelected;
         if (needsDraw && nowMs - lastCreatureDrawAt >= creatureMinIntervalMs) {
           const startedAt = performance.now();
           const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
           // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
-          updateCreatureInstances(sceneRefs, view, followActive ? selected : null, followActive ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw, camera.position);
-          updateSelectionRing(sceneRefs, view, followActive ? null : selected);
+          // v1.10.8 — in camera libera nessun animale è obbligato e l'anello di selezione resta visibile.
+          updateCreatureInstances(sceneRefs, view, forcing ? selected : null, forcing ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw, camera.position);
+          updateSelectionRing(sceneRefs, view, forcing ? null : selected);
           creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
           creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
           lastDrawnVersion = motionVersion;
           lastDrawnAlpha = motionAlpha;
-          lastDrawnFollowing = followActive;
+          lastDrawnFollowing = forcing;
           lastDrawnSelected = selected;
           lastCreatureDrawAt = nowMs;
         }
@@ -738,11 +820,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     // RenderFrame — see TERRAIN_LOD_CHECK_INTERVAL_MS and the profile's terrainRefreshMs.
     let lastTierKey = "";
     let lastRequestAt = 0;
+    // v1.10.8 — bugfix "si vede solo il cielo": partendo direttamente in vista libera (o terza persona),
+    // la richiesta del pianeta globale (mappa altezze + texture) veniva saltata per sempre, la camera
+    // non conosceva le colline e nasceva DENTRO il terreno. Il pianeta globale viene quindi costruito
+    // comunque la prima volta, anche da vicino; dopo, si torna a risparmiare (c'è il terreno locale).
     const maybeRequestViewport = (force: boolean) => {
       const f = frameRef.current;
       if (!f || !onRequestViewportRef.current) return;
-      // In terza persona il pianeta intero non serve: c'è il terreno locale (maybeRequestLocal).
-      if (followActive) return;
+      if (followActive && globalTerrainBuiltRef.current) return;
       const distance = controls.getDistance();
       const tier = pickTerrainLodTier(distance, tiers);
       const tierKey = `${tier.maxWidth}x${tier.maxHeight}`;
@@ -850,7 +935,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       const dx = e.clientX - lastMovePos.x;
       const dy = e.clientY - lastMovePos.y;
       lastMovePos = { x: e.clientX, y: e.clientY };
-      applyFollowDrag(follow, dx, dy, performance.now());
+      if (cameraModeRef.current === "free") {
+        // v1.10.10 — in vista libera trascinare SPOSTA il punto d'osservazione nella direzione del gesto
+        // (su PC col mouse premuto, su telefono col dito): la camera lo segue e si gira verso dove si va.
+        const refs = sceneRef.current;
+        const f = frameRef.current;
+        if (refs && f) panFreeCamera(refs, f, follow, dx, dy);
+      } else {
+        applyFollowDrag(follow, dx, dy, performance.now());
+      }
     };
 
     const handlePointerEnd = () => {
@@ -875,6 +968,22 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       if (hits.length > 0 && hits[0].instanceId !== undefined && sceneRef.current) {
         const organismId = sceneRef.current.instanceOrganismId[hits[0].instanceId];
         onSelectRef.current?.(organismId);
+      } else if (cameraModeRef.current === "free") {
+        // v1.10.8 — in camera libera un tocco sul terreno lo raggiunge: il punto d'osservazione ci va da solo.
+        const groundHits = raycaster.intersectObject(planetMesh);
+        if (groundHits.length > 0) {
+          const p = groundHits[0].point;
+          const grid = directionToGrid([p.x, p.y, p.z], frameRef.current?.planetWidth ?? 0, frameRef.current?.planetHeight ?? 0);
+          if (grid.x > 0 || grid.y > 0) {
+            follow.goalX = grid.x;
+            follow.goalY = grid.y;
+            follow.hasGoal = true;
+          }
+        }
+        // v1.10.9 — SELEZIONE AL TOCCO, estensibile: qui sopra gli animali (istanze del motore).
+        // Le piante (flora della scena locale) entreranno appena avranno un'identità nella simulazione:
+        // basterà aggiungere la loro mesh a questa catena di raycast, PRIMA del terreno, e chiamare
+        // onSelect con l'id della pianta — il pannello dati e l'anello di selezione li seguiranno.
       } else if (!followActive) {
         // In terza persona un tocco sul vuoto non deseleziona: si smette di seguire dal pulsante.
         onSelectRef.current?.(null);
@@ -924,6 +1033,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       local?.dispose();
       ringGeometry.dispose();
       ringMaterial.dispose();
+      sky.geometry.dispose();
+      (sky.material as THREE.Material).dispose();
+      cloudTexture.dispose();
+      for (const cloud of clouds) cloud.material.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -978,6 +1091,18 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         viewportFrame.originY + viewportFrame.cellsHeight / 2,
       );
       return;
+    }
+
+    // v1.10.8 — è arrivato un ViewportFrame del pianeta intero: la mappa altezze globale esiste, la camera
+    // in vista libera/terza persona può fidarsi. Al cambio di mondo la bandierina si azzera e si ricostruisce.
+    // (Le dimensioni del mondo stanno nel RenderFrame, non nel ViewportFrame.)
+    if (currentFrame) {
+      const planetKey = `${currentFrame.planetWidth}x${currentFrame.planetHeight}`;
+      if (globalPlanetKeyRef.current !== planetKey) {
+        globalPlanetKeyRef.current = planetKey;
+        globalTerrainBuiltRef.current = false;
+      }
+      globalTerrainBuiltRef.current = true;
     }
 
     const { texWidth, texHeight, vegetation, terrain, elevation, riverFlow, lake, temperature, planetHeight, tick, originX, originY, cellsWidth, cellsHeight } = viewportFrame;
@@ -1134,7 +1259,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         aria-label={
           cameraMode === "follow"
             ? "Vista in terza persona su un animale — trascina per guardarti intorno, tocca un altro animale per seguirlo"
-            : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
+            : cameraMode === "free"
+              ? "Vista in terza persona libera — trascina per spostarti nella direzione del gesto, tocca un punto per andarci"
+              : "Visualizzazione 3D del pianeta simulato — trascina per ruotare, tocca una creatura per selezionarla"
         }
       />
       <ul className="biome-legend" aria-label="Legenda dei biomi">
@@ -1216,22 +1343,87 @@ export function configureInstancedMesh(mesh: THREE.InstancedMesh): void {
 }
 
 /**
- * v1.8.0 — Sfumatura ventre-dorso: colori per vertice (1 sul ventre, più scuro sul
- * dorso) che il materiale moltiplica per il colore della specie. Dà volume alle
- * sfere che formano il corpo senza nessuna istanza o luce in più.
+ * v1.10.5 — Contro-ombreggiamento ventre-dorso: colori per vertice che il materiale moltiplica
+ * per il colore della specie. Ventre chiaro e caldo (come il sottopelo di mammiferi e
+ * uccelli reali), dorso scuro e freddo. Stesso costo di prima: solo colori per vertice.
  */
 export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   const position = geometry.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(position.count * 3);
   for (let i = 0; i < position.count; i++) {
     const y = position.getY(i); // sfera unitaria: -1 ventre, +1 dorso
-    const shade = 1 - 0.22 * ((y + 1) / 2);
-    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = shade;
+    const t = (y + 1) / 2; // 0 ventre, 1 dorso
+    colors[i * 3] = 1.08 - 0.34 * t; // ventre caldo e chiaro, dorso molto più scuro
+    colors[i * 3 + 1] = 1.04 - 0.26 * t;
+    colors[i * 3 + 2] = 0.96 - 0.12 * t; // il dorso raffredda (più blu), il ventre scalda
   }
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   return geometry;
 }
 
+/**
+ * v1.10.6 — Cielo con gradiente: una grande sfera rovesciata con colori per vertice
+ * (zenit più scuro, orizzonte chiaro, foschia sotto). Una sola draw call, niente luci:
+ * MeshBasicMaterial. Segue la camera, così non se ne esce mai guardandosi intorno.
+ */
+export function createSkyDome(): THREE.Mesh {
+  const geometry = new THREE.SphereGeometry(1, 24, 12);
+  const position = geometry.attributes.position as THREE.BufferAttribute;
+  const colors = new Float32Array(position.count * 3);
+  const zenith = new THREE.Color(SKY_ZENITH);
+  const horizon = new THREE.Color(SKY_HORIZON);
+  const haze = new THREE.Color(SKY_COLOR);
+  const c = new THREE.Color();
+  for (let i = 0; i < position.count; i++) {
+    const t = position.getY(i); // +1 zenit, 0 orizzonte, -1 sotto
+    if (t >= 0) c.copy(horizon).lerp(zenith, Math.pow(t, 0.7));
+    else c.copy(horizon).lerp(haze, Math.min(1, -t * 2)); // sotto l'orizzonte: sfuma nella foschia del suolo
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.scale.setScalar(40);
+  mesh.renderOrder = -10; // dietro a tutto
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return mesh;
+}
+
+/**
+ * v1.10.6 — Texture morbida di una nuvola: tre blob ellittici sfumati, generata una volta
+ * con la sola matematica (niente immagini da caricare, niente canvas 2D).
+ */
+export function createCloudTexture(): THREE.Texture {
+  const SIZE = 64;
+  const data = new Uint8Array(SIZE * SIZE * 4);
+  const blobs = [
+    { x: 0.5, y: 0.55, rx: 0.42, ry: 0.22, a: 1 },
+    { x: 0.3, y: 0.5, rx: 0.2, ry: 0.14, a: 0.8 },
+    { x: 0.68, y: 0.5, rx: 0.22, ry: 0.15, a: 0.85 },
+  ];
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      let a = 0;
+      for (const b of blobs) {
+        const dx = (x + 0.5) / SIZE - b.x;
+        const dy = (y + 0.5) / SIZE - b.y;
+        const d = Math.sqrt((dx / b.rx) * (dx / b.rx) + (dy / b.ry) * (dy / b.ry));
+        a = Math.max(a, b.a * Math.max(0, 1 - d));
+      }
+      const k = (y * SIZE + x) * 4;
+      data[k] = 255;
+      data[k + 1] = 255;
+      data[k + 2] = 255;
+      data[k + 3] = Math.round(Math.min(1, a * a) * 255); // falloff morbido ai bordi
+    }
+  }
+  const texture = new THREE.DataTexture(data, SIZE, SIZE, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  return texture;
+}
 const sunDir = new THREE.Vector3();
 const sunSide = new THREE.Vector3();
 
@@ -1283,6 +1475,12 @@ export interface FollowState {
   lastInteractAt: number;
   /** Da quando (ms) l'animale non c'è più nei frame, o null. */
   missingSince: number | null;
+  /** v1.10.8 — camera libera: punto della superficie verso cui il punto d'osservazione sta andando (coordinate griglia). */
+  goalX: number;
+  goalY: number;
+  hasGoal: boolean;
+  /** v1.10.9 — camera libera: velocità attuale del punto d'osservazione (unità del mondo al secondo), per accelerare e frenare dolcemente. */
+  freeSpeed: number;
 }
 
 export function createFollowState(): FollowState {
@@ -1303,6 +1501,10 @@ export function createFollowState(): FollowState {
     dragging: false,
     lastInteractAt: 0,
     missingSince: null,
+    goalX: 0,
+    goalY: 0,
+    hasGoal: false,
+    freeSpeed: 0,
   };
 }
 
@@ -1317,6 +1519,8 @@ export function resetFollowState(state: FollowState): void {
   state.pitch = 0;
   state.dragging = false;
   state.missingSince = null;
+  state.hasGoal = false;
+  state.freeSpeed = 0;
 }
 
 /** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
@@ -1331,6 +1535,9 @@ const fcNormal = new THREE.Vector3();
 const fcTangent = new THREE.Vector3();
 const fcDesired = new THREE.Vector3();
 const fcDesiredTarget = new THREE.Vector3();
+// v1.10.10 — temporanei dello scorrimento in vista libera (panFreeCamera).
+const panRight = new THREE.Vector3();
+const panWorld = new THREE.Vector3();
 
 /**
  * Posiziona la camera dietro e sopra l'animale `selectedId`, guardando
@@ -1455,6 +1662,169 @@ export function updateFollowCamera(
   refs.camera.up.copy(state.up);
   refs.camera.lookAt(state.target);
   return replacement;
+}
+
+/**
+ * v1.10.8 — Camera libera: terza persona slegata dagli esseri. Il punto d'osservazione è un punto
+ * qualunque della superficie (non un animale): avanza da solo verso il punto toccato (state.hasGoal)
+ * e la camera lo incornicia da dietro, con la stessa matematica di posa, smorzamento e collisione
+ * col terreno della terza persona (computeFollowPose, clampCameraRadius). Trascinando si guarda
+ * intorno come in "follow"; senza tocchi la camera torna dietro il punto d'osservazione.
+ * Scrive anche state.x/y, così il terreno locale ad alto dettaglio segue il punto d'osservazione.
+ */
+export function updateFreeCamera(
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
+  frame: RenderFrame,
+  state: FollowState,
+  nowMs: number,
+  dtMs: number,
+): void {
+  const { planetWidth, planetHeight } = frame;
+
+  // All'ingresso (o al cambio di mondo) il punto d'osservazione parte dal centro della mappa, guardando nord.
+  if (!state.hasPosition) {
+    state.x = planetWidth / 2;
+    state.y = planetHeight / 2;
+    state.hasPosition = true;
+    state.heading = { hx: 0, hy: -1 };
+    state.hasGoal = false;
+  }
+
+  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap.
+  // v1.10.9 — partenza e arrivo morbidi: la velocità sale con un'accelerazione limitata e scende
+  // secondo la frenata necessaria a fermarsi sul punto (v = √(2·a·d)), qualunque sia la distanza.
+  if (state.hasGoal) {
+    const dx = wrappedDelta(state.x, state.goalX, planetWidth);
+    const dy = wrappedDelta(state.y, state.goalY, planetHeight);
+    const distCells = Math.hypot(dx, dy);
+    const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
+    const remainingUnits = distCells * cellUnits;
+    const step = dtMs / 1000;
+    const brakeSpeed = Math.sqrt(2 * FREE_BRAKE_UNITS_PER_S2 * Math.max(0, remainingUnits));
+    const targetSpeed = Math.min(FREE_MOVE_UNITS_PER_SEC, brakeSpeed);
+    const diff = targetSpeed - state.freeSpeed;
+    const maxDelta = (diff > 0 ? FREE_ACCEL_UNITS_PER_S2 : FREE_BRAKE_UNITS_PER_S2) * step;
+    state.freeSpeed += Math.max(-maxDelta, Math.min(maxDelta, diff));
+    const stepUnits = state.freeSpeed * step;
+    if (remainingUnits <= stepUnits || remainingUnits < 1e-9) {
+      state.x = state.goalX;
+      state.y = state.goalY;
+      state.hasGoal = false;
+      state.freeSpeed = 0;
+    } else {
+      const k = stepUnits / cellUnits / distCells;
+      state.x += dx * k;
+      state.y += dy * k;
+      // mentre va, la camera guarda dove sta andando
+      state.heading = nextHeading(state.heading, dx * k, dy * k, headingBlendForDt(dtMs));
+    }
+  } else {
+    state.freeSpeed = 0;
+  }
+
+  // Dopo un po' senza tocchi la camera torna dietro il punto d'osservazione (come in follow).
+  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
+    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
+    state.yaw = easeAngleToZero(state.yaw, a);
+    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
+  }
+
+  const restingR = restingRadius(refs, state.x, state.y, 0.02);
+  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
+  fcNormal.set(point.normalX, point.normalY, point.normalZ);
+  const hx = state.heading?.hx ?? 0;
+  const hy = state.heading?.hy ?? -1;
+  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
+  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
+  if (fcTangent.lengthSq() < 1e-12) {
+    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+  }
+  fcTangent.normalize();
+
+  const pose = computeFollowPose({
+    point: [point.x, point.y, point.z],
+    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
+    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
+    scale: FREE_CAMERA_SCALE,
+    yaw: state.yaw,
+    pitch: state.pitch,
+  });
+
+  // La camera non deve finire dentro una collina (come in follow).
+  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
+  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(FREE_CAMERA_SCALE);
+  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
+
+  fcDesired.set(cam[0], cam[1], cam[2]);
+  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
+
+  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
+    state.position.copy(fcDesired);
+    state.target.copy(fcDesiredTarget);
+    state.up.copy(fcNormal);
+    state.hasPose = true;
+  } else {
+    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
+    state.position.lerp(fcDesired, a);
+    state.target.lerp(fcDesiredTarget, a);
+    state.up.lerp(fcNormal, a).normalize();
+  }
+
+  refs.camera.position.copy(state.position);
+  refs.camera.up.copy(state.up);
+  refs.camera.lookAt(state.target);
+}
+
+/**
+ * v1.10.10 — SCORRIMENTO in vista libera: un gesto di trascinamento (dx, dy in pixel) sposta il punto
+ * d'osservazione SULLA SUPERFICIE nella direzione del gesto, come si scorre una mappa: dito/mouse su =
+ * avanti, giù = indietro, destra/sinistra = laterale. La direzione è relativa a dove sta guardando la
+ * camera (avanti = la direzione di marcia corrente, proiettata sul piano tangente); il nuovo punto si
+ * ottiene proiettando lo spostamento sulla sfera (directionToGrid normalizza da sola). La direzione di
+ * marcia segue il movimento, così la camera si gira dolcemente verso dove si sta andando.
+ * Il tocco secco resta per "vacci da solo" (hasGoal + frenata dolce di updateFreeCamera).
+ */
+export function panFreeCamera(
+  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
+  frame: RenderFrame,
+  state: FollowState,
+  dxPx: number,
+  dyPx: number,
+): void {
+  if (!state.hasPosition) return;
+  const { planetWidth, planetHeight } = frame;
+
+  const restingR = restingRadius(refs, state.x, state.y, 0.02);
+  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
+  fcNormal.set(point.normalX, point.normalY, point.normalZ);
+  const hx = state.heading?.hx ?? 0;
+  const hy = state.heading?.hy ?? -1;
+  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
+  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
+  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
+  if (fcTangent.lengthSq() < 1e-12) {
+    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
+  }
+  fcTangent.normalize();
+
+  // Avanti/indietro lungo la direzione di marcia, destra/sinistra lungo il suo perpendicolare.
+  // (cross(normal, forward) è il lato SINISTRO: per il destro si inverte il verso del prodotto.)
+  panRight.copy(fcTangent).cross(fcNormal);
+  const du = -dyPx * FREE_DRAG_UNITS_PER_PX; // dito/mouse su = avanti
+  const dv = dxPx * FREE_DRAG_UNITS_PER_PX; // destra = destra
+  panWorld.copy(point).addScaledVector(fcTangent, du).addScaledVector(panRight, dv);
+
+  const prevX = state.x;
+  const prevY = state.y;
+  const grid = directionToGrid([panWorld.x, panWorld.y, panWorld.z], planetWidth, planetHeight);
+  state.x = grid.x;
+  state.y = grid.y;
+  state.hasGoal = false;
+  state.freeSpeed = 0;
+  // La direzione di marcia segue il movimento: la camera si gira verso dove si sta andando.
+  state.heading = nextHeading(state.heading, wrappedDelta(prevX, state.x, planetWidth), wrappedDelta(prevY, state.y, planetHeight), 1);
+  state.lastInteractAt = performance.now();
 }
 
 /**
