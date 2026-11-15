@@ -4,6 +4,7 @@ import { Planet } from "../planet/planet";
 import { computeSensoryChannels, recordFoodMemory } from "./behavior";
 import { evaluateBrain, SENSORY_INPUT_SIZE } from "../biology/brain";
 import { evaluateTerrainMovement } from "./terrain";
+import { phenotypeOf, activeTorpor, TORPOR_EFFECT } from "../biology/phenotype";
 
 /**
  * Below this combined output magnitude from the organism's brain, treat it
@@ -97,8 +98,12 @@ export function moveOrganism(
   dirY /= mag;
 
   const stepRand = rng.range(0.5, 1);
-  const rawStepX = dirX * speed * stepRand;
-  const rawStepY = dirY * speed * stepRand;
+  // v1.11.0 — torpore: a bassa energia il passo si accorcia (solo se il gene è attivo; altrimenti nessuna differenza)
+  const phenotype = phenotypeOf(organism.genome);
+  const torpor = activeTorpor(phenotype, organism.energy);
+  const stepScale = torpor > 0 ? 1 - TORPOR_EFFECT * torpor : 1;
+  const rawStepX = dirX * speed * stepRand * stepScale;
+  const rawStepY = dirY * speed * stepRand * stepScale;
 
   // v1.2.5 — Movement on Real Terrain. The brain has already chosen a
   // direction (above); this evaluates what the topography thinks of that
@@ -120,8 +125,10 @@ export function moveOrganism(
   // the "terrain cost, not terrain control" balance the brief asks for:
   // genome speed and the brain's chosen direction are untouched, only the
   // realized distance is reduced.
-  const newX = wrap(x + rawStepX / terrainEval.movementCost, planet.width);
-  const newY = wrap(y + rawStepY / terrainEval.movementCost, planet.height);
+  // v1.11.0 — arti lunghi (limbLength): l'eccesso di costo del terreno si divide per il valore (solo se ≠ 1)
+  const movementCost = phenotype.terrainRelief !== 1 ? 1 + (terrainEval.movementCost - 1) / phenotype.terrainRelief : terrainEval.movementCost;
+  const newX = wrap(x + rawStepX / movementCost, planet.width);
+  const newY = wrap(y + rawStepY / movementCost, planet.height);
 
   // Only commit to the step if it lands on traversable terrain. Without
   // this check, an organism could end up on an ocean cell simply because

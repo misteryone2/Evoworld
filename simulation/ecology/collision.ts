@@ -1,6 +1,7 @@
 import type { Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { bodyMass, bodyRadiusUnits, cellLengthsUnits } from "../core/scale";
+import { phenotypeOf } from "../biology/phenotype";
 
 /**
  * v1.9.1 — Collisioni tra animali. Ogni creatura occupa uno spazio (un disco sulla superficie del pianeta, con la
@@ -172,8 +173,9 @@ function separate(a: Organism, b: Organism, planet: Planet, cell: { x: number; y
     ny = dyUnits / distance;
   }
   const overlap = contact - distance;
-  const massA = bodyMass(a.genome.size);
-  const massB = bodyMass(b.genome.size);
+  // v1.11.0 — bodyDensity: massa a parità di taglia (neutro = come prima)
+  const massA = bodyMass(a.genome.size) * phenotypeOf(a.genome).massFactor;
+  const massB = bodyMass(b.genome.size) * phenotypeOf(b.genome).massFactor;
   let shareA = massB / (massA + massB); // chi pesa meno si sposta di più
   let shareB = massA / (massA + massB);
 

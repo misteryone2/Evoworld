@@ -1,6 +1,7 @@
 import type { Cell, Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { environmentalFitness } from "../biology/environment";
+import { phenotypeOf } from "../biology/phenotype";
 import type { RegionEstablishment } from "./regionEcology";
 
 const MAX_ENERGY = 150;
@@ -201,8 +202,10 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
       const sustainableShare = regionSustainableBudget * regionShare;
 
       const rawGained = Math.min(rawCellGain, sustainableShare);
-      const gained = rawGained * environmentalFitness(o.genome, cell) * settlementEfficiency;
-      o.energy = Math.min(MAX_ENERGY, o.energy + gained);
+      // v1.11.0 — digestione efficiente (plantYield) e riserva massima di energia (maxEnergy) dal fenotipo; neutro = invariato
+      const phenotype = phenotypeOf(o.genome);
+      const gained = rawGained * environmentalFitness(o.genome, cell) * settlementEfficiency * phenotype.plantYield;
+      o.energy = Math.min(phenotype.maxEnergy, o.energy + gained);
     }
   }
 

@@ -1,6 +1,7 @@
 import type { Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { nearbyOrganisms, distanceWrapped } from "./spatialIndex";
+import { phenotypeOf } from "../biology/phenotype";
 
 /**
  * Same thresholds used in predation.ts to decide whether an organism is a
@@ -40,7 +41,8 @@ const MEMORY_DECAY_TICKS = 300;
 
 /** Detection radius for flocking/fear/hunting-seek/territoriality, scaled by the organism's own vision trait. */
 function socialRadius(o: Organism): number {
-  return Math.max(2, o.genome.vision);
+  // v1.11.0 — proximitySensing: raggio di percezione degli altri animali (neutro = come prima)
+  return Math.max(2, o.genome.vision * phenotypeOf(o.genome).sensingRadiusFactor);
 }
 
 /**
@@ -189,13 +191,15 @@ export function computeSensoryChannels(
 
   if (organism.memory) {
     const age = tick - organism.memory.tick;
-    if (age > MEMORY_DECAY_TICKS) {
+    // v1.11.0 — memoryRetention: per quanto si ricorda (neutro = 300 tick)
+    const memoryTicks = MEMORY_DECAY_TICKS * phenotypeOf(organism.genome).memoryFactor;
+    if (age > memoryTicks) {
       organism.memory = null;
     } else {
       const dirX = organism.memory.x - organism.position.x;
       const dirY = organism.memory.y - organism.position.y;
       const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-      const freshness = 1 - age / MEMORY_DECAY_TICKS;
+      const freshness = 1 - age / memoryTicks;
       const sign = organism.memory.kind === "food" ? 1 : -1;
       channels.memoryX = (dirX / mag) * sign * freshness;
       channels.memoryY = (dirY / mag) * sign * freshness;

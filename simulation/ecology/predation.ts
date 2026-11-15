@@ -4,6 +4,7 @@ import { Planet } from "../planet/planet";
 import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped } from "./spatialIndex";
 import { recordDangerMemory } from "./behavior";
 import { areTouching, maxContactCells } from "./collision";
+import { phenotypeOf } from "../biology/phenotype";
 
 const MAX_ENERGY = 150;
 
@@ -34,7 +35,7 @@ const MEAT_ENERGY_VALUE = 55;
  * specifically evolves in response to how evasive local prey have become.
  */
 function huntingPower(o: Organism): number {
-  return o.genome.size * o.genome.speed * (1 + o.genome.huntingSkill);
+  return o.genome.size * o.genome.speed * (1 + o.genome.huntingSkill) * phenotypeOf(o.genome).sprintFactor;
 }
 
 /**
@@ -48,7 +49,8 @@ function huntingPower(o: Organism): number {
  * selection pressure for the other to rise too.
  */
 function defensivePower(o: Organism): number {
-  return o.genome.size * o.genome.speed * (1.15 + o.genome.evasion);
+  const phenotype = phenotypeOf(o.genome);
+  return o.genome.size * o.genome.speed * (1.15 + o.genome.evasion) * phenotype.armorFactor * phenotype.sprintFactor;
 }
 
 /**
@@ -139,8 +141,9 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
     const successChance = baseChance / (1 + interference);
 
     if (rng.chance(successChance)) {
-      const energyGained = Math.min(MEAT_ENERGY_VALUE, target.energy + 30) * predator.genome.carnivory;
-      predator.energy = Math.min(MAX_ENERGY, predator.energy + energyGained);
+      const predatorPhenotype = phenotypeOf(predator.genome);
+      const energyGained = Math.min(MEAT_ENERGY_VALUE, target.energy + 30) * predator.genome.carnivory * predatorPhenotype.meatYield;
+      predator.energy = Math.min(predatorPhenotype.maxEnergy, predator.energy + energyGained);
       target.alive = false;
       kills++;
     } else {
