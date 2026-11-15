@@ -11,6 +11,7 @@ import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../
 import { createVisualMotion, stepVisualMotion, type VisualMotion } from "../../lib/naturalMotion";
 import { advancePhase, computeBodyPose, createBodyPose, normalizedSpeed } from "../../lib/bodyAnimation";
 import { applyLivingPose, createLivingState, stepLiving, type LivingState } from "../../lib/livingBehavior";
+import { shouldDrawCreatures } from "../../lib/animationScheduler";
 import { createLodDetail, createLodWeights, lodDetail, lodWeights, FULL_DETAIL } from "../../lib/animationLod";
 import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
 import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
@@ -657,6 +658,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     let lastDrawnFollowing = false;
     let lastDrawnSelected: number | null = null;
     let lastCreatureDrawAt = 0;
+    let lastDrawnCount = 0; // creature disegnate l'ultima volta: se ce ne sono, la posa viva (respiro, idle, riposo) continua anche in pausa
     let creatureCostMs = 0; // costo medio di un aggiornamento delle creature
     let creatureMinIntervalMs = 0; // se è alto, si ridisegna al massimo a 30 Hz
 
@@ -778,12 +780,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         const forcing = followActive && wantFollow;
         const needsDraw =
           motionVersion !== lastDrawnVersion || lastDrawnAlpha < 1 || forcing !== lastDrawnFollowing || selected !== lastDrawnSelected;
-        if (needsDraw && nowMs - lastCreatureDrawAt >= creatureMinIntervalMs) {
+        // v1.10.5 (consolidamento) — senza dati nuovi (pausa) la posa viva delle creature disegnate prosegue a ~30 Hz
+        if (shouldDrawCreatures({ dataDirty: needsDraw, drawnCount: lastDrawnCount, nowMs, lastDrawAt: lastCreatureDrawAt, costIntervalMs: creatureMinIntervalMs })) {
           const startedAt = performance.now();
           const dtDraw = lastCreatureDrawAt > 0 ? Math.min(nowMs - lastCreatureDrawAt, 250) : 100;
           // v1.7.0 — in terza persona l'animale seguito va sempre disegnato e non ha l'anello di selezione.
           // v1.10.8 — in camera libera nessun animale è obbligato e l'anello di selezione resta visibile.
-          updateCreatureInstances(sceneRefs, view, forcing ? selected : null, forcing ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw, camera.position);
+          lastDrawnCount = updateCreatureInstances(sceneRefs, view, forcing ? selected : null, forcing ? FOLLOW_CREATURE_RANGE_UNITS : null, dtDraw, camera.position);
           updateSelectionRing(sceneRefs, view, forcing ? null : selected);
           creatureCostMs = creatureCostMs * 0.8 + (performance.now() - startedAt) * 0.2;
           creatureMinIntervalMs = creatureCostMs > 8 ? 33 : 0;
@@ -1845,7 +1848,7 @@ export function updateCreatureInstances(
   dtMs = 100,
   /** v1.10.5 — posizione della camera nel mondo 3D: la distanza decide il dettaglio dell'animazione (LOD). Senza, tutto è al massimo dettaglio. */
   cameraPosition: THREE.Vector3 | null = null,
-): void {
+): number {
   const {
     organismsX,
     organismsY,
@@ -2134,6 +2137,8 @@ export function updateCreatureInstances(
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+  // v1.10.5 (consolidamento) — quante creature sono state disegnate: chi chiama sa se c'è una posa viva da far proseguire (pausa).
+  return writeIndex;
 }
 
 /**
