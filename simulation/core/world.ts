@@ -9,7 +9,7 @@ import type {
 import { Random } from "./random";
 import { Planet } from "../planet/planet";
 import { createRandomOrganism, upkeepCost, dispersalCost, DISPERSAL_HOME_RADIUS, isDying } from "../biology/organism";
-import { averageGenome, randomGenome } from "../biology/genome";
+import { averageGenome, randomGenome, founderGenes, deriveGeneRandom, migrateGenome } from "../biology/genome";
 import { moveOrganism } from "../ecology/movement";
 import { resolveCollisions } from "../ecology/collision";
 import { feedOrganisms, regionKey, FEEDING_REGION_SIZE } from "../ecology/feeding";
@@ -35,6 +35,9 @@ import { RegionEstablishment } from "../ecology/regionEcology";
  * RegionEstablishment.
  */
 const SETTLEMENT_MORTALITY_MAX = 0.004;
+
+/** v1.11.0 — versione dello schema del genoma nei salvataggi: 2 = geni avanzati (assente = 1, solo i 13 tratti di base). */
+export const GENOME_SCHEMA = 2;
 
 /**
  * World is the top-level simulation object. It owns the planet, the
@@ -85,17 +88,24 @@ export class World {
    * ecology/collision.ts). Attivo di default; resta un'opzione per poter confrontare con e senza.
    */
   private enableCollisions: boolean;
+  /**
+   * v1.11.0 — Advanced Fauna Genome: i geni avanzati (vedi biology/geneRegistry.ts) esistono, ereditano, mutano e hanno
+   * effetto. Attivo di default; resta un'opzione per i confronti controllati con la v1.10 (senza geni avanzati la
+   * simulazione è identica, tick per tick, a quella precedente).
+   */
+  private enableAdvancedGenome: boolean;
 
   constructor(
     config: PlanetConfig,
     initialPopulation: number,
-    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean; enableCollisions?: boolean },
+    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean; enableCollisions?: boolean; enableAdvancedGenome?: boolean },
   ) {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
     this.speciesRegistry = new Map();
     this.enableDispersalCost = options?.enableDispersalCost ?? false;
     this.enableCollisions = options?.enableCollisions ?? true;
+    this.enableAdvancedGenome = options?.enableAdvancedGenome ?? true;
     this.regionEstablishment = (options?.enableSettlement ?? false) ? new RegionEstablishment() : null;
     this.seedPopulation(initialPopulation);
     // v1.2 — the founding population represents organisms already settled
@@ -147,6 +157,8 @@ export class World {
       const cell = this.planet.getCell(Math.round(x) % this.planet.width, Math.round(y) % this.planet.height);
       if (cell.terrain === "ocean") continue;
       const organism = createRandomOrganism(this.nextOrganismId++, speciesId, x, y, this.rng);
+      // v1.11.0 — geni avanzati dei fondatori: generatore separato, il flusso casuale del mondo non cambia
+      if (this.enableAdvancedGenome) organism.genome.genes = founderGenes(deriveGeneRandom(this.rng.getState(), organism.id));
       this.organisms.push(organism);
       founders.push(organism);
       placed++;
@@ -245,7 +257,7 @@ export class World {
     }
 
     // 6 & 7. reproduction + mutation (mate compatibility is genetic-distance-based)
-    const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++, this.enableCollisions);
+    const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++, this.enableCollisions, this.enableAdvancedGenome);
     if (offspring.length > 0) this.organisms.push(...offspring);
 
     // 8a. species bookkeeping: population counts + extinction detection
@@ -312,6 +324,8 @@ export class World {
       nextSpeciesId: this.nextSpeciesId,
       randomState: this.rng.getState(),
       speciesRegistry: Array.from(this.speciesRegistry.values()),
+      genomeSchema: GENOME_SCHEMA,
+      advancedGenome: this.enableAdvancedGenome,
     };
   }
 
@@ -323,7 +337,13 @@ export class World {
     world.planet = snapshot.planet.chunks
       ? Planet.fromChunkSnapshot(snapshot.planet.config, snapshot.planet.chunks)
       : Planet.fromLegacyDenseCells(snapshot.planet.config, snapshot.planet.cells ?? []);
-    world.organisms = snapshot.organisms;
+    // v1.11.0 — migrazione del genoma. Un salvataggio senza `genomeSchema` (v1.10 e precedenti) ha solo i 13 tratti di
+    // base: restano intatti e i geni avanzati partono dal valore neutro (comportamento identico fin da subito, poi
+    // evolvono). La migrazione è idempotente: ricaricare un salvataggio già migrato non cambia nulla.
+    world.enableAdvancedGenome = snapshot.advancedGenome ?? true;
+    world.organisms = world.enableAdvancedGenome
+      ? snapshot.organisms.map((o) => ({ ...o, genome: migrateGenome(o.genome) }))
+      : snapshot.organisms;
     world.tick = snapshot.tick;
     world.nextOrganismId = snapshot.nextOrganismId;
     world.nextSpeciesId = snapshot.nextSpeciesId;
