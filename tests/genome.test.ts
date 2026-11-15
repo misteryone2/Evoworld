@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { Random } from "../simulation/core/random";
 import { randomGenome, inheritGenome, genomeStats, TRAIT_RANGES } from "../simulation/biology/genome";
-import type { Genome } from "../types";
+import type { Genome, TraitName } from "../types";
 
 describe("genome heredity", () => {
   it("randomGenome always produces values within valid trait ranges", () => {
     const rng = new Random(5);
     for (let i = 0; i < 200; i++) {
       const genome = randomGenome(rng);
-      for (const trait of Object.keys(TRAIT_RANGES) as (keyof Genome)[]) {
+      for (const trait of Object.keys(TRAIT_RANGES) as TraitName[]) {
         const { min, max } = TRAIT_RANGES[trait];
         expect(genome[trait]).toBeGreaterThanOrEqual(min);
         expect(genome[trait]).toBeLessThanOrEqual(max);
@@ -22,7 +22,7 @@ describe("genome heredity", () => {
     const parentB = randomGenome(rng);
     const child = inheritGenome(parentA, parentB, rng);
 
-    for (const trait of Object.keys(TRAIT_RANGES) as (keyof Genome)[]) {
+    for (const trait of Object.keys(TRAIT_RANGES) as TraitName[]) {
       const expectedAvg = (parentA[trait] + parentB[trait]) / 2;
       const { min, max } = TRAIT_RANGES[trait];
       const range = max - min;
@@ -36,7 +36,7 @@ describe("genome heredity", () => {
       const parentA = randomGenome(rng);
       const parentB = randomGenome(rng);
       const child = inheritGenome(parentA, parentB, rng);
-      for (const trait of Object.keys(TRAIT_RANGES) as (keyof Genome)[]) {
+      for (const trait of Object.keys(TRAIT_RANGES) as TraitName[]) {
         const { min, max } = TRAIT_RANGES[trait];
         expect(child[trait]).toBeGreaterThanOrEqual(min);
         expect(child[trait]).toBeLessThanOrEqual(max);
@@ -67,7 +67,7 @@ describe("genomeStats (v0.4.1 — observability only)", () => {
     const genome = randomGenome(rng);
     const stats = genomeStats([genome, genome, genome]);
     expect(stats).not.toBeNull();
-    for (const trait of Object.keys(TRAIT_RANGES) as (keyof Genome)[]) {
+    for (const trait of Object.keys(TRAIT_RANGES) as TraitName[]) {
       expect(stats![trait].stdDev).toBeCloseTo(0, 10);
       expect(stats![trait].min).toBeCloseTo(genome[trait], 10);
       expect(stats![trait].max).toBeCloseTo(genome[trait], 10);

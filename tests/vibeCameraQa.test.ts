@@ -195,8 +195,11 @@ describe("QA — orientamento durante gli spostamenti (nextHeading)", () => {
   });
 
   it("mezza virata con blend 0.5", () => {
+    // da 0° verso 45° (direzione (1,1)): la miscela a metà arriva a 22,5°, non a 45°
     const h = nextHeading({ hx: 1, hy: 0 }, 1, 1, 0.5)!;
-    expect(h.hx).toBeCloseTo(h.hy, 6);
+    expect(h.hx).toBeCloseTo(Math.cos(Math.PI / 8), 6);
+    expect(h.hy).toBeCloseTo(Math.sin(Math.PI / 8), 6);
+    expect(Math.hypot(h.hx, h.hy)).toBeCloseTo(1, 9);
   });
 
   it("inversione a U con blend pieno prende la nuova direzione senza NaN", () => {
