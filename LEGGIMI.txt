@@ -1,26 +1,71 @@
-EvoWorld v1.10.5 - Animation Optimization & Final Release (Natural Motion & Animation 5/5)
+EvoWorld v1.11.0 — Advanced Fauna Genome (+ consolidamento v1.10.5)
+=================================================================
 
-Pacchetto incrementale: carica PRIMA v1.10.1, v1.10.2, v1.10.3 e v1.10.4, poi questo.
-Carica TUTTI i file prima del deploy (una cartella alla volta).
+IMPORTANTE — PRIMA DI APPLICARE
+- Questo pacchetto va applicato sopra il repository nello stato `1967a47` (HEAD di main, "Update Planet3DView.tsx" del
+  13 nov). I file (sostituisce) sono stati ricavati da quello stato: contengono il tuo lavoro successivo alla v1.10.5
+  (cielo, nuvole, camera libera). NON applicarlo sopra il pacchetto v1.10.5 originale (`50c350b`): su quello `tsc` fallisce.
+- Se dopo `1967a47` hai modificato ancora components/simulation/Planet3DView.tsx o altri file della lista, NON sostituirli:
+  dimmelo e te li riconcilio.
+- Non committare package-lock.json (generato dall'installazione, non fa parte del pacchetto).
+- Non fare merge su main né pubblicare release: i branch di lavoro sono preserve/post-1.10.5-head, consolidation/v1.10.5
+  e integration/v1.11.0 (vedi GIT-COMMITS.txt).
 
-(radice)
-  CHANGELOG.md (sostituisce)
+ORDINE (una cartella alla volta, dalla radice del repository)
+1. lib/            2. types/           3. simulation/biology/   4. simulation/ecology/
+5. simulation/evolution/   6. simulation/core/   7. components/simulation/
+8. tests/          9. scripts/ e radice (vitest.experiment.config.ts, CHANGELOG.md, LEGGIMI.txt)   10. docs/
+In alternativa: estrai EvoWorld-v1.11.0.zip nella radice del repository (stessi percorsi).
 
-components/simulation/
-  Planet3DView.tsx (sostituisce)
+FILE
+  CHANGELOG.md  (sostituisce)
+  components/simulation/Planet3DView.tsx  (sostituisce)
+  docs/GENOMA-v1.11.0.md  (NUOVO)
+  docs/LIMITE-CAMPIONAMENTO-POPOLAZIONE.md  (NUOVO)
+  docs/REPORT-v1.11.0.md  (NUOVO)
+  lib/animationScheduler.ts  (NUOVO)
+  scripts/genomeExperiment.experiment.ts  (NUOVO)
+  simulation/biology/environment.ts  (sostituisce)
+  simulation/biology/geneRegistry.ts  (NUOVO)
+  simulation/biology/genome.ts  (sostituisce)
+  simulation/biology/organism.ts  (sostituisce)
+  simulation/biology/phenotype.ts  (NUOVO)
+  simulation/core/world.ts  (sostituisce)
+  simulation/ecology/behavior.ts  (sostituisce)
+  simulation/ecology/collision.ts  (sostituisce)
+  simulation/ecology/feeding.ts  (sostituisce)
+  simulation/ecology/movement.ts  (sostituisce)
+  simulation/ecology/predation.ts  (sostituisce)
+  simulation/evolution/reproduction.ts  (sostituisce)
+  tests/advancedGenome.test.ts  (NUOVO)
+  tests/animationScheduler.test.ts  (NUOVO)
+  tests/genome.test.ts  (sostituisce)
+  tests/vibeCameraQa.test.ts  (sostituisce)
+  types/index.ts  (sostituisce)
+  vitest.experiment.config.ts  (NUOVO)
+  LEGGIMI.txt  (sostituisce)
 
-lib/
-  animationLod.ts (NUOVO)
-  bodyAnimation.ts (sostituisce)
-  livingBehavior.ts (sostituisce)
+Nessun file è stato rinominato o eliminato, eccetto: scripts/genomeExperiment.* è NUOVO (non esisteva in main).
+Non servono nuove dipendenze.
 
-tests/
-  animationLod.test.ts (NUOVO)
+COSA CAMBIA
+- v1.11.0: genoma animale esteso con 13 geni avanzati in 8 famiglie, espressione fenotipica, eredità/mutazione,
+  distanza genetica estesa, migrazione dei vecchi salvataggi. Con enableAdvancedGenome:false il mondo è identico alla v1.10.
+  Vedi docs/GENOMA-v1.11.0.md.
+- Consolidamento v1.10.5: le creature continuano a respirare/riposare in pausa (lib/animationScheduler.ts); test
+  vibeCameraQa corretto. Limite noto del campionamento: docs/LIMITE-CAMPIONAMENTO-POPOLAZIONE.md.
+- Salvataggi: quelli vecchi si caricano da soli (geni avanzati a valori neutri); quelli nuovi hanno genomeSchema 2.
 
-Cosa fa: LOD dell'animazione (alto, medio, basso, con pesi continui in base alla distanza dalla
-camera), meno spazzatura per il garbage collector (da 1818 a 791 byte per creatura per
-aggiornamento, misurati), test di regressione su simulazione e salvataggi.
+DOPO L'AGGIORNAMENTO
+  npm install --legacy-peer-deps      (il semplice "npm install" fallisce per un bug di npm)
+  npx tsc --noEmit                    (se compare "LayoutProps": prima `npx next build`, i tipi li genera Next)
+  npx vitest run --testTimeout=60000
+  npx next build
+RISULTATO ATTESO: 655 test superati, 3 falliti, 658 totali:
+  - tests/reproduction.test.ts: 2 failure PREESISTENTI (falliscono già alla v1.10.0).
+  - tests/fauna180.test.ts: sfumatura ventre-dorso; il valore 1,08 viene dal tuo aggiornamento di Planet3DView.tsx.
+    Dimmi se è voluto: in quel caso aggiorno l'aspettativa del test.
 
-Verifiche in sandbox: type-check e build verdi; 586 test su 588 (le 2 failure note sono in
-tests/reproduction.test.ts). Le misure di FPS, memoria del browser e GPU non sono possibili qui:
-vanno fatte su telefono e su PC.
+VERIFICHE NON EFFETTUATE
+  FPS e fluidità su telefono/PC; ridisegno in pausa a schermo; npm run benchmark; esperimenti a 10.000 tick sui semi 12 e 13
+  (il seme 11 è completo); specifica di Vibe (non ricevuta). Dettagli in docs/REPORT-v1.11.0.md.
