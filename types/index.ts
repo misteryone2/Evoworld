@@ -8,7 +8,10 @@
  */
 
 /** A single ecological/genetic trait as it exists in a genome. */
-export interface Genome {
+/**
+ * v1.11.0 — i 13 tratti di base (invariati dalla v0.x). Il genoma completo (`Genome`) li estende con i geni avanzati.
+ */
+export interface BaseGenome {
   size: number;
   speed: number;
   metabolism: number;
@@ -51,7 +54,18 @@ export interface Genome {
   huntingSkill: number;
 }
 
-export type TraitName = keyof Genome;
+/** v1.11.0 — valori dei geni avanzati, per id stabile (vedi simulation/biology/geneRegistry.ts). Un gene assente vale il suo valore predefinito (neutro). */
+export type GeneMap = Record<string, number>;
+
+/**
+ * v1.11.0 — Advanced Fauna Genome. I 13 tratti di base restano campi diretti; i geni avanzati stanno in `genes`,
+ * facoltativo: un genoma senza `genes` (salvataggi precedenti, test) si comporta esattamente come prima.
+ */
+export interface Genome extends BaseGenome {
+  genes?: GeneMap;
+}
+
+export type TraitName = keyof BaseGenome;
 
 /** Valid numeric range for a trait, used for clamping and initial randomization. */
 export interface TraitRange {
@@ -301,6 +315,13 @@ export interface WorldSnapshot {
   nextSpeciesId: number;
   randomState: number;
   speciesRegistry: SpeciesRecord[];
+  /**
+   * v1.11.0 — versione dello schema del genoma (2 = geni avanzati). Assente nei salvataggi precedenti: al caricamento
+   * vengono migrati (geni avanzati ai valori predefiniti, tratti di base intatti).
+   */
+  genomeSchema?: number;
+  /** v1.11.0 — se il mondo faceva evolvere i geni avanzati (opzione sperimentale per i confronti con la v1.10). */
+  advancedGenome?: boolean;
 }
 
 /**
