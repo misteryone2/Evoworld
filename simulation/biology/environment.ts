@@ -1,5 +1,6 @@
 import type { Cell, Genome } from "../../types";
 import { TRAIT_RANGES } from "./genome";
+import { phenotypeOf, TOLERANCE_ASYMMETRY } from "./phenotype";
 
 /**
  * Peak fitness bounds for a narrow-tolerance specialist vs a
@@ -26,10 +27,12 @@ function nicheFitness(
   minPeak: number,
   maxPeak: number,
   maxTolerance: number,
+  /** v1.11.0 — larghezza della curva dal lato in cui si trova la cella (asimmetria dei geni avanzati); il picco resta quello della tolleranza di base. */
+  sideTolerance: number = tolerance,
 ): number {
   const toleranceFraction = Math.min(1, Math.max(0, tolerance / maxTolerance));
   const peak = maxPeak - toleranceFraction * (maxPeak - minPeak);
-  const safeTolerance = Math.max(tolerance, 0.001);
+  const safeTolerance = Math.max(sideTolerance, 0.001);
   const z = (value - preferred) / safeTolerance;
   return peak * Math.exp(-0.5 * z * z);
 }
@@ -44,6 +47,16 @@ function nicheFitness(
  * every genome performing identically everywhere on the planet.
  */
 export function environmentalFitness(genome: Genome, cell: Cell): number {
+  const phenotype = phenotypeOf(genome);
+  // Asimmetria: un bias positivo allarga la tolleranza verso il freddo / i luoghi secchi e la stringe dall'altra parte.
+  const tempSide =
+    phenotype.thermalBias === 0
+      ? genome.temperatureTolerance
+      : genome.temperatureTolerance * (1 + (cell.temperature < genome.preferredTemperature ? 1 : -1) * TOLERANCE_ASYMMETRY * phenotype.thermalBias);
+  const waterSide =
+    phenotype.droughtBias === 0
+      ? genome.waterTolerance
+      : genome.waterTolerance * (1 + (cell.water < genome.preferredWater ? 1 : -1) * TOLERANCE_ASYMMETRY * phenotype.droughtBias);
   const tempFitness = nicheFitness(
     cell.temperature,
     genome.preferredTemperature,
@@ -51,6 +64,7 @@ export function environmentalFitness(genome: Genome, cell: Cell): number {
     TEMP_MIN_PEAK,
     TEMP_MAX_PEAK,
     TRAIT_RANGES.temperatureTolerance.max,
+    tempSide,
   );
   const waterFitness = nicheFitness(
     cell.water,
@@ -59,6 +73,7 @@ export function environmentalFitness(genome: Genome, cell: Cell): number {
     WATER_MIN_PEAK,
     WATER_MAX_PEAK,
     TRAIT_RANGES.waterTolerance.max,
+    waterSide,
   );
   return tempFitness * waterFitness;
 }
