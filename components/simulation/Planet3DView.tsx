@@ -5,6 +5,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { speciesHue } from "../../lib/speciesColor";
+// vNext (graphics pass) — identità visiva per-individuo condivisa col descriptor
+// G1: la stessa funzione pura garantisce che 2D e 3D non divergano.
+import { organismHueShift, stableVariation01 } from "../../lib/visual/creatureVisualDescriptor";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../lib/creatureAnatomy";
 import { headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
@@ -475,6 +478,12 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const sun = new THREE.DirectionalLight(0xfff2d9, 1.45);
     sun.position.set(...SUN_ORBIT_POSITION);
     scene.add(sun);
+    // vNext (graphics pass) — luce di riempimento debole dal lato opposto:
+    // stacca i volumi delle creature dal fondo scuro senza cambiare la
+    // direzione del sole. Nessuna ombra, una sola draw-cost trascurabile.
+    const fillLight = new THREE.DirectionalLight(0x9fc4ff, 0.22);
+    fillLight.position.set(-SUN_ORBIT_POSITION[0], SUN_ORBIT_POSITION[1] * 0.35, -SUN_ORBIT_POSITION[2]);
+    scene.add(fillLight);
     if (shadows) {
       sun.castShadow = true;
       sun.shadow.mapSize.set(2048, 2048);
@@ -548,10 +557,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const detail = quality.creatureParts;
     const [segW, segH] = quality.creatureSegments;
     const useLambert = quality.level === "basso" || quality.level === "2d";
-    const makeMaterial = (opts: { color?: number; roughness?: number; vertexColors?: boolean }) =>
+    // vNext (graphics pass) — metalness per materiale: la pelle/superficie organica
+    // non è metallo, va tenuta bassa; gli occhi restano lucidi. Senza opt-in il
+    // valore resta quello storico (0.1) per non alterare gli altri materiali.
+    const makeMaterial = (opts: { color?: number; roughness?: number; metalness?: number; vertexColors?: boolean }) =>
       useLambert
         ? new THREE.MeshLambertMaterial({ ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) })
-        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) });
+        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: opts.metalness ?? 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) });
     const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, instances: number, colored: boolean) => {
       const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, instances));
       if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, instances) * 3), 3);
@@ -564,36 +576,36 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     };
 
     const bodyGeometry = addBellyGradient(new THREE.SphereGeometry(1, segW, segH));
-    const bodyMaterial = makeMaterial({ roughness: 0.6, vertexColors: true });
+    const bodyMaterial = makeMaterial({ roughness: 0.52, metalness: 0.04, vertexColors: true });
     const bodyMesh = makeMesh(bodyGeometry, bodyMaterial, capacity, true);
 
     const headGeometry = addBellyGradient(new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2)));
-    const headMaterial = makeMaterial({ roughness: 0.55, vertexColors: true });
+    const headMaterial = makeMaterial({ roughness: 0.48, metalness: 0.04, vertexColors: true });
     const headMesh = makeMesh(headGeometry, headMaterial, capacity, true);
 
     const eyeGeometry = new THREE.SphereGeometry(1, 6, 4);
-    const eyeMaterial = makeMaterial({ color: 0x0b0f14, roughness: 0.25 });
+    const eyeMaterial = makeMaterial({ color: 0x0b0f14, roughness: 0.16, metalness: 0.0 });
     const eyeMesh = makeMesh(eyeGeometry, eyeMaterial, detail >= 2 ? capacity * 2 : 1, false);
 
     const tailGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 6);
-    const tailMaterial = makeMaterial({ roughness: 0.65 });
+    const tailMaterial = makeMaterial({ roughness: 0.56, metalness: 0.04 });
     const tailMesh = makeMesh(tailGeometry, tailMaterial, detail >= 2 ? capacity : 1, true);
 
     const jawGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const jawMaterial = makeMaterial({ color: 0xc8553d, roughness: 0.5 });
+    const jawMaterial = makeMaterial({ color: 0xc8553d, roughness: 0.45, metalness: 0.03 });
     const jawMesh = makeMesh(jawGeometry, jawMaterial, detail >= 2 ? capacity : 1, false);
 
     const spikeGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const spikeMaterial = makeMaterial({ roughness: 0.5 });
+    const spikeMaterial = makeMaterial({ roughness: 0.42, metalness: 0.05 });
     const spikeMesh = makeMesh(spikeGeometry, spikeMaterial, detail >= 3 ? capacity * MAX_SPIKES : 1, true);
 
     // v1.8.0 — zampe (cilindri appesi all'anca), orecchie (coni) e ombra (disco piatto).
     const legGeometry = new THREE.CylinderGeometry(0.8, 1, 1, 5);
     legGeometry.translate(0, -0.5, 0); // l'estremo alto (l'anca) sta in y = 0
-    const legMaterial = makeMaterial({ roughness: 0.7 });
+    const legMaterial = makeMaterial({ roughness: 0.62, metalness: 0.03 });
     const legMesh = makeMesh(legGeometry, legMaterial, detail >= 2 ? capacity * LEGS_PER_CREATURE : 1, true);
     const earGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const earMaterial = makeMaterial({ roughness: 0.6 });
+    const earMaterial = makeMaterial({ roughness: 0.55, metalness: 0.03 });
     const earMesh = makeMesh(earGeometry, earMaterial, detail >= 3 ? capacity * 2 : 1, true);
     const shadowGeometry = new THREE.CircleGeometry(1, 14);
     shadowGeometry.rotateX(-Math.PI / 2); // il disco giace nel piano XZ, rivolto verso l'alto
@@ -2084,7 +2096,14 @@ export function updateCreatureInstances(
     }
 
     // Species color, warmed toward red the more predatory the creature is.
-    tmpColor.setHSL(speciesHue(organismsSpecies[i]) / 360, 0.85, 0.62);
+    // vNext (graphics pass) — variazione deterministica per individuo: stesso
+    // organismo, stesso aspetto a ogni frame (nessun random a runtime), così la
+    // popolazione non è una fila di cloni dello stesso colore di specie.
+    const jitter = stableVariation01(organismsId[i]);
+    const baseHue = (speciesHue(organismsSpecies[i]) + organismHueShift(organismsId[i]) + 360) % 360;
+    const baseSat = Math.min(0.95, 0.7 + (1 - anatomy.aggression) * 0.14 + (jitter - 0.5) * 0.06);
+    const baseLight = Math.min(0.72, Math.max(0.44, 0.6 + (jitter - 0.5) * 0.1));
+    tmpColor.setHSL(baseHue / 360, baseSat, baseLight);
     if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
       tmpColor.lerp(AGGRO_TINT, anatomy.aggression * 0.35);
     }
