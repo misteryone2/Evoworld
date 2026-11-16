@@ -1,7 +1,8 @@
 import type { Genome, Organism } from "../../types";
 import { Random } from "../core/random";
-import { inheritGenome, cloneWithMutation, areGeneticallyCompatible, inheritGenes, cloneGenes, deriveGeneRandom } from "../biology/genome";
-import { phenotypeOf } from "../biology/phenotype";
+import { inheritGenome, cloneWithMutation, areGeneticallyCompatible } from "../biology/genome";
+import { inheritExt, cloneExt, deriveGeneRandom } from "../biology/genomeExt";
+import { phenotypeOf } from "../biology/geneExpression";
 import { inheritBrain, cloneBrainWithMutation } from "../biology/brain";
 import { createOrganism, STARTING_ENERGY } from "../biology/organism";
 import { Planet } from "../planet/planet";
@@ -10,6 +11,12 @@ import { areTouching, maxContactCells } from "../ecology/collision";
 
 const REPRODUCTION_ENERGY_THRESHOLD = 130;
 const REPRODUCTION_ENERGY_COST = 55;
+
+/** Costo di un figlio per un genitore: 55 con l'energia di nascita standard (50); +1,1 per ogni unità in più (REP-01), con un minimo. */
+function parentCost(offspringFactor: number): number {
+  const extra = STARTING_ENERGY * (offspringFactor - 1);
+  return Math.abs(extra) < 1e-9 ? REPRODUCTION_ENERGY_COST : Math.max(20, REPRODUCTION_ENERGY_COST + 1.1 * extra);
+}
 const MIN_REPRODUCTION_AGE_FRACTION = 0.1; // must reach 10% of lifespan first
 /**
  * v1.2.4 — CONSOLIDATED BASELINE. Raised from 2 to 4 cells after a
@@ -63,7 +70,7 @@ export function reproduceOrganisms(
   nextId: () => number,
   /** v1.9.1 — con le collisioni, chi si tocca può accoppiarsi anche oltre il raggio di ricerca in celle. */
   collisions = false,
-  /** v1.11.0 — se vero, i figli ricevono (ereditano e mutano) i geni avanzati; se falso restano senza (comportamento v1.10). */
+  /** v1.11.0 — se vero, i figli ricevono (ereditano e mutano) i geni estesi (`ext`); se falso restano senza (comportamento v1.10). */
   advancedGenome = false,
 ): Organism[] {
   const offspring: Organism[] = [];
@@ -71,7 +78,7 @@ export function reproduceOrganisms(
     (o) =>
       o.alive &&
       o.energy >= REPRODUCTION_ENERGY_THRESHOLD &&
-      // v1.11.0 — maturationRate: la fase giovanile si accorcia o si allunga (neutro = 10% della vita, come prima)
+      // v1.11.0 — REP-02: la fase giovanile si accorcia o si allunga (neutro = 10% della vita, come prima)
       o.age >= o.genome.lifespan * phenotypeOf(o.genome).maturityFraction,
   );
 
@@ -109,15 +116,17 @@ export function reproduceOrganisms(
     let childGenome;
     let childBrain;
     let geneParents: { a: Genome; b: Genome; clone: boolean } | null = null;
-    // v1.11.0 — gestationInvestment: costo del figlio per i genitori e dotazione iniziale del nato (media dei genitori; neutro = 55 / 50)
-    let gestation = phenotypeOf(organism.genome).gestationFactor;
+    // v1.11.0 — REP-01: energia del nato = 50 × fattore (media dei genitori); il genitore paga 55 + 1,1 × (energia del nato − 50). Neutro = 50 / 55.
+    let offspringFactor = phenotypeOf(organism.genome).offspringEnergyFactor;
+    let brainStd = phenotypeOf(organism.genome).brainMutationStd;
     if (mate) {
       paired.add(organism.id);
       paired.add(mate.id);
       childGenome = inheritGenome(organism.genome, mate.genome, rng);
-      childBrain = inheritBrain(organism.brain, mate.brain, rng);
-      gestation = (gestation + phenotypeOf(mate.genome).gestationFactor) / 2;
-      mate.energy -= REPRODUCTION_ENERGY_COST * gestation;
+      offspringFactor = (offspringFactor + phenotypeOf(mate.genome).offspringEnergyFactor) / 2;
+      brainStd = (brainStd + phenotypeOf(mate.genome).brainMutationStd) / 2; // COG-02: fedeltà neurale dei genitori
+      childBrain = inheritBrain(organism.brain, mate.brain, rng, brainStd);
+      mate.energy -= parentCost(offspringFactor);
       if (advancedGenome) geneParents = { a: organism.genome, b: mate.genome, clone: false };
     } else {
       // Asexual fallback so isolated populations are not permanently stuck,
@@ -126,11 +135,11 @@ export function reproduceOrganisms(
       if (!rng.chance(0.15)) continue;
       paired.add(organism.id);
       childGenome = cloneWithMutation(organism.genome, rng);
-      childBrain = cloneBrainWithMutation(organism.brain, rng);
+      childBrain = cloneBrainWithMutation(organism.brain, rng, brainStd);
       if (advancedGenome) geneParents = { a: organism.genome, b: organism.genome, clone: true };
     }
 
-    organism.energy -= REPRODUCTION_ENERGY_COST * gestation;
+    organism.energy -= parentCost(offspringFactor);
 
     const child = createOrganism(
       nextId(),
@@ -138,13 +147,13 @@ export function reproduceOrganisms(
       organism.position.x,
       organism.position.y,
       childGenome,
-      gestation === 1 ? undefined : STARTING_ENERGY * gestation,
+      Math.abs(offspringFactor - 1) < 1e-9 ? undefined : STARTING_ENERGY * offspringFactor,
       childBrain,
     );
     if (geneParents) {
       // Generatore separato (non consuma dal generatore del mondo): i flussi casuali restano quelli della v1.10.
       const geneRng = deriveGeneRandom(rng.getState(), child.id);
-      child.genome.genes = geneParents.clone ? cloneGenes(geneParents.a, geneRng) : inheritGenes(geneParents.a, geneParents.b, geneRng);
+      child.genome.ext = geneParents.clone ? cloneExt(geneParents.a, geneRng) : inheritExt(geneParents.a, geneParents.b, geneRng);
     }
     offspring.push(child);
   }
