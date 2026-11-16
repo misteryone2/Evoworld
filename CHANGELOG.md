@@ -1,36 +1,25 @@
 # Changelog
 
-## v1.11.0 — Advanced Fauna Genome
+## v1.11.0 — Advanced Fauna Genome (specifica di Vibe)
 
-Il genoma animale passa da 13 tratti fissi a un sistema estensibile: i 13 tratti di base restano invariati e si
-aggiungono geni avanzati con id stabili, registro, espressione fenotipica, costi e compromessi. Documentazione
-completa in `docs/GENOMA-v1.11.0.md`; risultati e test in `docs/REPORT-v1.11.0.md`.
+Genoma animale esteso e modulare: i 13 tratti restano invariati; si aggiungono 20 geni estesi (`genome.ext`) in 8 famiglie, con
+registro, espressione fenotipica, costi e compromessi, distanza genetica normalizzata e migrazione dei salvataggi. Documentazione:
+`docs/GENOMA-v1.11.0.md`; verifiche e risultati: `docs/REPORT-v1.11.0.md`.
 
-- `simulation/biology/geneRegistry.ts` (NUOVO): catalogo di 13 geni in 8 famiglie (morfologia, locomozione, percezione,
-  fisiologia, adattamento, ecologia, riproduzione, cognizione), con intervallo, predefinito neutro, mutazione, effetto,
-  compromesso e interazioni. Nessun gene comportamentale diretto.
-- `simulation/biology/phenotype.ts` (NUOVO): espressione genetica, funzione pura. Genoma senza geni = fenotipo neutro.
-- `simulation/biology/genome.ts`: eredità e mutazione dei geni, fondatori, media, distanza genetica estesa (formula
-  dei 13 tratti identica alla v1.10), migrazione e validazione. Soglie di compatibilità e speciazione NON modificate.
-- Effetti agganciati in `organism.ts`, `feeding.ts`, `predation.ts`, `movement.ts`, `behavior.ts`, `collision.ts`,
-  `environment.ts`, `reproduction.ts`. Con fenotipo neutro ogni formula è identica a prima.
-- `world.ts`: opzione `enableAdvancedGenome` (predefinita attiva); con `false` il mondo è identico, bit per bit, alla
-  v1.10 (verificato). Snapshot con `genomeSchema` e migrazione dei salvataggi precedenti.
-- `types/index.ts`: `BaseGenome`, `Genome` (con `genes?`), `GeneMap`, campi dello snapshot.
-- Il generatore casuale del mondo non viene consumato dai geni avanzati (generatore derivato separato).
-- Test: `tests/advancedGenome.test.ts` (NUOVO, 34 test); `tests/genome.test.ts` (solo annotazioni di tipo).
-- `scripts/genomeExperiment.experiment.ts` (NUOVO): confronto evolutivo baseline / v1.11.0, a richiesta.
+- NUOVI: `simulation/biology/traitRanges.ts`, `geneRegistry.ts`, `genomeExt.ts`, `geneExpression.ts`, `genomeMigration.ts`, `energy.ts`.
+- `genome.ts`: distanza V2 (`geneticDistanceV2`, `areGeneticallyCompatibleV2`), media dei geni estesi; con geni estesi assenti la distanza è quella della v1.10.
+- Punti di aggancio: `organism.ts`, `feeding.ts`, `predation.ts`, `movement.ts`, `behavior.ts`, `collision.ts`, `environment.ts`, `reproduction.ts`, `brain.ts`; `MAX_ENERGY` unificato.
+- `world.ts`: opzioni `enableAdvancedGenome` (con `false` il mondo è identico, bit per bit, alla v1.10) e `enableGeneEffects` (controllo neutro); snapshot con `genomeVersion`, migrazione al caricamento.
+- `types/index.ts`: `BaseGenome`, `Genome.ext`, `GeneMap`, `WorldSnapshot.genomeVersion`, `Cell.seasonalOffset` (scritto in `planet.ts`).
+- Soglie di compatibilità (0,16) e speciazione (0,26) NON modificate; con la distanza normalizzata valgono come ≈0,22 e ≈0,35 della v1.10: da ricalibrare nella v1.12.0.
+- Test: `tests/genomeV2.test.ts` (27), `tests/vibeGenomeV1110.test.ts` (suite di Vibe, invariata: 31 su 33; 2 incoerenze suite/specifica), `tests/genome.test.ts` (solo annotazioni di tipo).
+- `scripts/genomeExperiment.experiment.ts` e `vitest.experiment.config.ts`: confronto evolutivo a richiesta (baseline, v1.11, controllo neutro), con ripresa a blocchi.
 
-### Consolidamento v1.10.5 (incluso in questo pacchetto)
-
-- **Ridisegno in pausa** (`lib/animationScheduler.ts`, NUOVO; `Planet3DView.tsx`): le creature disegnate continuano a
-  respirare e a riposare quando la simulazione è in pausa o molto lenta (rendering a ~30 Hz, nessun tick artificiale,
-  nessun dato della simulazione toccato). `updateCreatureInstances` ora restituisce il numero di creature disegnate.
-- `tests/vibeCameraQa.test.ts`: corretta l'aspettativa errata (la miscela a 0,5 tra 0° e 45° vale 22,5°); il codice era corretto.
-- `tests/animationScheduler.test.ts` (NUOVO).
-- Limite noto documentato: `docs/LIMITE-CAMPIONAMENTO-POPOLAZIONE.md`.
-- Falliscono ancora, per cause preesistenti, 2 test di `tests/reproduction.test.ts` e 1 di `tests/fauna180.test.ts`
-  (vedi `docs/REPORT-v1.11.0.md`).
+### Consolidamento v1.10.5 (incluso)
+- Ridisegno delle creature in pausa (`lib/animationScheduler.ts`, `Planet3DView.tsx`): respiro, idle e riposo proseguono a ~30 Hz senza tick artificiali.
+- `tests/vibeCameraQa.test.ts`: aspettativa corretta (22,5°); `tests/animationScheduler.test.ts` (NUOVO).
+- Limite noto: `docs/LIMITE-CAMPIONAMENTO-POPOLAZIONE.md`.
+- Aperti: 2 test di `reproduction` (preesistenti) e `fauna180` (in attesa di conferma).
 
 ---
 
