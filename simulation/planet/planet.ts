@@ -340,7 +340,9 @@ export class Planet {
     // temperature (hence in organisms' fitness and in vegetation potential)
     // and in vegetation, not in the biome label.
     const meanTemperature = annualMeanTemperature(this.config.seed, x, y, this.config.height, cell.elevation);
-    cell.temperature = meanTemperature + seasonalTemperatureOffset(y, this.config.height, tick);
+    const seasonalOffset = seasonalTemperatureOffset(y, this.config.height, tick);
+    cell.temperature = meanTemperature + seasonalOffset;
+    cell.seasonalOffset = seasonalOffset; // v1.11.0 — per ADA-01 (robustezza stagionale)
 
     if (cell.terrain !== "mountain") {
       // v1.2.4 — vegetation now regrows toward an environment-derived
@@ -384,7 +386,9 @@ export class Planet {
     // that reactivates after a dormant stretch is exactly as warm or cold
     // as one that was simulated every tick.
     const meanTemperature = annualMeanTemperature(this.config.seed, x, y, this.config.height, cell.elevation);
-    cell.temperature = meanTemperature + seasonalTemperatureOffset(y, this.config.height, tick);
+    const seasonalOffset = seasonalTemperatureOffset(y, this.config.height, tick);
+    cell.temperature = meanTemperature + seasonalOffset;
+    cell.seasonalOffset = seasonalOffset; // v1.11.0 — per ADA-01 (robustezza stagionale)
 
     if (cell.terrain !== "mountain") {
       // v1.2.4 — same closed-form catch-up as before, generalized to
