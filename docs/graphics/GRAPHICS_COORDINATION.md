@@ -1,31 +1,33 @@
 # EvoWorld — Graphics Revolution: Coordinamento multiagente
 
-> Documento di coordinamento (bozza iniziale, G0). **Aggiornare a ogni intervento significativo.**  
+> Documento di coordinamento. **Aggiornare a ogni intervento significativo.**  
 > Fonte audit: `GRAPHICS_AUDIT_G0.md` (2026-11-16, agente Big Pickle).  
-> **Attenzione:** creato in workspace locale non-repo; se il repository viene clonato, spostare/integrare questo file nel repo (es. root o `docs/graphics/`) e allinearlo con eventuali doc di coordinamento già presenti.
+> **Stato workspace:** checkout del progetto in `Evoworld-main/` (senza `.git`). Verifiche eseguite con **Node v22.14.0 portable** in `%TEMP%\opencode` (non installato a sistema). Dettaglio esiti: `G1_IMPLEMENTATION_REPORT.md` §6.
 
 ## Stato fasi
 | Fase | Stato | Owner | Note |
 |---|---|---|---|
-| G0 — Audit e baseline | **Completato (audit/design docs). Baseline runtime non eseguita** | Big Pickle | Eseguita analisi su repo remoto; build/test/profiling richiedono checkout reale |
-| G1 — Architettura grafica e contratto dati | **Design completato (specifiche pronte), implementazione non avviata** | Big Pickle (design) | Vedi `G1_VISUAL_DESCRIPTOR_SPEC.md`, `G1_RENDERER_ARCHITECTURE.md`; implementazione richiede checkout + coordinamento hotspot |
-| G2 — Creature e anatomia | Non iniziata (bloccata da G1 implementato + baseline) | — | Dipende da G1 |
-| G3 — Materiali e dettagli | Non iniziata | — | Dipende da G1/G2 |
-| G4 — Animazioni | Non iniziata | — | Dipende da G2 |
-| G5 — Ambiente e vegetazione | Non iniziata | — | Parallelizzabile parzialmente dopo G1 |
+| G0 — Audit e baseline | **Audit completato. Baseline build/test eseguita; mancano misure runtime PC/mobile** | Big Pickle | Vedi §Baseline |
+| G1 — Architettura grafica e contratto dati | **Contratto implementato e verificato (build+typecheck+12 test); adozione parziale nel 3D; refactor modulare non avviato** | Big Pickle | `lib/visual/creatureVisualDescriptor.ts`, `tests/creatureVisualDescriptor.test.ts`; vedi `G1_IMPLEMENTATION_REPORT.md` |
+| G2 — Creature e anatomia | **Parziale: pass visuale 2D/3D (materiali, colore per individuo, luce di riempimento, dettagli 2D)** | Big Pickle | Build/test verdi sul nuovo codice; nessuno smoke visivo browser |
+| G3 — Materiali e dettagli | **Parziale: materiali creature (roughness/metalness) + luce di riempimento** | Big Pickle | Restano PBR/texture reali e materiali terreno/acqua |
+| G4 — Animazioni | Non iniziata (posa procedurale esistente invariata) | — | Dipende da G2 |
+| G5 — Ambiente e vegetazione | Non iniziata | — | Parallelizzabile |
 | G6 — Ecosistema e interazioni | Non iniziata | — | Richiede segnali reali sim |
 | G7 — Interfaccia | Non iniziata | — | Parallelizzabile con attenzione a `app/page.tsx` |
-| G8 — Ottimizzazione PC/mobile | Non iniziata | — | Continuativa, milestone dedicata |
-| G9 — Integrazione e collaudo | Non iniziata | — | Finale, richiede ambiente di test reale |
+| G8 — Ottimizzazione PC/mobile | **Parziale: guardie di costo nel 2D (dettaglio solo sopra soglia px); micro-misura CPU fatta, nessuna misura GPU/browser** | Big Pickle | Misure FPS/p95 rinviate |
+| G9 — Integrazione e collaudo | Non iniziata | — | Richiede ambiente di test reale |
 
-## Baseline (da compilare con risultati reali)
-- **Commit/branch:** _sconosciuto in questa sessione (nessun checkout locale)_
-- **Build (`next build`):** _non eseguita_
-- **Typecheck (`tsc --noEmit`):** _non eseguita_
-- **Test (`vitest run`):** _non eseguiti_ (atteso da maintainer v1.11.0: 680/685 pass, 5 fail noti — non verificato)
-- **Benchmark/profiling:** _non eseguito_
-- **Carichi target misurati (100/500/1500/3000):** _no_
-- **Piattaforme verificate (PC/mobile):** _no_
+## Baseline (risultati reali, 2026-11-16)
+- **Commit/branch:** _checkout locale `Evoworld-main/` senza `.git`; commit sconosciuto_
+- **Runtime:** Node v22.14.0 (portable), npm 10.9.2, Next 16.3.0, vitest 4.1.12
+- **Install:** `npm install --legacy-peer-deps` → 391 pacchetti (npm 10.9.2 fallisce senza flag: bug `edgesOut`)
+- **Build (`next build`):** ✅ compilata in 25.0s, TypeScript 57s, 3/3 pagine statiche
+- **Typecheck (`tsc --noEmit`):** ✅ exit 0
+- **Test (`vitest run`):** ⚠️ 687/698 pass, 10 fail, 1 skip; 6 file falliti, tutti in aree non grafiche (world-gen/sim/genoma), parte flaky. Nuovo `creatureVisualDescriptor.test.ts`: 12/12 pass.
+- **Benchmark/profiling:** solo micro-misura CPU Node (nessuna GPU/browser): `updateCreatureInstances` ~1.0/1.9/2.1/6.4 ms per 100/500/1500/3000; descriptor ~4.2 ms per 3000.
+- **Carichi target misurati (100/500/1500/3000):** solo CPU-side, non FPS
+- **Piattaforme verificate (PC/mobile):** ❌ nessuna verifica browser/GPU
 
 ## File hotspot (coordinare prima di modificare)
 - `components/simulation/Planet3DView.tsx` — **caldo** (renderer principale, monolitico)
@@ -37,29 +39,39 @@
 ## Attività in corso
 | Agente | Attività | File/area | Inizio | Stato |
 |---|---|---|---|---|
-| Big Pickle | Audit G0 + doc coordinamento/descriptor (bozza) | `GRAPHICS_AUDIT_G0.md`, `GRAPHICS_COORDINATION.md` | 2026-11-16 | Completato (deliverable locale) |
+| Big Pickle | G1 descriptor + pass visuale creature (2D/3D) | `lib/visual/*`, `components/simulation/drawCreature.ts`, `components/simulation/Planet3DView.tsx`, `tests/creatureVisualDescriptor.test.ts` | 2026-11-16 | Implementato; build+typecheck OK; 12/12 test nuovo modulo; smoke visivo browser mancante |
 
 ## Attività completate
-- 2026-11-16 — **Big Pickle:** audit tecnico G0 basato su repo remoto; proposta `CreatureVisualDescriptor` read-only; mappa rischi/priorità.
-- 2026-11-16 — **Big Pickle:** prodotti deliverable G1 di design: `G1_VISUAL_DESCRIPTOR_SPEC.md` (contratto read-only mappato a `RenderFrame`/tipi attuali) e `G1_RENDERER_ARCHITECTURE.md` (modularizzazione `Planet3DView`, piano di migrazione, ownership hotspot). Nessuna modifica al codice sorgente del repository (assenza checkout locale).
+- 2026-11-16 — **Big Pickle:** audit tecnico G0; proposta `CreatureVisualDescriptor` read-only; mappa rischi/priorità.
+- 2026-11-16 — **Big Pickle:** deliverable G1 di design: `G1_VISUAL_DESCRIPTOR_SPEC.md`, `G1_RENDERER_ARCHITECTURE.md`.
+- 2026-11-16 — **Big Pickle:** **implementazione G1** in `lib/visual/` (tipi + `buildCreatureVisualDescriptor` + helper deterministici) e **adozione parziale** nel renderer 3D per la variazione cromatica per individuo (zero allocazioni extra). Aggiunto test puro `tests/creatureVisualDescriptor.test.ts`.
+- 2026-11-16 — **Big Pickle:** pass visuale creature senza toccare la sim:
+  - 3D: materiali `MeshStandardMaterial` differenziati (roughness/metalness per parte; occhi lucidi), luce di riempimento direzionale debole, colore per individuo stabile (tinta di specie ± jitter).
+  - 2D: volume (gradiente), ventre, coda, accenno arti, occhio con pupilla/riflesso, spine triangolari, ombra; **decorazioni attive solo sopra soglie di raggio** per non peggiorare il costo per frame.
+  - Nessuna modifica a genetica/mutazioni/selezione/riproduzione/metabolismo/energia/comportamento/predazione/ecologia.
+- 2026-11-16 — **Big Pickle:** **verifica reale** (Node v22.14.0 portable): `next build` OK (25.0s), `tsc --noEmit` exit 0, nuovo test 12/12, suite completa 687/698 (10 fail preesistenti/flaky in world-gen/sim/genoma). Micro-misura CPU di `updateCreatureInstances` e descriptor. Dettagli: `G1_IMPLEMENTATION_REPORT.md` §6.
 
 ## Decisioni architetturali (ADR-lite)
 | ID | Decisione | Motivazione | Stato |
 |---|---|---|---|
 | D-001 | Separazione rigorosa sim biologica / rendering | Vincolo di progetto; evitare regressioni evolutive | **Confermata** |
-| D-002 | Introdurre `CreatureVisualDescriptor` read-only come boundary | Coerenza visiva, testabilità, niente duplicazione logica sim | **Proposta (G1)** |
-| D-003 | Evoluzione incrementale con LOD/quality tiers, no riscrittura big-bang | Sostenibilità PC/mobile e lavoro parallelo | **Proposta** |
+| D-002 | Introdurre `CreatureVisualDescriptor` read-only come boundary | Coerenza visiva, testabilità, niente duplicazione logica sim | **Implementata (G1)**: contratto + helper in `lib/visual/`, adozione parziale |
+| D-003 | Evoluzione incrementale con LOD/quality tiers, no riscrittura big-bang | Sostenibilità PC/mobile e lavoro parallelo | **Confermata** (pass visuale additivo) |
+| D-004 | Variazione cromatica per individuo deterministica (hash `organismId`) | Popolazione non monocroma senza random runtime, 2D/3D coerenti | **Implementata** |
+| D-005 | Dettaglio 2D condizionato al raggio (px) | Evitare gradienti/particelle su punti minuscoli, proteggere il frame budget | **Implementata, da misurare** |
 
 ## Dipendenze e conflitti
 - **Dipendenze:** G2–G4 dipendono da G1 (descriptor/moduli); G8/G9 richiedono baseline e strumentazione.
-- **Conflitti noti:** nessuno rilevato (workspace vuoto). Verificare in repo reale prima di edit.
+- **Conflitti noti:** modifiche di questa sessione a `Planet3DView.tsx` (hotspot) sono additive e localizzate (import, materiali creature, luce di riempimento, blocco colore). `drawCreature.ts` riscritto internamente con la stessa firma pubblica. Nessun altro agente rilevato nel checkout locale.
 
 ## Problemi aperti
-1. Baseline build/test/profiling non eseguita in questa sessione (nessun checkout locale del repo).
-2. Presenza/assenza di altri branch, PR o doc di coordinamento remoti non verificata.
-3. Dettaglio componenti UI/HUD e `localScene` non completamente auditato a runtime.
-4. 5 test dichiarati falliti in v1.11.0 (preesistenti/incoerenze) da confermare su baseline attuale.
-5. **Blocco completamento G1–G9:** implementazione, refactor, verifica e collaudo richiedono checkout del repository, ambiente di build/test, esecuzione runtime (browser/PC/mobile) e coordinamento reale con eventuali altri agenti per evitare conflitti su file hotspot.
+1. **Baseline completa:** build/typecheck/test eseguiti con Node portatile (vedi §Baseline). Restano da eseguire benchmark runtime e misure FPS/p95 su PC/mobile reali.
+2. Presenza/assenza di altri branch, PR o doc di coordinamento remoti non verificata (checkout senza `.git`).
+3. Dettaglio componenti UI/HUD e `localScene` non auditato a runtime.
+4. **Test suite:** 10 fail (su 698) in world-gen/sim/genoma, in parte flaky; 1 accertato preesistente (`addBellyGradient` 1.08 vs test che si aspetta 1.0). Da confermare su baseline git pulita.
+5. **Refactor modulare G1** (`Planet3DView` → sottosistemi) non avviato: richiede build/test ripetuti per garantire parità visiva.
+6. **G2–G9 completi** richiedono: GPU/browser reali (PC+mobile), asset/material tuning, misure FPS/p95 e coordinamento con altri agenti sugli hotspot.
+7. **npm 10.9.2:** `npm install` fallisce senza `--legacy-peer-deps` (bug `edgesOut`); usare npm 11+ o il flag.
 
 ## Protocollo suggerito per gli agenti
 - Prima di modificare: dichiarare intento in questo file + identificare owner/lock soft del file.
