@@ -29,7 +29,7 @@ Re-export del modulo.
 
 ### `tests/creatureVisualDescriptor.test.ts`
 Test puri (Vitest) che coprono: determinismo, **non mutazione del frame**, classificazione dieta, scala delle andature, range dei valori (0..1), `alert === 0`, `resting` vs `feeding`, LOD (vicino/lontano, selezionato, profilo leggero), uso della posizione interpolata.
-> Questi test **non sono stati eseguiti**.
+> Eseguiti: **12/12 passati** (vedi §6).
 
 ## 3. File modificati
 
@@ -60,7 +60,7 @@ Tutti i materiali precedenti non toccati mantengono il valore storico (`metalnes
 
 ## 5. Prossimi passi verificabili (in ordine)
 
-1. Installare Node LTS, eseguire `npm ci`, `npx tsc --noEmit`, `npm run test`, `npm run build`. Registrare esiti reali in `GRAPHICS_COORDINATION.md` §Baseline.
+1. Installare Node LTS, eseguire `npm ci`, `npx tsc --noEmit`, `npm run test`, `npm run build`. Registrare esiti reali in `GRAPHICS_COORDINATION.md` §Baseline. ✅ Fatto (§6; `npm ci` sostituito da `npm install --legacy-peer-deps` per il bug npm 10.9.2).
 2. Se il typecheck segnala problemi nel nuovo modulo/test, correggerli prima di procedere.
 3. Smoke visivo: mappa 2D a 100/600 creature, 3D a 100/500/1500/3000, profili `basso`/`medio`/`alto`, desktop + mobile; screenshot prima/dopo.
 4. Profilare `updateCreatureInstances` e il loop di disegno 2D (ms/frame, p95) per confermare che le guardie di costo bastino.
@@ -104,7 +104,7 @@ Test temporaneo (poi rimosso) su `updateCreatureInstances` e `buildCreatureVisua
 
 ## 7. Passi successivi aggiornati
 
-1. Riprodurre la baseline su un checkout con git e CI, registrando commit e comandi.
+1. Riprodurre la baseline su un checkout con git e CI, registrando commit e comandi. ✅ Fatto: clone `Evoworld-git`, commit `c35c287` (main), Node v22.14.0 portable; esiti identici al progetto caricato.
 2. Smoke visivo browser: 2D (100/600) e 3D (100/500/1500/3000) per `basso`/`medio`/`alto`, desktop + mobile, con screenshot prima/dopo.
 3. Profiling browser (Performance panel): ms/frame, p95, draw call, memoria.
 4. Refactor modulare G1-b e adozione descriptor con buffer riusabili (zero-alloc).
