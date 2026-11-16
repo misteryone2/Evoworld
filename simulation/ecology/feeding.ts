@@ -1,10 +1,10 @@
 import type { Cell, Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { environmentalFitness } from "../biology/environment";
-import { phenotypeOf } from "../biology/phenotype";
+import { phenotypeOf } from "../biology/geneExpression";
+import { MAX_ENERGY } from "../biology/energy";
 import type { RegionEstablishment } from "./regionEcology";
 
-const MAX_ENERGY = 150;
 const ENERGY_PER_VEGETATION = 40;
 
 /**
@@ -95,6 +95,15 @@ export function regionKey(x: number, y: number): string {
  * formula — only the ENERGY EXTRACTION ceiling per tick is now tied to
  * the sustainable rate instead of the instantaneous stock.
  */
+/**
+ * Peso di un organismo nella domanda su cella e regione: taglia × quota erbivora. v1.11.0 — ECO-01 (pascolo efficiente) lo
+ * riduce ×(1−0,3·g) a parità di guadagno (PROVVISORIO: decisione aperta di Mattia, quota contro consumo).
+ */
+function demandWeight(o: Organism): number {
+  const base = o.genome.size * (1 - o.genome.carnivory);
+  return o.genome.ext ? base * phenotypeOf(o.genome).grazingDemandFactor : base;
+}
+
 export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstablishment?: RegionEstablishment): void {
   // Group living organisms by the cell they currently occupy. v1.1 — the
   // cell itself (not just an index) is captured alongside its occupants:
@@ -131,7 +140,7 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
   for (const { cell, x, y, occupants } of byCell.values()) {
     if (cell.terrain === "ocean") continue;
     const key = regionKey(x, y);
-    const demand = occupants.reduce((sum, o) => sum + o.genome.size * (1 - o.genome.carnivory), 0);
+    const demand = occupants.reduce((sum, o) => sum + demandWeight(o), 0);
     regionDemand.set(key, (regionDemand.get(key) ?? 0) + demand);
   }
 
@@ -179,11 +188,11 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
     // more from a shared patch. Weighting demand by (1 - carnivory) means a
     // pure carnivore standing on a cell doesn't compete for or deplete its
     // vegetation at all — consistent with getting no energy from it above.
-    const totalDemand = occupants.reduce((sum, o) => sum + o.genome.size * (1 - o.genome.carnivory), 0);
+    const totalDemand = occupants.reduce((sum, o) => sum + demandWeight(o), 0);
     const availableEnergy = cell.vegetation * ENERGY_PER_VEGETATION;
 
     for (const o of occupants) {
-      const demandShare = o.genome.size * (1 - o.genome.carnivory);
+      const demandShare = demandWeight(o);
 
       // What this organism's own cell could physically provide it this
       // tick, given the vegetation actually standing there right now
@@ -202,10 +211,10 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
       const sustainableShare = regionSustainableBudget * regionShare;
 
       const rawGained = Math.min(rawCellGain, sustainableShare);
-      // v1.11.0 — digestione efficiente (plantYield) e riserva massima di energia (maxEnergy) dal fenotipo; neutro = invariato
+      // v1.11.0 — FIS-02 (efficienza digestiva) e FIS-01 (tetto di energia) dal fenotipo; neutro = invariato
       const phenotype = phenotypeOf(o.genome);
-      const gained = rawGained * environmentalFitness(o.genome, cell) * settlementEfficiency * phenotype.plantYield;
-      o.energy = Math.min(phenotype.maxEnergy, o.energy + gained);
+      const gained = rawGained * environmentalFitness(o.genome, cell) * settlementEfficiency * phenotype.digestionFactor;
+      o.energy = Math.min(MAX_ENERGY * phenotype.energyCapFactor, o.energy + gained);
     }
   }
 

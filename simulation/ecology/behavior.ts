@@ -1,7 +1,8 @@
 import type { Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { nearbyOrganisms, distanceWrapped } from "./spatialIndex";
-import { phenotypeOf } from "../biology/phenotype";
+import { phenotypeOf } from "../biology/geneExpression";
+import { MAX_ENERGY } from "../biology/energy";
 
 /**
  * Same thresholds used in predation.ts to decide whether an organism is a
@@ -12,8 +13,6 @@ import { phenotypeOf } from "../biology/phenotype";
  */
 const CARNIVORY_HUNT_THRESHOLD = 0.35;
 const HUNT_HUNGER_THRESHOLD = 110;
-/** Same value as MAX_ENERGY in predation.ts, duplicated for the same reason above — used only to normalize the energy sensory input to roughly [0, 1]. */
-const MAX_ENERGY = 150;
 
 /** Bucket size for the shared spatial index used by movement/behavior each tick. */
 export const BEHAVIOR_BUCKET_SIZE = 4;
@@ -41,8 +40,7 @@ const MEMORY_DECAY_TICKS = 300;
 
 /** Detection radius for flocking/fear/hunting-seek/territoriality, scaled by the organism's own vision trait. */
 function socialRadius(o: Organism): number {
-  // v1.11.0 — proximitySensing: raggio di percezione degli altri animali (neutro = come prima)
-  return Math.max(2, o.genome.vision * phenotypeOf(o.genome).sensingRadiusFactor);
+  return Math.max(2, o.genome.vision);
 }
 
 /**
@@ -104,9 +102,13 @@ export function computeSensoryChannels(
   tick: number,
 ): SensoryChannels {
   const channels: SensoryChannels = { ...EMPTY_CHANNELS };
-  channels.energyNorm = Math.max(0, Math.min(1.2, organism.energy / MAX_ENERGY));
+  const phenotype = phenotypeOf(organism.genome);
+  // FIS-01: l'energia in ingresso al cervello è relativa al proprio tetto (MAX_ENERGY × energyCapFactor)
+  channels.energyNorm = Math.max(0, Math.min(1.2, organism.energy / (MAX_ENERGY * phenotype.energyCapFactor)));
 
   const vision = socialRadius(organism);
+  // PER-01: le minacce si rilevano un po' più lontano; gli altri canali restano al raggio base
+  const threatRadius = vision * phenotype.threatRadiusFactor;
   const candidates = nearbyOrganisms(organism.position, buckets, bucketSize);
 
   let cohesionX = 0;
@@ -125,9 +127,11 @@ export function computeSensoryChannels(
   for (const other of candidates) {
     if (other === organism || !other.alive) continue;
     const d = distanceWrapped(organism.position.x, organism.position.y, other.position.x, other.position.y, planet);
-    if (d > vision || d === 0) continue;
+    if (d > threatRadius || d === 0) continue;
+    const inVision = d <= vision;
 
     if (other.speciesId === organism.speciesId) {
+      if (!inVision) continue;
       cohesionX += other.position.x - organism.position.x;
       cohesionY += other.position.y - organism.position.y;
       cohesionCount++;
@@ -159,7 +163,7 @@ export function computeSensoryChannels(
         nearestThreat = other;
         nearestThreatDist = d;
       }
-      if (isHunter && other.genome.carnivory < organism.genome.carnivory && d < nearestPreyDist) {
+      if (isHunter && inVision && other.genome.carnivory < organism.genome.carnivory && d < nearestPreyDist) {
         nearestPrey = other;
         nearestPreyDist = d;
       }
@@ -170,12 +174,18 @@ export function computeSensoryChannels(
     channels.flockX += (cohesionX / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
     channels.flockY += (cohesionY / cohesionCount) * FLOCK_COHESION_WEIGHT * 0.1;
   }
+  // PER-03: intensità con cui si percepisce il gruppo (fisiologia sensoriale; il cervello decide cosa farne)
+  if (phenotype.flockGain !== 1) {
+    channels.flockX *= phenotype.flockGain;
+    channels.flockY *= phenotype.flockGain;
+  }
 
   if (nearestThreat) {
     const dirX = organism.position.x - nearestThreat.position.x;
     const dirY = organism.position.y - nearestThreat.position.y;
     const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-    const strength = (1 + organism.genome.evasion) * (1 - nearestThreatDist / vision);
+    // PER-01: segnale di paura ×fearGain (la decisione resta alla rete)
+    const strength = (1 + organism.genome.evasion) * (1 - nearestThreatDist / threatRadius) * phenotype.fearGain;
     channels.fearX = (dirX / mag) * strength;
     channels.fearY = (dirY / mag) * strength;
   }
@@ -191,8 +201,8 @@ export function computeSensoryChannels(
 
   if (organism.memory) {
     const age = tick - organism.memory.tick;
-    // v1.11.0 — memoryRetention: per quanto si ricorda (neutro = 300 tick)
-    const memoryTicks = MEMORY_DECAY_TICKS * phenotypeOf(organism.genome).memoryFactor;
+    // COG-01: per quanto si ricorda (neutro = 300 tick)
+    const memoryTicks = phenotype.memoryDecayTicks;
     if (age > memoryTicks) {
       organism.memory = null;
     } else {
@@ -201,8 +211,9 @@ export function computeSensoryChannels(
       const mag = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
       const freshness = 1 - age / memoryTicks;
       const sign = organism.memory.kind === "food" ? 1 : -1;
-      channels.memoryX = (dirX / mag) * sign * freshness;
-      channels.memoryY = (dirY / mag) * sign * freshness;
+      // PER-02: canale della memoria ×memoryGain
+      channels.memoryX = (dirX / mag) * sign * freshness * phenotype.memoryGain;
+      channels.memoryY = (dirY / mag) * sign * freshness * phenotype.memoryGain;
     }
   }
 

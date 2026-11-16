@@ -1,7 +1,12 @@
 import type { Organism } from "../../types";
 import { Planet } from "../planet/planet";
 import { bodyMass, bodyRadiusUnits, cellLengthsUnits } from "../core/scale";
-import { phenotypeOf } from "../biology/phenotype";
+import { phenotypeOf } from "../biology/geneExpression";
+
+/** v1.11.0 — MOR-03: raggio del corpo con il fattore di corporatura (1 senza geni estesi). */
+function radiusOf(o: Organism): number {
+  return o.genome.ext ? bodyRadiusUnits(o.genome.size) * phenotypeOf(o.genome).bodyRadiusFactor : bodyRadiusUnits(o.genome.size);
+}
 
 /**
  * v1.9.1 — Collisioni tra animali. Ogni creatura occupa uno spazio (un disco sulla superficie del pianeta, con la
@@ -54,9 +59,13 @@ export interface CollisionStats {
 
 /** Il corpo più grande tra quelli vivi, per dimensionare la griglia (in unità del mondo 3D). */
 function largestRadiusUnits(organisms: Organism[]): number {
-  let maxSize = 0;
-  for (const o of organisms) if (o.alive && o.genome.size > maxSize) maxSize = o.genome.size;
-  return bodyRadiusUnits(maxSize);
+  let maxRadius = 0;
+  for (const o of organisms) {
+    if (!o.alive) continue;
+    const r = radiusOf(o);
+    if (r > maxRadius) maxRadius = r;
+  }
+  return maxRadius;
 }
 
 /** Distanza di contatto più grande possibile tra due creature vive, in celle (la più lunga tra x e y). Serve a dimensionare le ricerche dei vicini. */
@@ -83,7 +92,7 @@ export function physicalDistanceUnits(a: Organism, b: Organism, planet: Planet):
  */
 export function areTouching(a: Organism, b: Organism, planet: Planet): boolean {
   const cell = cellLengthsUnits(planet.width, planet.height);
-  const contact = bodyRadiusUnits(a.genome.size) + bodyRadiusUnits(b.genome.size);
+  const contact = radiusOf(a) + radiusOf(b);
   return physicalDistanceUnits(a, b, planet) <= contact + TOUCH_MARGIN_CELLS * Math.min(cell.x, cell.y);
 }
 
@@ -161,7 +170,7 @@ function separate(a: Organism, b: Organism, planet: Planet, cell: { x: number; y
   const dxUnits = wrappedDelta(a.position.x, b.position.x, W) * cell.x * s;
   const dyUnits = dyCells * cell.y;
   const distance = Math.hypot(dxUnits, dyUnits);
-  const contact = bodyRadiusUnits(a.genome.size) + bodyRadiusUnits(b.genome.size);
+  const contact = radiusOf(a) + radiusOf(b);
   if (distance >= contact) return false;
 
   let nx: number;
@@ -173,9 +182,8 @@ function separate(a: Organism, b: Organism, planet: Planet, cell: { x: number; y
     ny = dyUnits / distance;
   }
   const overlap = contact - distance;
-  // v1.11.0 — bodyDensity: massa a parità di taglia (neutro = come prima)
-  const massA = bodyMass(a.genome.size) * phenotypeOf(a.genome).massFactor;
-  const massB = bodyMass(b.genome.size) * phenotypeOf(b.genome).massFactor;
+  const massA = bodyMass(a.genome.size);
+  const massB = bodyMass(b.genome.size);
   let shareA = massB / (massA + massB); // chi pesa meno si sposta di più
   let shareB = massA / (massA + massB);
 

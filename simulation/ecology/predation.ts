@@ -4,9 +4,9 @@ import { Planet } from "../planet/planet";
 import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped } from "./spatialIndex";
 import { recordDangerMemory } from "./behavior";
 import { areTouching, maxContactCells } from "./collision";
-import { phenotypeOf } from "../biology/phenotype";
+import { phenotypeOf, BURST_POWER_BONUS, BURST_ENERGY_COST, DEFENSE_BRACKET_CAP } from "../biology/geneExpression";
+import { MAX_ENERGY } from "../biology/energy";
 
-const MAX_ENERGY = 150;
 
 /** Below this carnivory value, an organism never attempts to hunt. */
 const CARNIVORY_HUNT_THRESHOLD = 0.35;
@@ -35,7 +35,8 @@ const MEAT_ENERGY_VALUE = 55;
  * specifically evolves in response to how evasive local prey have become.
  */
 function huntingPower(o: Organism): number {
-  return o.genome.size * o.genome.speed * (1 + o.genome.huntingSkill) * phenotypeOf(o.genome).sprintFactor;
+  // LOC-02: bonus di scatto nel tentativo di caccia (neutro senza geni estesi)
+  return o.genome.size * o.genome.speed * (1 + o.genome.huntingSkill) * (1 + BURST_POWER_BONUS * phenotypeOf(o.genome).burstPower);
 }
 
 /**
@@ -50,7 +51,11 @@ function huntingPower(o: Organism): number {
  */
 function defensivePower(o: Organism): number {
   const phenotype = phenotypeOf(o.genome);
-  return o.genome.size * o.genome.speed * (1.15 + o.genome.evasion) * phenotype.armorFactor * phenotype.sprintFactor;
+  // MOR-02: la corazza si somma alla parentesi (1,15 + evasion), con tetto totale (PROVVISORIO: il catalogo non definisce il cap);
+  // MOR-03: corporatura ×; LOC-02: scatto nella fuga.
+  const bracket = Math.min(DEFENSE_BRACKET_CAP, 1.15 + o.genome.evasion + phenotype.defenseBonus);
+  const legacyBracket = 1.15 + o.genome.evasion;
+  return o.genome.size * o.genome.speed * (phenotype.defenseBonus === 0 ? legacyBracket : Math.max(legacyBracket, bracket)) * phenotype.defenseFactor * (1 + BURST_POWER_BONUS * phenotype.burstPower);
 }
 
 /**
@@ -130,6 +135,11 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
     // Hunting has a real cost: the attempt itself burns energy regardless
     // of whether it succeeds.
     predator.energy -= HUNT_ENERGY_COST;
+    // LOC-02: lo scatto costa energia a ogni tentativo, a chi caccia e a chi fugge
+    const burstCostPredator = BURST_ENERGY_COST * phenotypeOf(predator.genome).burstPower;
+    const burstCostPrey = BURST_ENERGY_COST * phenotypeOf(target.genome).burstPower;
+    if (burstCostPredator > 0) predator.energy = Math.max(0, predator.energy - burstCostPredator);
+    if (burstCostPrey > 0) target.energy = Math.max(0, target.energy - burstCostPrey);
 
     const predatorPower = huntingPower(predator);
     const preyPower = defensivePower(target);
@@ -142,8 +152,9 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
 
     if (rng.chance(successChance)) {
       const predatorPhenotype = phenotypeOf(predator.genome);
-      const energyGained = Math.min(MEAT_ENERGY_VALUE, target.energy + 30) * predator.genome.carnivory * predatorPhenotype.meatYield;
-      predator.energy = Math.min(predatorPhenotype.maxEnergy, predator.energy + energyGained);
+      // FIS-02: la digestione efficiente vale anche per la carne; FIS-01: tetto di energia
+      const energyGained = Math.min(MEAT_ENERGY_VALUE, target.energy + 30) * predator.genome.carnivory * predatorPhenotype.digestionFactor;
+      predator.energy = Math.min(MAX_ENERGY * predatorPhenotype.energyCapFactor, predator.energy + energyGained);
       target.alive = false;
       kills++;
     } else {

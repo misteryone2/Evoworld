@@ -4,7 +4,7 @@ import { Planet } from "../planet/planet";
 import { computeSensoryChannels, recordFoodMemory } from "./behavior";
 import { evaluateBrain, SENSORY_INPUT_SIZE } from "../biology/brain";
 import { evaluateTerrainMovement } from "./terrain";
-import { phenotypeOf, activeTorpor, TORPOR_EFFECT } from "../biology/phenotype";
+import { phenotypeOf } from "../biology/geneExpression";
 
 /**
  * Below this combined output magnitude from the organism's brain, treat it
@@ -98,10 +98,9 @@ export function moveOrganism(
   dirY /= mag;
 
   const stepRand = rng.range(0.5, 1);
-  // v1.11.0 — torpore: a bassa energia il passo si accorcia (solo se il gene è attivo; altrimenti nessuna differenza)
+  // v1.11.0 — MOR-02/MOR-03: corazza e corporatura cambiano il passo effettivo (nessuna differenza senza geni estesi)
   const phenotype = phenotypeOf(organism.genome);
-  const torpor = activeTorpor(phenotype, organism.energy);
-  const stepScale = torpor > 0 ? 1 - TORPOR_EFFECT * torpor : 1;
+  const stepScale = 1 - phenotype.speedPenalty;
   const rawStepX = dirX * speed * stepRand * stepScale;
   const rawStepY = dirY * speed * stepRand * stepScale;
 
@@ -125,10 +124,8 @@ export function moveOrganism(
   // the "terrain cost, not terrain control" balance the brief asks for:
   // genome speed and the brain's chosen direction are untouched, only the
   // realized distance is reduced.
-  // v1.11.0 — arti lunghi (limbLength): l'eccesso di costo del terreno si divide per il valore (solo se ≠ 1)
-  const movementCost = phenotype.terrainRelief !== 1 ? 1 + (terrainEval.movementCost - 1) / phenotype.terrainRelief : terrainEval.movementCost;
-  const newX = wrap(x + rawStepX / movementCost, planet.width);
-  const newY = wrap(y + rawStepY / movementCost, planet.height);
+  const newX = wrap(x + rawStepX / terrainEval.movementCost, planet.width);
+  const newY = wrap(y + rawStepY / terrainEval.movementCost, planet.height);
 
   // Only commit to the step if it lands on traversable terrain. Without
   // this check, an organism could end up on an ocean cell simply because
