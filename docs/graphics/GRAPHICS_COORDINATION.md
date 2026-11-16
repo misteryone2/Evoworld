@@ -9,7 +9,7 @@
 |---|---|---|---|
 | G0 — Audit e baseline | **Audit completato. Baseline build/test eseguita; mancano misure runtime PC/mobile** | Big Pickle | Vedi §Baseline |
 | G1 — Architettura grafica e contratto dati | **Contratto implementato e verificato (build+typecheck+12 test); adozione parziale nel 3D; refactor modulare non avviato** | Big Pickle | `lib/visual/creatureVisualDescriptor.ts`, `tests/creatureVisualDescriptor.test.ts`; vedi `G1_IMPLEMENTATION_REPORT.md` |
-| G2 — Creature e anatomia | **Parziale: pass visuale 2D/3D (materiali, colore per individuo, luce di riempimento, dettagli 2D)** | Big Pickle | Build/test verdi sul nuovo codice; nessuno smoke visivo browser |
+| G2 — Creature e anatomia | **Parziale: pass visuale 2D/3D (materiali, colore per individuo, luce di riempimento, dettagli 2D); smoke desktop eseguito** | Big Pickle | Build/test verdi sul nuovo codice; smoke browser desktop 3D "Completa" + mappa 2D senza errori console (`G1_IMPLEMENTATION_REPORT.md` §7); mancano mobile e carichi forzati |
 | G3 — Materiali e dettagli | **Parziale: materiali creature (roughness/metalness) + luce di riempimento** | Big Pickle | Restano PBR/texture reali e materiali terreno/acqua |
 | G4 — Animazioni | Non iniziata (posa procedurale esistente invariata) | — | Dipende da G2 |
 | G5 — Ambiente e vegetazione | Non iniziata | — | Parallelizzabile |
@@ -39,7 +39,7 @@
 ## Attività in corso
 | Agente | Attività | File/area | Inizio | Stato |
 |---|---|---|---|---|
-| Big Pickle | G1 descriptor + pass visuale creature (2D/3D) | `lib/visual/*`, `components/simulation/drawCreature.ts`, `components/simulation/Planet3DView.tsx`, `tests/creatureVisualDescriptor.test.ts` | 2026-11-16 | Implementato; build+typecheck OK; 12/12 test nuovo modulo; smoke visivo browser mancante |
+| Big Pickle | G1 descriptor + pass visuale creature (2D/3D) | `lib/visual/*`, `components/simulation/drawCreature.ts`, `components/simulation/Planet3DView.tsx`, `tests/creatureVisualDescriptor.test.ts` | 2026-11-16 | Implementato; build+typecheck OK; 12/12 test nuovo modulo; smoke browser desktop 3D+2D senza errori; mobile mancante |
 
 ## Attività completate
 - 2026-11-16 — **Big Pickle:** audit tecnico G0; proposta `CreatureVisualDescriptor` read-only; mappa rischi/priorità.
@@ -50,6 +50,7 @@
   - 2D: volume (gradiente), ventre, coda, accenno arti, occhio con pupilla/riflesso, spine triangolari, ombra; **decorazioni attive solo sopra soglie di raggio** per non peggiorare il costo per frame.
   - Nessuna modifica a genetica/mutazioni/selezione/riproduzione/metabolismo/energia/comportamento/predazione/ecologia.
 - 2026-11-16 — **Big Pickle:** **verifica reale** (Node v22.14.0 portable): `next build` OK (25.0s), `tsc --noEmit` exit 0, nuovo test 12/12, suite completa 687/698 (10 fail preesistenti/flaky in world-gen/sim/genoma). Micro-misura CPU di `updateCreatureInstances` e descriptor. Dettagli: `G1_IMPLEMENTATION_REPORT.md` §6.
+- 2026-11-16 — **Big Pickle:** branch `graphics/g1-creature-visuals` pubblicato sul remoto e PR **#1** aperta verso `main` (main non toccato). Smoke test browser desktop (Chromium in-app, `next dev`): 3D profilo "Completa" e mappa 2D senza errori console; rAF 3D stabile a 30.0 fps (cap del loop, p95 33.5 ms); CPU main-thread ~17% in 3D e ~4.3% in 2D. Popolazione non forzata; mobile e build di produzione ancora da fare. Dettagli: `G1_IMPLEMENTATION_REPORT.md` §7.
 
 ## Decisioni architetturali (ADR-lite)
 | ID | Decisione | Motivazione | Stato |

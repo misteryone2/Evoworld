@@ -2,7 +2,7 @@
 
 **Data:** 2026-11-16  
 **Autore:** Big Pickle  
-**Stato verifica:** ✅ build + typecheck OK; ✅ 12/12 test del nuovo modulo; ⚠️ suite completa con **fallimenti preesistenti** (dettaglio §6). Nessun test di rendering/GPU o misura FPS è stato eseguito (ambiente senza browser/GPU).
+**Stato verifica:** ✅ build + typecheck OK; ✅ 12/12 test del nuovo modulo; ✅ smoke test browser desktop (3D "Completa" + mappa 2D, nessun errore console, §7); ⚠️ suite completa con **fallimenti preesistenti** (dettaglio §6). Non eseguiti: test su mobile reale, misura FPS a frame sbloccato, controllo a popolazione forzata.
 
 ## 1. Vincoli rispettati
 
@@ -102,10 +102,34 @@ Test temporaneo (poi rimosso) su `updateCreatureInstances` e `buildCreatureVisua
 
 > Questi numeri misurano solo il calcolo CPU nel runtime Node: non includono upload GPU, draw call, fill-rate né il loop canvas 2D. Non sono FPS e non sostituiscono il profiling su PC/mobile.
 
-## 7. Passi successivi aggiornati
+## 7. Smoke test browser (eseguito, dev server)
+
+Ambiente: Chromium dell'app desktop, `next dev` sulla porta 3100, profilo **Completa** (3D) e poi **Mappa 2D**. GPU riportata da WebGL: `ANGLE (Intel, Intel(R) UHD Graphics (0x0000A721) Direct3D11 vs_5_0 ps_5_0)`; `devicePixelRatio` 1.25. Build di **sviluppo**, non di produzione: i tempi includono l'overhead di React/Next in dev e sono quindi un limite superiore pessimistico.
+
+| Verifica | Esito |
+|---|---|
+| Console errori, 3D "Completa" | ✅ nessun errore, nessun `webglcontextlost` |
+| Console errori, "Mappa 2D" | ✅ nessun errore |
+| Canvas 3D | 1140×837 px (912×670 CSS, DPR 1.25) |
+| Canvas 2D | 640×640 px, `PlanetCanvas` attivo |
+| rAF 3D (180 frame) | 33.28 ms medi, p95 33.5 ms, worst 33.6 ms → **30.0 fps stabili**: è il cap del loop, non saturazione (p95 ≈ media) |
+| CPU main-thread 3D (9.05 s) | idle 7495 ms → **~17% occupato**; `updateCreatureInstances` 53 ms totali (~5.9 ms/s), `bufferSubData` 127 ms |
+| CPU main-thread 2D (30.07 s) | idle 28 733 ms → **~4.3% occupato**; `drawCreature` 14.6 ms totali, `fill` 13.8 ms, `drawImage` 5.3 ms |
+
+Screenshot: `screenshot.jpeg` (3D vista dall'alto) e `screenshot.jpeg` (mappa 2D), acquisiti dal browser in-app e mostrati all'utente nel pannello Review.
+
+**Limiti di questa verifica (da non sopravvalutare):**
+
+- Popolazione non forzata: la simulazione parte da poche specie, quindi i carichi 1500/3000 creature **non** sono stati riprodotti nel browser.
+- Il cap a 30 fps maschera l'headroom reale: servirebbe un test a frame sbloccato o una build di produzione per misurare il margine.
+- GPU integrata Intel UHD: un riferimento "basso", non rappresentativo di PC con GPU dedicata né di smartphone.
+- Nessun test su dispositivo mobile reale, nessun confronto prima/dopo a parità di seed.
+- In questa sessione l'agente **non** ha capacità di visione sulle immagini: la qualità estetica degli screenshot non è stata valutata automaticamente e richiede un giudizio umano.
+
+## 8. Passi successivi aggiornati
 
 1. Riprodurre la baseline su un checkout con git e CI, registrando commit e comandi. ✅ Fatto: clone `Evoworld-git`, commit `c35c287` (main), Node v22.14.0 portable; esiti identici al progetto caricato.
-2. Smoke visivo browser: 2D (100/600) e 3D (100/500/1500/3000) per `basso`/`medio`/`alto`, desktop + mobile, con screenshot prima/dopo.
-3. Profiling browser (Performance panel): ms/frame, p95, draw call, memoria.
+2. Smoke visivo browser: 2D (100/600) e 3D (100/500/1500/3000) per `basso`/`medio`/`alto`, desktop + mobile, con screenshot prima/dopo. ⚠️ Parziale: fatto 3D "Completa" e 2D su desktop, senza controllo popolazione né mobile (§7).
+3. Profiling browser (Performance panel): ms/frame, p95, draw call, memoria. ⚠️ Parziale: tempi main-thread e rAF raccolti, mancano draw call e memoria.
 4. Refactor modulare G1-b e adozione descriptor con buffer riusabili (zero-alloc).
 5. Materiali/pattern reali (G3) e ambiente (G5) con verifica visiva.
