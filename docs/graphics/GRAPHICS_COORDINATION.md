@@ -7,16 +7,16 @@
 ## Stato fasi
 | Fase | Stato | Owner | Note |
 |---|---|---|---|
-| G0 — Audit e baseline | **In corso (audit prodotto, baseline runtime non eseguita)** | Big Pickle (audit) | Build/test/profiling da eseguire su checkout reale |
-| G1 — Architettura grafica e contratto dati | Non iniziata | — | Proposta: `CreatureVisualDescriptor` read-only + modularizzazione renderer |
-| G2 — Creature e anatomia | Non iniziata | — | Dipende da G1 |
+| G0 — Audit e baseline | **Completato (audit/design docs). Baseline runtime non eseguita** | Big Pickle | Eseguita analisi su repo remoto; build/test/profiling richiedono checkout reale |
+| G1 — Architettura grafica e contratto dati | **Design completato (specifiche pronte), implementazione non avviata** | Big Pickle (design) | Vedi `G1_VISUAL_DESCRIPTOR_SPEC.md`, `G1_RENDERER_ARCHITECTURE.md`; implementazione richiede checkout + coordinamento hotspot |
+| G2 — Creature e anatomia | Non iniziata (bloccata da G1 implementato + baseline) | — | Dipende da G1 |
 | G3 — Materiali e dettagli | Non iniziata | — | Dipende da G1/G2 |
 | G4 — Animazioni | Non iniziata | — | Dipende da G2 |
 | G5 — Ambiente e vegetazione | Non iniziata | — | Parallelizzabile parzialmente dopo G1 |
 | G6 — Ecosistema e interazioni | Non iniziata | — | Richiede segnali reali sim |
 | G7 — Interfaccia | Non iniziata | — | Parallelizzabile con attenzione a `app/page.tsx` |
 | G8 — Ottimizzazione PC/mobile | Non iniziata | — | Continuativa, milestone dedicata |
-| G9 — Integrazione e collaudo | Non iniziata | — | Finale |
+| G9 — Integrazione e collaudo | Non iniziata | — | Finale, richiede ambiente di test reale |
 
 ## Baseline (da compilare con risultati reali)
 - **Commit/branch:** _sconosciuto in questa sessione (nessun checkout locale)_
@@ -41,6 +41,7 @@
 
 ## Attività completate
 - 2026-11-16 — **Big Pickle:** audit tecnico G0 basato su repo remoto; proposta `CreatureVisualDescriptor` read-only; mappa rischi/priorità.
+- 2026-11-16 — **Big Pickle:** prodotti deliverable G1 di design: `G1_VISUAL_DESCRIPTOR_SPEC.md` (contratto read-only mappato a `RenderFrame`/tipi attuali) e `G1_RENDERER_ARCHITECTURE.md` (modularizzazione `Planet3DView`, piano di migrazione, ownership hotspot). Nessuna modifica al codice sorgente del repository (assenza checkout locale).
 
 ## Decisioni architetturali (ADR-lite)
 | ID | Decisione | Motivazione | Stato |
@@ -54,10 +55,11 @@
 - **Conflitti noti:** nessuno rilevato (workspace vuoto). Verificare in repo reale prima di edit.
 
 ## Problemi aperti
-1. Baseline build/test/profiling non eseguita in questa sessione.
+1. Baseline build/test/profiling non eseguita in questa sessione (nessun checkout locale del repo).
 2. Presenza/assenza di altri branch, PR o doc di coordinamento remoti non verificata.
 3. Dettaglio componenti UI/HUD e `localScene` non completamente auditato a runtime.
 4. 5 test dichiarati falliti in v1.11.0 (preesistenti/incoerenze) da confermare su baseline attuale.
+5. **Blocco completamento G1–G9:** implementazione, refactor, verifica e collaudo richiedono checkout del repository, ambiente di build/test, esecuzione runtime (browser/PC/mobile) e coordinamento reale con eventuali altri agenti per evitare conflitti su file hotspot.
 
 ## Protocollo suggerito per gli agenti
 - Prima di modificare: dichiarare intento in questo file + identificare owner/lock soft del file.
