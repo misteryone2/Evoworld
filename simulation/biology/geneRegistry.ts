@@ -1,166 +1,163 @@
 /**
- * v1.11.0 — Advanced Fauna Genome: registro dei geni avanzati.
+ * v1.11.0 — Advanced Fauna Genome: registro dei geni (specifica di Vibe, "Specifica architetturale" §2 e
+ * "Catalogo dei geni"). 13 tratti storici (`legacy`, intervalli IDENTICI a TRAIT_RANGES) + 20 geni estesi.
  *
- * Modello causale: Genotipo → Espressione (phenotype.ts) → Fenotipo → Ambiente e stato dell'organismo →
- * Comportamento emergente (cervello, invariato) → Selezione naturale.
+ * Il registro è DATI: intervalli, predefiniti, mutazione, pesi nella distanza. Gli effetti stanno in
+ * geneExpression.ts (funzioni pure) e nei punti di aggancio indicati da `hook`.
  *
- * Regole di questo registro:
- *  - Ogni gene è una CAPACITÀ fisica o fisiologica (quanto grosso, quanto resistente, quanto digerisce…), mai una
- *    tendenza di comportamento (nessuna "aggressività 80%", "socialità", "esplorazione"): il comportamento resta
- *    quello deciso dal cervello evoluto (brain.ts), a partire da ciò che il corpo permette.
- *  - Ogni gene ha un effetto concreto nella simulazione (vedi `effect`) e un compromesso reale (vedi `tradeoff`):
- *    nessun valore è gratis e nessun estremo è sempre migliore.
- *  - Il valore predefinito è NEUTRO: un organismo con tutti i geni al predefinito (o senza geni, come nei salvataggi
- *    precedenti) si comporta esattamente come nella v1.10.
- *  - Estensibile: aggiungere un gene significa aggiungere una voce qui e il suo effetto in phenotype.ts. Nessun
- *    array a dimensione fissa, nessun numero massimo di geni; gli id sono stabili e non si riusano.
+ * Modello: Genotipo → Espressione → Fenotipo → Ambiente/stato → Comportamento emergente (decide il cervello evoluto)
+ * → Selezione. Nessun gene decide comportamenti; i geni percettivi modulano i canali sensoriali ESISTENTI (il cervello
+ * ha dimensione fissa: BRAIN_SIZE 119, nessun nuovo ingresso).
+ *
+ * DEFAULT (scelta di questa implementazione, vedi docs/GENOMA-v1.11.0.md §Deviazioni): i valori predefiniti sono
+ * scelti perché il fenotipo di un genoma tutto-predefinito equivalga al comportamento della v1.10 (raccomandazione
+ * forte di Vibe, §7.1). Dove la formula del catalogo non è neutra al predefinito proposto (per esempio 1 + 0,6·r con
+ * r = 0,40) si è spostato il PREDEFINITO (un dato), non la formula.
  */
+import type { TraitName } from "../../types";
+import { TRAIT_RANGES } from "./traitRanges";
 
-export type GeneCategory = "morphology" | "locomotion" | "perception" | "physiology" | "adaptation" | "ecology" | "reproduction" | "cognition";
+export type GeneCategory = "morphology" | "locomotion" | "perception" | "physiology" | "adaptation" | "ecology" | "reproduction" | "cognition" | "legacy";
 
 export interface GeneDefinition {
-  /** Id stabile (non cambiare né riusare mai: è nei salvataggi). */
+  /** Id stabile, es. "MOR-01" (i legacy: il nome del tratto). */
   id: string;
+  /** Chiave del campo nel genoma serializzato (legacy: campo di primo livello; nuovi: `ext[key]`). */
+  key: string;
   category: GeneCategory;
+  description: string;
   min: number;
   max: number;
-  /** Valore neutro: non cambia nulla rispetto alla v1.10. */
-  default: number;
+  defaultValue: number;
   /** Deviazione standard di una mutazione, come frazione dell'intervallo. */
-  mutationStd: number;
-  /** Peso nella distanza genetica, dentro la propria categoria. */
+  mutationStdFraction: number;
+  /** Peso biologico nella distanza genetica (i legacy valgono 1). */
   distanceWeight: number;
-  /** Cosa fa nella simulazione. */
-  effect: string;
-  /** Il compromesso: cosa costa o cosa si perde dall'altra parte. */
-  tradeoff: string;
-  /** Con quali tratti/geni interagisce. */
-  interactions: string;
+  /** Documentazione: meccanismo e punto di applicazione. */
+  hook: string;
 }
 
-export const GENE_CATALOG: readonly GeneDefinition[] = [
-  // ---- Morfologia e struttura corporea ----
-  {
-    id: "bodyDensity", category: "morphology", min: 0.7, max: 1.4, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Massa a parità di taglia: pesa di più nelle collisioni (spinge di più, è spinto di meno) e difende meglio dalla caccia (corazza, ossa pesanti).",
-    tradeoff: "Mantenere tessuti densi costa energia: +25% di mantenimento per ogni +1 di densità.",
-    interactions: "size (la massa base è taglia³), evasion e sprintBias (difesa dalla caccia).",
-  },
-  {
-    id: "bodyFatReserve", category: "morphology", min: 0.7, max: 1.5, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Capacità massima di riserva di energia (150 × il valore).",
-    tradeoff: "Portare grasso costa: +20% di mantenimento per ogni +1.",
-    interactions: "metabolism, torporCapacity (il torpore scatta in proporzione alla riserva), digestiveEfficiency.",
-  },
-  // ---- Locomozione e movimento ----
-  {
-    id: "limbLength", category: "locomotion", min: 0.7, max: 1.4, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Su terreno ripido o accidentato il passo si accorcia meno (l'eccesso di costo del terreno si divide per il valore).",
-    tradeoff: "Arti lunghi costano: +15% di mantenimento per ogni +1.",
-    interactions: "speed (il passo base), terreno e pendenze del pianeta.",
-  },
-  {
-    id: "sprintBias", category: "locomotion", min: 0.6, max: 1.6, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Potenza di scatto: moltiplica sia la forza del cacciatore sia la difesa della preda negli inseguimenti (fibre rapide).",
-    tradeoff: "Le fibre rapide costano: +20% di mantenimento per ogni +1. Il vantaggio dipende dal ruolo (cacciatore o preda) e dalla popolazione intorno.",
-    interactions: "size, speed, huntingSkill, evasion, carnivory.",
-  },
-  // ---- Percezione sensoriale ----
-  {
-    id: "proximitySensing", category: "perception", min: 0.5, max: 2, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Raggio con cui percepisce gli altri animali (rivali, minacce, prede, branco) rispetto alla vista di base; non cambia la ricerca del cibo.",
-    tradeoff: "Organi di senso estesi costano: +8% di mantenimento per ogni +1.",
-    interactions: "vision, evasion, huntingSkill (la forza dei segnali di paura e di caccia).",
-  },
-  // ---- Fisiologia e metabolismo ----
-  {
-    id: "torporCapacity", category: "physiology", min: 0, max: 0.6, default: 0, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Con l'energia sotto il 35% della propria riserva, il mantenimento cala della metà del valore.",
-    tradeoff: "Nello stesso stato il passo si accorcia della metà del valore (si muove meno e meno lontano) e il gene costa +10% di mantenimento per ogni +1.",
-    interactions: "bodyFatReserve, metabolism, memoryRetention.",
-  },
-  {
-    id: "digestiveEfficiency", category: "physiology", min: 0.7, max: 1.4, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Energia ricavata dalla vegetazione, in proporzione.",
-    tradeoff: "Un intestino efficiente costa: +20% di mantenimento per ogni +1.",
-    interactions: "carnivory (solo la quota vegetale), environmentalFitness, bodyFatReserve.",
-  },
-  // ---- Adattamento ambientale ----
-  {
-    id: "thermalBias", category: "adaptation", min: -1, max: 1, default: 0, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Asimmetria della tolleranza termica: valori positivi allargano la tolleranza verso il freddo (+35% per ogni +1) e la stringono verso il caldo; i negativi il contrario.",
-    tradeoff: "Compromesso puro: quanto guadagna da una parte lo perde dall'altra.",
-    interactions: "preferredTemperature, temperatureTolerance (larghezza e picco di idoneità).",
-  },
-  {
-    id: "droughtBias", category: "adaptation", min: -1, max: 1, default: 0, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Asimmetria della tolleranza all'acqua: valori positivi allargano la tolleranza verso i luoghi più secchi del preferito (+35% per ogni +1) e la stringono verso i più umidi; i negativi il contrario.",
-    tradeoff: "Compromesso puro: quanto guadagna da una parte lo perde dall'altra.",
-    interactions: "preferredWater, waterTolerance.",
-  },
-  // ---- Capacità ecologiche e alimentari ----
-  {
-    id: "meatEfficiency", category: "ecology", min: 0.7, max: 1.4, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Energia ricavata da una preda catturata, in proporzione.",
-    tradeoff: "Un apparato digerente per la carne costa: +20% di mantenimento per ogni +1.",
-    interactions: "carnivory, huntingSkill, sprintBias.",
-  },
-  // ---- Riproduzione e ciclo vitale ----
-  {
-    id: "gestationInvestment", category: "reproduction", min: 0.7, max: 1.5, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Quanta energia mette in ogni figlio: il costo per il genitore e l'energia iniziale del nato crescono insieme (strategia K) o calano (strategia r).",
-    tradeoff: "Figli più dotati sopravvivono meglio ma ne servono più risorse a ogni nascita.",
-    interactions: "fertility, bodyFatReserve, metabolism.",
-  },
-  {
-    id: "maturationRate", category: "reproduction", min: 0.6, max: 1.6, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Velocità di maturazione: la fase giovanile (10% della vita) si accorcia o si allunga in proporzione inversa.",
-    tradeoff: "Vita veloce, vita breve: la durata effettiva della vita cala del 20% per ogni +1.",
-    interactions: "lifespan, fertility.",
-  },
-  // ---- Capacità cognitive (solo ciò che il sistema cerebrale usa davvero: la memoria di cibo e pericolo) ----
-  {
-    id: "memoryRetention", category: "cognition", min: 0.5, max: 2, default: 1, mutationStd: 0.04, distanceWeight: 1,
-    effect: "Per quanto tempo si ricorda un luogo di cibo o di pericolo prima di dimenticarlo (300 tick × il valore). Il cervello decide cosa farne.",
-    tradeoff: "Il tessuto nervoso costa: +10% di mantenimento per ogni +1.",
-    interactions: "brain (canale di memoria), territorio e luoghi di caccia.",
-  },
-];
+export const GENOME_VERSION_CURRENT = 2;
+export const DEFAULT_MUTATION_STD_FRACTION = 0.04;
 
-export const GENE_IDS: readonly string[] = GENE_CATALOG.map((g) => g.id);
-export const GENE_BY_ID: ReadonlyMap<string, GeneDefinition> = new Map(GENE_CATALOG.map((g) => [g.id, g]));
-
-export function geneDefault(id: string): number {
-  return GENE_BY_ID.get(id)?.default ?? 0;
-}
-
-export function clampGene(def: GeneDefinition, value: number): number {
-  if (!Number.isFinite(value)) return def.default;
-  return value < def.min ? def.min : value > def.max ? def.max : value;
-}
-
-/** Valore di un gene in un insieme (anche assente, vecchio o parziale): un gene mancante o non valido vale il predefinito. */
-export function geneValue(genes: Readonly<Record<string, number>> | undefined, id: string): number {
-  const def = GENE_BY_ID.get(id);
-  if (!def) return 0;
-  const v = genes?.[id];
-  return typeof v === "number" && Number.isFinite(v) ? clampGene(def, v) : def.default;
-}
-
-/** Pesi delle categorie nella distanza genetica (somma 1): fissi, così il numero di geni per categoria non cambia la scala. */
-export const CATEGORY_WEIGHTS: Readonly<Record<GeneCategory, number>> = {
-  morphology: 0.15,
-  locomotion: 0.15,
-  perception: 0.1,
-  physiology: 0.15,
-  adaptation: 0.15,
-  ecology: 0.08,
-  reproduction: 0.14,
-  cognition: 0.08,
+const LEGACY_HOOKS: Record<TraitName, string> = {
+  size: "tratto storico: upkeep, collisioni, caccia, alimentazione",
+  speed: "tratto storico: passo (movement.ts), upkeep, caccia",
+  metabolism: "tratto storico: moltiplica il mantenimento (organism.ts)",
+  vision: "tratto storico: raggio di percezione (behavior.ts, feeding)",
+  fertility: "tratto storico: probabilità di riproduzione (reproduction.ts)",
+  lifespan: "tratto storico: durata della vita (organism.ts)",
+  carnivory: "tratto storico: dieta, caccia, costo convesso (organism.ts)",
+  preferredTemperature: "tratto storico: nicchia termica (environment.ts)",
+  temperatureTolerance: "tratto storico: larghezza della nicchia termica (environment.ts)",
+  preferredWater: "tratto storico: nicchia idrica (environment.ts)",
+  waterTolerance: "tratto storico: larghezza della nicchia idrica (environment.ts)",
+  evasion: "tratto storico: difesa dalla caccia (predation.ts), upkeep",
+  huntingSkill: "tratto storico: forza del cacciatore (predation.ts), upkeep",
 };
 
-/** Peso complessivo dei geni avanzati nella distanza genetica rispetto ai 13 tratti di base (vedi geneticDistance). */
-export const ADVANCED_DISTANCE_LAMBDA = 0.25;
+const LEGACY: GeneDefinition[] = (Object.keys(TRAIT_RANGES) as TraitName[]).map((key) => ({
+  id: key,
+  key,
+  category: "legacy" as const,
+  description: `Tratto storico ${key} (invariato dalla v1.10).`,
+  min: TRAIT_RANGES[key].min,
+  max: TRAIT_RANGES[key].max,
+  defaultValue: (TRAIT_RANGES[key].min + TRAIT_RANGES[key].max) / 2,
+  mutationStdFraction: DEFAULT_MUTATION_STD_FRACTION,
+  distanceWeight: 1,
+  hook: LEGACY_HOOKS[key],
+}));
 
-/** Parole che non devono comparire in un id di gene: il comportamento emerge, non si imposta (verificato da un test). */
-export const FORBIDDEN_BEHAVIOR_WORDS = ["aggress", "social", "explor", "curios", "bold", "shy", "territor", "flock", "fear", "courage"] as const;
+function g(
+  id: string, key: string, category: GeneCategory, min: number, max: number, defaultValue: number, distanceWeight: number,
+  description: string, hook: string,
+): GeneDefinition {
+  return { id, key, category, description, min, max, defaultValue, mutationStdFraction: DEFAULT_MUTATION_STD_FRACTION, distanceWeight, hook };
+}
+
+const EXTENDED: GeneDefinition[] = [
+  // ---- Morfologia e struttura corporea ----
+  g("MOR-01", "furDensity", "morphology", 0, 1, 0, 0.6,
+    "Foltezza del pelo: isolamento dal freddo, a scapito del caldo. Costo di mantenimento.",
+    "environment.ts: scala la deviazione termica z (lato freddo ×(1−0,30·pelo), lato caldo ×(1+0,20·pelo)); organism.ts: upkeep"),
+  g("MOR-02", "dermalArmor", "morphology", 0, 0.6, 0, 0.7,
+    "Corazza dermica: si somma alla difesa dalla caccia; rallenta e costa mantenimento.",
+    "predation.ts: defensivePower (1,15 + evasion + corazza, con tetto totale); movement.ts: passo ×(1−0,15·corazza); organism.ts: upkeep"),
+  g("MOR-03", "bodyStature", "morphology", 0, 1, 0.5, 0.5,
+    "Corporatura da esile (0) a robusta (1): robusto = corpo più grande e più difeso ma più lento; esile viceversa. Compromesso interno, senza costo diretto.",
+    "collision.ts: raggio ×(1+0,15·s); predation.ts: difesa ×(1+0,10·s); movement.ts: passo ×(1−0,10·s), con s = 2·(valore−0,5)"),
+  // ---- Locomozione e movimento ----
+  g("LOC-01", "endurance", "locomotion", 0, 1, 0, 0.6,
+    "Resistenza: riduce il costo energetico del movimento (non quello del riposo).",
+    "organism.ts upkeepCost: termine di velocità ×(1−0,40·resistenza); upkeep"),
+  g("LOC-02", "burstPower", "locomotion", 0, 1, 0, 0.6,
+    "Potenza di scatto: bonus momentaneo nei tentativi di caccia e fuga, pagato con energia a ogni tentativo.",
+    "predation.ts: huntingPower e defensivePower ×(1+0,25·scatto); costo 6·scatto per tentativo (cacciatore e preda)"),
+  // ---- Percezione sensoriale (modulazione dei canali esistenti) ----
+  g("PER-01", "peripheralAcuity", "perception", 0, 1, 0, 0.5,
+    "Acuità periferica: il segnale di pericolo è più forte e la minaccia è rilevata un po' più lontano. La decisione resta alla rete.",
+    "behavior.ts: canale paura ×(1+0,5·a), raggio di rilevazione delle minacce ×(1+0,25·a); upkeep"),
+  g("PER-02", "olfactorySensitivity", "perception", 0, 1, 0, 0.4,
+    "Olfatto: il canale della memoria è più intenso.",
+    "behavior.ts: canale memoria ×(1+0,6·o); upkeep"),
+  g("PER-03", "socialTolerance", "perception", 0, 1, 0.5, 0.4,
+    "Tolleranza alla vicinanza di altri: chi tollera poco sente più forte il segnale del gruppo. È fisiologia sensoriale, non una decisione.",
+    "behavior.ts: canale del gruppo ×(1,4−0,8·t)"),
+  // ---- Fisiologia e metabolismo ----
+  g("FIS-01", "energyReserve", "physiology", 0, 1, 0, 0.6,
+    "Riserve di grasso: tetto di energia più alto, mantenimento più alto.",
+    "energy.ts/feeding.ts/predation.ts/behavior.ts: tetto = MAX_ENERGY×(1+0,6·r); organism.ts: upkeep"),
+  g("FIS-02", "digestiveEfficiency", "physiology", 0, 1, 0.5, 0.7,
+    "Efficienza digestiva: moltiplica l'energia ricavata da ogni fonte.",
+    "feeding.ts e predation.ts: guadagno ×(0,75+0,5·d); organism.ts: upkeep"),
+  g("FIS-03", "thermoregulation", "physiology", 0, 1, 0, 0.5,
+    "Termoregolazione: rende meno svantaggiosa una tolleranza termica larga (recupera parte dell'altezza del picco).",
+    "environment.ts: picco termico = maxPeak − tolFrac·(maxPeak−minPeak)·(1−0,4·t); organism.ts: upkeep"),
+  g("FIS-04", "hydrationEfficiency", "physiology", 0, 1, 0, 0.4,
+    "Idratazione efficiente: come FIS-03 sull'asse dell'acqua.",
+    "environment.ts: picco idrico recuperato ×(0,4·h); organism.ts: upkeep"),
+  // ---- Adattamento ambientale ----
+  g("ADA-01", "seasonalRobustness", "adaptation", 0, 1, 0, 0.4,
+    "Robustezza stagionale: ammortizza lo scostamento stagionale della temperatura.",
+    "environment.ts: offset stagionale (cell.seasonalOffset) ×(1−0,35·s); organism.ts: upkeep"),
+  g("ADA-02", "altitudeAdaptation", "adaptation", 0, 1, 0, 0.4,
+    "Adattamento altitudinale: più idoneo in quota, a pagamento. PROVVISORIO (decisione aperta di Mattia sulla vegetazione di quota).",
+    "environment.ts: fitness ×(1+0,3·a·quota/0,85), cioè la formula (0,85+0,3·a·quota) rinormalizzata a 1 per a=0; organism.ts: upkeep"),
+  // ---- Capacità ecologiche e alimentari ----
+  g("ECO-01", "grazingEfficiency", "ecology", 0, 1, 0, 0.6,
+    "Pascolo efficiente: pesa meno nella domanda sul budget regionale a parità di guadagno. PROVVISORIO (decisione aperta di Mattia: quota o consumo).",
+    "feeding.ts: peso di domanda (regione e cella) ×(1−0,3·g); guadagno invariato; organism.ts: upkeep"),
+  g("ECO-02", "dietFlexibility", "ecology", 0, 1, 0, 0.5,
+    "Flessibilità dietetica: attenua il costo convesso della carnivoria (non lo azzera).",
+    "organism.ts: costo della carnivoria ×(1−0,40·f); upkeep"),
+  // ---- Riproduzione e ciclo vitale ----
+  g("REP-01", "parentalInvestment", "reproduction", 0, 1, 4 / 9, 0.6,
+    "Investimento parentale: più energia al nato e più costo per il genitore.",
+    "reproduction.ts: energia del nato = 50×(0,6+0,9·p); costo del genitore = 55 + 1,1·(energia del nato − 50)"),
+  g("REP-02", "maturityRate", "reproduction", 0, 1, 0.6, 0.5,
+    "Velocità di maturazione: abbassa o alza la soglia di età riproduttiva (6%–16% della vita).",
+    "reproduction.ts: soglia = vita×0,1×(1,6−velocità)"),
+  // ---- Capacità cognitive (solo meccanismi realmente presenti) ----
+  g("COG-01", "memorySpan", "cognition", 0, 1, 1 / 3, 0.5,
+    "Durata della memoria di cibo e pericolo (150–600 tick).",
+    "behavior.ts: decadimento = 300×(0,5+1,5·s); organism.ts: upkeep"),
+  g("COG-02", "neuralStability", "cognition", 0, 1, 0.5, 0.5,
+    "Fedeltà neurale: quanto fedelmente si trasmettono i pesi del cervello (std di mutazione 0,18–0,42 secondo la formula del catalogo (il testo diceva 0,12–0,42: incoerente)).",
+    "brain.ts: std di mutazione = 0,3×(1,4−0,8·s) nella nascita; organism.ts: upkeep"),
+];
+
+export const GENE_REGISTRY: readonly GeneDefinition[] = Object.freeze([...LEGACY, ...EXTENDED]);
+export const GENE_BY_KEY: ReadonlyMap<string, GeneDefinition> = new Map(GENE_REGISTRY.map((d) => [d.key, d]));
+export const GENE_BY_ID: ReadonlyMap<string, GeneDefinition> = new Map(GENE_REGISTRY.map((d) => [d.id, d]));
+/** Solo i geni estesi (quelli che stanno in `genome.ext`). */
+export const EXTENDED_GENES: readonly GeneDefinition[] = Object.freeze(EXTENDED);
+export const LEGACY_KEYS: readonly string[] = Object.freeze(LEGACY.map((d) => d.key));
+
+/** Guardia anti-gene-comportamentale (testata): nessuna chiave di gene estesa deve contenere queste radici. */
+export const FORBIDDEN_GENE_KEY_PATTERN = /aggression|sociality|exploration|curiosity/i;
+
+export function clampToGene(def: GeneDefinition, value: number): number {
+  if (!Number.isFinite(value)) return def.defaultValue;
+  return value < def.min ? def.min : value > def.max ? def.max : value;
+}

@@ -54,7 +54,8 @@ const WEIGHT_CLAMP = 4;
 const INIT_WEIGHT_STD = 0.5;
 /** Same mutation rate as genome traits (see MUTATION_RATE in genome.ts), applied per weight independently. */
 const BRAIN_MUTATION_RATE = 0.15;
-const BRAIN_MUTATION_STD = 0.3;
+/** Std di mutazione dei pesi del cervello alla nascita (v1.11.0: modulabile dal gene COG-02 con il parametro `mutationStd`). */
+export const BRAIN_MUTATION_STD = 0.3;
 
 function clamp(value: number): number {
   return Math.max(-WEIGHT_CLAMP, Math.min(WEIGHT_CLAMP, value));
@@ -79,12 +80,12 @@ export function randomBrain(rng: Random): Float32Array {
  * whatever coherent structure either parent had), then each weight has an
  * independent chance to mutate.
  */
-export function inheritBrain(parentA: Float32Array, parentB: Float32Array, rng: Random): Float32Array {
+export function inheritBrain(parentA: Float32Array, parentB: Float32Array, rng: Random, mutationStd: number = BRAIN_MUTATION_STD): Float32Array {
   const child = new Float32Array(BRAIN_SIZE);
   for (let i = 0; i < BRAIN_SIZE; i++) {
     let value = rng.chance(0.5) ? parentA[i] : parentB[i];
     if (rng.chance(BRAIN_MUTATION_RATE)) {
-      value += rng.gaussian(0, BRAIN_MUTATION_STD);
+      value += rng.gaussian(0, mutationStd);
     }
     child[i] = clamp(value);
   }
@@ -92,12 +93,12 @@ export function inheritBrain(parentA: Float32Array, parentB: Float32Array, rng: 
 }
 
 /** Asexual variant (single parent), used as a fallback when no mate is available — mirrors cloneWithMutation in genome.ts. */
-export function cloneBrainWithMutation(parent: Float32Array, rng: Random): Float32Array {
+export function cloneBrainWithMutation(parent: Float32Array, rng: Random, mutationStd: number = BRAIN_MUTATION_STD): Float32Array {
   const child = new Float32Array(BRAIN_SIZE);
   for (let i = 0; i < BRAIN_SIZE; i++) {
     let value = parent[i];
     if (rng.chance(BRAIN_MUTATION_RATE)) {
-      value += rng.gaussian(0, BRAIN_MUTATION_STD);
+      value += rng.gaussian(0, mutationStd);
     }
     child[i] = clamp(value);
   }

@@ -1,6 +1,6 @@
 import type { Cell, Genome } from "../../types";
 import { TRAIT_RANGES } from "./genome";
-import { phenotypeOf, TOLERANCE_ASYMMETRY } from "./phenotype";
+import { phenotypeOf, FUR_COLD_Z, FUR_HEAT_Z } from "./geneExpression";
 
 /**
  * Peak fitness bounds for a narrow-tolerance specialist vs a
@@ -19,6 +19,9 @@ const WATER_MAX_PEAK = 1.25;
 /**
  * Gaussian-shaped fitness curve centered on `preferred`, with `tolerance`
  * controlling both the width of the curve and (inversely) its peak height.
+ *
+ * v1.11.0 — due modulatori opzionali (neutri a 1 e 0): `zScale` moltiplica la deviazione normalizzata (pelo, MOR-01) e
+ * `peakRecovery` recupera parte della perdita di picco della tolleranza larga (termoregolazione/idratazione, FIS-03/04).
  */
 function nicheFitness(
   value: number,
@@ -27,13 +30,13 @@ function nicheFitness(
   minPeak: number,
   maxPeak: number,
   maxTolerance: number,
-  /** v1.11.0 — larghezza della curva dal lato in cui si trova la cella (asimmetria dei geni avanzati); il picco resta quello della tolleranza di base. */
-  sideTolerance: number = tolerance,
+  zScale: number = 1,
+  peakRecovery: number = 0,
 ): number {
   const toleranceFraction = Math.min(1, Math.max(0, tolerance / maxTolerance));
-  const peak = maxPeak - toleranceFraction * (maxPeak - minPeak);
-  const safeTolerance = Math.max(sideTolerance, 0.001);
-  const z = (value - preferred) / safeTolerance;
+  const peak = maxPeak - toleranceFraction * (maxPeak - minPeak) * (1 - peakRecovery);
+  const safeTolerance = Math.max(tolerance, 0.001);
+  const z = ((value - preferred) / safeTolerance) * zScale;
   return peak * Math.exp(-0.5 * z * z);
 }
 
@@ -45,35 +48,24 @@ function nicheFitness(
  * same plants worth more, which is what creates real selective pressure to
  * specialize toward — or spread across — particular biomes, rather than
  * every genome performing identically everywhere on the planet.
+ *
+ * v1.11.0 — modulatori dei geni estesi, composti in quest'ordine (PROVVISORIO, decisione aperta di Mattia): robustezza
+ * stagionale (ADA-01) sulla temperatura, pelo (MOR-01) sulla deviazione, termoregolazione/idratazione (FIS-03/04) sul
+ * picco, adattamento altitudinale (ADA-02) sul risultato. Senza `ext` tutto è esattamente come nella v1.10.
  */
 export function environmentalFitness(genome: Genome, cell: Cell): number {
-  const phenotype = phenotypeOf(genome);
-  // Asimmetria: un bias positivo allarga la tolleranza verso il freddo / i luoghi secchi e la stringe dall'altra parte.
-  const tempSide =
-    phenotype.thermalBias === 0
-      ? genome.temperatureTolerance
-      : genome.temperatureTolerance * (1 + (cell.temperature < genome.preferredTemperature ? 1 : -1) * TOLERANCE_ASYMMETRY * phenotype.thermalBias);
-  const waterSide =
-    phenotype.droughtBias === 0
-      ? genome.waterTolerance
-      : genome.waterTolerance * (1 + (cell.water < genome.preferredWater ? 1 : -1) * TOLERANCE_ASYMMETRY * phenotype.droughtBias);
-  const tempFitness = nicheFitness(
-    cell.temperature,
-    genome.preferredTemperature,
-    genome.temperatureTolerance,
-    TEMP_MIN_PEAK,
-    TEMP_MAX_PEAK,
-    TRAIT_RANGES.temperatureTolerance.max,
-    tempSide,
-  );
-  const waterFitness = nicheFitness(
-    cell.water,
-    genome.preferredWater,
-    genome.waterTolerance,
-    WATER_MIN_PEAK,
-    WATER_MAX_PEAK,
-    TRAIT_RANGES.waterTolerance.max,
-    waterSide,
-  );
-  return tempFitness * waterFitness;
+  if (!genome.ext) {
+    const tempFitness = nicheFitness(cell.temperature, genome.preferredTemperature, genome.temperatureTolerance, TEMP_MIN_PEAK, TEMP_MAX_PEAK, TRAIT_RANGES.temperatureTolerance.max);
+    const waterFitness = nicheFitness(cell.water, genome.preferredWater, genome.waterTolerance, WATER_MIN_PEAK, WATER_MAX_PEAK, TRAIT_RANGES.waterTolerance.max);
+    return tempFitness * waterFitness;
+  }
+  const ph = phenotypeOf(genome);
+  // ADA-01: una parte dello scostamento stagionale (già incluso in cell.temperature) viene ammortizzata
+  const temperature = ph.seasonalDamping > 0 ? cell.temperature - (cell.seasonalOffset ?? 0) * ph.seasonalDamping : cell.temperature;
+  // MOR-01: il pelo riduce la deviazione dal lato freddo e la aumenta dal lato caldo
+  const furScale = temperature < genome.preferredTemperature ? 1 - FUR_COLD_Z * ph.coldInsulation : 1 + FUR_HEAT_Z * ph.heatPenalty;
+  const tempFitness = nicheFitness(temperature, genome.preferredTemperature, genome.temperatureTolerance, TEMP_MIN_PEAK, TEMP_MAX_PEAK, TRAIT_RANGES.temperatureTolerance.max, furScale, ph.tempPeakRecovery);
+  const waterFitness = nicheFitness(cell.water, genome.preferredWater, genome.waterTolerance, WATER_MIN_PEAK, WATER_MAX_PEAK, TRAIT_RANGES.waterTolerance.max, 1, ph.waterPeakRecovery);
+  // ADA-02: la quota (elevation 0..1) rende più idonei chi è adattato; a = 0 → fattore 1
+  return tempFitness * waterFitness * (1 + ph.altitudeFactor * cell.elevation);
 }

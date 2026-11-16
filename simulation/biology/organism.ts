@@ -2,7 +2,7 @@ import type { Genome, Organism } from "../../types";
 import { Random } from "../core/random";
 import { randomGenome } from "./genome";
 import { BRAIN_SIZE, randomBrain } from "./brain";
-import { phenotypeOf, activeTorpor, TORPOR_EFFECT } from "./phenotype";
+import { phenotypeOf } from "./geneExpression";
 
 export const STARTING_ENERGY = 50;
 
@@ -104,21 +104,20 @@ const UPKEEP_MULTIPLIER = 1;
 export function upkeepCost(organism: Organism): number {
   const { size, speed, metabolism, vision, carnivory, evasion, huntingSkill } = organism.genome;
   const carnivoryCost = carnivory * 0.08 + Math.pow(carnivory, 3) * 0.55;
-  // v1.11.0 — il fenotipo (costi dei geni avanzati, torpore a bassa energia). Neutro = esattamente come prima.
+  // v1.11.0 — fenotipo: LOC-01 alleggerisce il termine di movimento (velocità), ECO-02 il costo convesso della carnivoria,
+  // e i costi dei geni estesi si aggiungono (upkeepExtra, energia per tick, misurata rispetto ai predefiniti). Neutro = come prima.
   const phenotype = phenotypeOf(organism.genome);
-  return (
-    (0.05 + size * 0.06 + speed * 0.05 + vision * 0.01 + carnivoryCost + evasion * 0.04 + huntingSkill * 0.04) *
+  const base =
+    (0.05 + size * 0.06 + speed * 0.05 * phenotype.movementCostFactor + vision * 0.01 + carnivoryCost * phenotype.carnivoryCostFactor + evasion * 0.04 + huntingSkill * 0.04) *
     metabolism *
-    UPKEEP_MULTIPLIER *
-    phenotype.upkeepFactor *
-    (1 - TORPOR_EFFECT * activeTorpor(phenotype, organism.energy))
-  );
+    UPKEEP_MULTIPLIER;
+  return phenotype.upkeepExtra === 0 ? base : Math.max(base * 0.5, base + phenotype.upkeepExtra);
 }
 
 /** Returns true if the organism should die this tick (starvation or old age). */
 export function isDying(organism: Organism): boolean {
   if (organism.energy <= 0) return true;
-  if (organism.age >= organism.genome.lifespan * phenotypeOf(organism.genome).lifespanFactor) return true;
+  if (organism.age >= organism.genome.lifespan) return true;
   return false;
 }
 

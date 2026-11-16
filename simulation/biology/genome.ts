@@ -1,74 +1,12 @@
-import type { BaseGenome, GeneMap, Genome, GenomeStats, TraitRanges } from "../../types";
+import type { Genome, GenomeStats, TraitName, TraitRanges } from "../../types";
 import { Random } from "../core/random";
-import { ADVANCED_DISTANCE_LAMBDA, CATEGORY_WEIGHTS, GENE_CATALOG, GENE_BY_ID, clampGene, geneValue, type GeneCategory } from "./geneRegistry";
+import { TRAIT_RANGES, MUTATION_RATE, MUTATION_STD_FRACTION } from "./traitRanges";
+import { GENE_REGISTRY, EXTENDED_GENES, clampToGene, type GeneDefinition } from "./geneRegistry";
 
-/**
- * Valid ranges for every heritable trait. Values are always clamped into
- * these ranges after mutation so the genome cannot drift into nonsensical
- * territory (e.g. negative size).
- *
- * carnivory's max is capped at 0.85, not 1.0 (v0.3): if genetic drift ever
- * fixed the *entire* population at carnivory = 1, no organism could hunt
- * any other (prey must have strictly lower carnivory) or get any energy
- * from vegetation — a fatal absorbing state discovered during testing. The
- * cap guarantees a small vegetation fallback always remains available.
- */
-export const TRAIT_RANGES: TraitRanges = {
-  size: { min: 0.2, max: 3.0 },
-  speed: { min: 0.1, max: 3.0 },
-  metabolism: { min: 0.2, max: 2.5 },
-  vision: { min: 1, max: 15 },
-  fertility: { min: 0.05, max: 1.0 },
-  lifespan: { min: 50, max: 2000 },
-  carnivory: { min: 0, max: 0.85 },
-  // Matches the planet's realistic temperature spread (see planet.ts:
-  // 32 - latitude*40 - elevation*10 +- noise, roughly -18..34).
-  preferredTemperature: { min: -15, max: 34 },
-  // Narrow (specialist) to broad (generalist) tolerance, in the same
-  // units as temperature.
-  //
-  // v1.2.5 — max raised from 25 to 50 after a controlled sweep
-  // (baseline/+25%/+50%/+75%/x2, same seeds, everything else held
-  // fixed) diagnosed WHY the founding population was collapsing on most
-  // seeds: genomes are generated independently of spawn position (by
-  // design — see createRandomOrganism; this stays true, nothing here
-  // correlates genome to biome), so a founder's environmental fitness at
-  // its actual spawn cell was essentially a random pairing. Measured
-  // average founder fitness at the old max was only ~0.23 (84-88% of
-  // founders below 0.5), which — combined with the already-validated
-  // regional carrying capacity and upkeep baseline — left almost no
-  // energy margin for most founders to ever reach reproductive age. x2
-  // raised average spawn fitness to ~0.425 (58% below 0.5) and was the
-  // first configuration in this whole investigation where speciation was
-  // observed to occur at all. This does NOT correlate genome to spawn
-  // biome (still fully independent) and does NOT remove the
-  // specialist/generalist tradeoff: environment.ts's peak-height formula
-  // normalizes against TRAIT_RANGES.temperatureTolerance.max itself, and
-  // `min` is unchanged here, so a true specialist (tolerance near 2)
-  // still reaches the same maximum peak fitness (1.35) at its ideal
-  // conditions as before — only how far a *generalist* can stretch
-  // changed. Not a full fix on its own: extinction is still possible on
-  // unlucky seeds (a sparse founding population scattered across a huge
-  // world remains a genuine minimum-viable-population risk) — see
-  // HANDOFF for the full v1.2 series of experiments this was validated
-  // against.
-  temperatureTolerance: { min: 2, max: 50 },
-  preferredWater: { min: 0, max: 1 },
-  // v1.2.5 — same rationale/validation as temperatureTolerance above.
-  waterTolerance: { min: 0.05, max: 1.2 },
-  // Capped below 1.0, same precedent as carnivory: leaving some residual
-  // vulnerability/inefficiency avoids a degenerate all-or-nothing extreme.
-  evasion: { min: 0, max: 0.8 },
-  huntingSkill: { min: 0, max: 0.8 },
-};
+export { TRAIT_RANGES, MUTATION_RATE } from "./traitRanges";
 
-const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as (keyof BaseGenome)[];
+const TRAIT_NAMES = Object.keys(TRAIT_RANGES) as TraitName[];
 
-/** How much a trait can drift per mutation, expressed as a fraction of its range. */
-const MUTATION_STD_FRACTION = 0.04;
-
-/** Probability that any single trait mutates during reproduction. */
-export const MUTATION_RATE = 0.15;
 
 /**
  * Genetic distance threshold below which two organisms are considered
@@ -162,17 +100,24 @@ export function averageGenome(genomes: Genome[]): Genome | null {
   }
   const avg = {} as Genome;
   for (const trait of TRAIT_NAMES) avg[trait] = sum[trait] / genomes.length;
-  // v1.11.0 — la media dei geni avanzati (un gene mancante vale il predefinito); assente se nessun genoma li ha
-  if (genomes.some((g) => g.genes)) {
-    const genes: GeneMap = {};
-    for (const def of GENE_CATALOG) {
+  // v1.11.0 — media dei geni estesi (un gene mancante vale il predefinito); assente se nessun genoma ne ha
+  if (genomes.some((g) => g.ext)) {
+    const ext: Record<string, number> = {};
+    for (const def of EXTENDED_GENES) {
       let total = 0;
-      for (const g of genomes) total += geneValue(g.genes, def.id);
-      genes[def.id] = total / genomes.length;
+      for (const g of genomes) total += effectiveValue(g, def);
+      ext[def.key] = total / genomes.length;
     }
-    avg.genes = genes;
+    avg.ext = ext;
   }
   return avg;
+}
+
+/** Valore effettivo di un gene del registro (legacy: campo di primo livello; esteso: ext o predefinito). Locale per evitare cicli di importazione con genomeExt. */
+function effectiveValue(g: Genome, def: GeneDefinition): number {
+  if (def.category === "legacy") return (g as unknown as Record<string, number>)[def.key];
+  const v = g.ext?.[def.key];
+  return typeof v === "number" && Number.isFinite(v) ? clampToGene(def, v) : def.defaultValue;
 }
 
 /**
@@ -221,6 +166,12 @@ export function genomeStats(genomes: Genome[]): GenomeStats | null {
  * 0; genomes at opposite ends of every trait range approach distance 1.
  */
 export function geneticDistance(a: Genome, b: Genome): number {
+  // v1.11.0 — se NESSUNO dei due ha geni estesi (mondi con geni spenti, genomi v1) vale esattamente la formula della v1.10.
+  if (!a.ext && !b.ext) return legacyGeneticDistance(a, b);
+  return geneticDistanceV2(a, b);
+}
+
+function legacyGeneticDistance(a: Genome, b: Genome): number {
   let sumSquares = 0;
   for (const trait of TRAIT_NAMES) {
     const { min, max } = TRAIT_RANGES[trait];
@@ -228,149 +179,35 @@ export function geneticDistance(a: Genome, b: Genome): number {
     const normalizedDiff = range > 0 ? (a[trait] - b[trait]) / range : 0;
     sumSquares += normalizedDiff * normalizedDiff;
   }
-  const baseMeanSquare = sumSquares / TRAIT_NAMES.length;
-  // v1.11.0 — senza geni avanzati (da nessuna delle due parti) la distanza è esattamente quella di prima.
-  if (!a.genes && !b.genes) return Math.sqrt(baseMeanSquare);
-  return Math.sqrt(baseMeanSquare + ADVANCED_DISTANCE_LAMBDA * advancedMeanSquare(a.genes, b.genes));
+  return Math.sqrt(sumSquares / TRAIT_NAMES.length);
 }
 
-const CATEGORY_LIST = Object.keys(CATEGORY_WEIGHTS) as GeneCategory[];
-
 /**
- * v1.11.0 — Contributo dei geni avanzati alla distanza: differenza normalizzata per l'intervallo di ciascun gene,
- * al quadrato, media pesata dentro ogni categoria, poi media tra le categorie con pesi FISSI (rinormalizzati sulle
- * categorie presenti). Aggiungere geni a una categoria non cambia la scala della distanza: ne affina la media.
- * Un gene mancante (genoma vecchio o parziale) vale il predefinito: i genomi restano confrontabili.
+ * v1.11.0 — Distanza genetica normalizzata (specifica di Vibe §5):
+ *   d(a,b) = sqrt( Σ_i w_i · Δn_i² / Σ_i w_i ),  Δn_i = (a_i − b_i) / (max_i − min_i)
+ * su TUTTI i geni del registro (tratti storici w = 1, geni estesi w = distanceWeight). Sta in [0, 1], è simmetrica, è 0
+ * per genomi identici, e un gene mancante vale il predefinito (due genomi migrati identici non divergono).
+ *
+ * ATTENZIONE (misurato, vedi docs/GENOMA-v1.11.0.md): con i pesi del catalogo, a geni estesi uguali questa formula riduce
+ * la distanza dei 13 tratti di un fattore sqrt(13 / (13 + Σw_estesi)) ≈ 0,74. Le soglie 0,16 e 0,26 NON sono state
+ * modificate (vincolo), ma valgono quindi come ≈0,22 e ≈0,35 in termini della v1.10: da ricalibrare nella v1.12.0.
  */
-export function advancedMeanSquare(a: Readonly<GeneMap> | undefined, b: Readonly<GeneMap> | undefined): number {
-  const sums: Record<string, number> = {};
-  const weights: Record<string, number> = {};
-  for (const def of GENE_CATALOG) {
+export function geneticDistanceV2(a: Genome, b: Genome): number {
+  let weighted = 0;
+  let weights = 0;
+  for (const def of GENE_REGISTRY) {
     const range = def.max - def.min;
     if (range <= 0) continue;
-    const diff = (geneValue(a, def.id) - geneValue(b, def.id)) / range;
-    sums[def.category] = (sums[def.category] ?? 0) + def.distanceWeight * diff * diff;
-    weights[def.category] = (weights[def.category] ?? 0) + def.distanceWeight;
+    const diff = (effectiveValue(a, def) - effectiveValue(b, def)) / range;
+    weighted += def.distanceWeight * diff * diff;
+    weights += def.distanceWeight;
   }
-  let total = 0;
-  let weightTotal = 0;
-  for (const c of CATEGORY_LIST) {
-    if (!weights[c]) continue;
-    total += CATEGORY_WEIGHTS[c] * (sums[c] / weights[c]);
-    weightTotal += CATEGORY_WEIGHTS[c];
-  }
-  return weightTotal > 0 ? total / weightTotal : 0;
+  return weights > 0 ? Math.sqrt(weighted / weights) : 0;
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// v1.11.0 — Geni avanzati: assegnazione ai fondatori, ereditarietà, mutazione, migrazione, validazione.
-// ---------------------------------------------------------------------------------------------------------------
-
-/** Deviazione dei fondatori attorno al valore predefinito, come frazione di metà intervallo: variazione di partenza, non estremi casuali. */
-export const FOUNDER_GENE_SPREAD = 0.25;
-
-/**
- * Generatore SEPARATO per i geni avanzati: si ricava dallo stato del generatore del mondo e da un sale (id), senza
- * consumare numeri dal generatore del mondo. Così i flussi casuali della simulazione restano quelli della v1.10 e i
- * confronti con e senza geni avanzati sono puliti; resta deterministico dal seme.
- */
-export function deriveGeneRandom(worldRngState: number, salt: number): Random {
-  let h = Math.imul((worldRngState ^ 0x9e3779b9) | 0, 0x85ebca6b) ^ Math.imul((salt | 0) + 0x7f4a7c15, 0xc2b2ae35);
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x2c1b3c6d);
-  h ^= h >>> 12;
-  return new Random(h >>> 0);
-}
-
-/** Geni di un fondatore: attorno al valore neutro, dentro l'intervallo. */
-export function founderGenes(rng: Random): GeneMap {
-  const genes: GeneMap = {};
-  for (const def of GENE_CATALOG) {
-    const half = (def.max - def.min) / 2;
-    genes[def.id] = clampGene(def, def.default + (rng.next() * 2 - 1) * FOUNDER_GENE_SPREAD * half);
-  }
-  return genes;
-}
-
-/** Geni di un figlio: media dei genitori (un gene mancante vale il predefinito), poi mutazione indipendente per gene. */
-export function inheritGenes(parentA: Genome, parentB: Genome, rng: Random): GeneMap {
-  const genes: GeneMap = {};
-  for (const def of GENE_CATALOG) {
-    let value = (geneValue(parentA.genes, def.id) + geneValue(parentB.genes, def.id)) / 2;
-    if (rng.chance(MUTATION_RATE)) value += rng.gaussian(0, (def.max - def.min) * def.mutationStd);
-    genes[def.id] = clampGene(def, value);
-  }
-  return genes;
-}
-
-/** Variante asessuata (un solo genitore). */
-export function cloneGenes(parent: Genome, rng: Random): GeneMap {
-  return inheritGenes(parent, parent, rng);
-}
-
-/**
- * Migrazione (idempotente): restituisce un genoma con i 13 tratti di base invariati e tutti i geni avanzati presenti.
- * Geni mancanti → valore predefinito; valori non validi → predefinito; fuori intervallo → riportati nell'intervallo;
- * geni sconosciuti (di una versione futura) → conservati senza modifiche. Non modifica l'argomento.
- */
-export function migrateGenome(genome: Genome): Genome {
-  const out = { ...genome } as Genome;
-  for (const trait of TRAIT_NAMES) {
-    const v = out[trait];
-    if (typeof v !== "number" || !Number.isFinite(v)) {
-      const { min, max } = TRAIT_RANGES[trait];
-      out[trait] = (min + max) / 2;
-    }
-  }
-  const genes: GeneMap = { ...(genome.genes ?? {}) };
-  for (const def of GENE_CATALOG) genes[def.id] = geneValue(genome.genes, def.id);
-  out.genes = genes;
-  return out;
-}
-
-/** Elenco dei problemi di un genoma (vuoto = valido): tratti di base fuori intervallo e geni avanzati non validi. */
-export function validateGenome(genome: Genome): string[] {
-  const problems: string[] = [];
-  for (const trait of TRAIT_NAMES) {
-    const v = genome[trait];
-    const { min, max } = TRAIT_RANGES[trait];
-    if (typeof v !== "number" || !Number.isFinite(v)) problems.push(`${trait}: non è un numero`);
-    else if (v < min || v > max) problems.push(`${trait}: ${v} fuori dall'intervallo [${min}, ${max}]`);
-  }
-  if (genome.genes) {
-    for (const [id, v] of Object.entries(genome.genes)) {
-      const def = GENE_BY_ID.get(id);
-      if (!def) continue; // gene sconosciuto: si conserva
-      if (typeof v !== "number" || !Number.isFinite(v)) problems.push(`${id}: non è un numero`);
-      else if (v < def.min || v > def.max) problems.push(`${id}: ${v} fuori dall'intervallo [${def.min}, ${def.max}]`);
-    }
-  }
-  return problems;
-}
-
-/** Statistiche descrittive dei geni avanzati su un gruppo di genomi (osservabilità e esperimenti; non influisce sulla simulazione). */
-export function advancedGeneStats(genomes: Genome[]): Record<string, { mean: number; min: number; max: number; stdDev: number }> | null {
-  if (genomes.length === 0) return null;
-  const out: Record<string, { mean: number; min: number; max: number; stdDev: number }> = {};
-  for (const def of GENE_CATALOG) {
-    let sum = 0;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const g of genomes) {
-      const v = geneValue(g.genes, def.id);
-      sum += v;
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
-    const mean = sum / genomes.length;
-    let sq = 0;
-    for (const g of genomes) {
-      const d = geneValue(g.genes, def.id) - mean;
-      sq += d * d;
-    }
-    out[def.id] = { mean, min, max, stdDev: Math.sqrt(sq / genomes.length) };
-  }
-  return out;
+/** Compatibilità riproduttiva con la distanza normalizzata e la soglia INVARIATA (0,16). */
+export function areGeneticallyCompatibleV2(a: Genome, b: Genome): boolean {
+  return geneticDistanceV2(a, b) <= MATE_COMPATIBILITY_THRESHOLD;
 }
 
 /** Whether two organisms' genomes are close enough to interbreed. */
