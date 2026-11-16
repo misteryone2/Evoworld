@@ -54,15 +54,16 @@ export interface BaseGenome {
   huntingSkill: number;
 }
 
-/** v1.11.0 — valori dei geni avanzati, per id stabile (vedi simulation/biology/geneRegistry.ts). Un gene assente vale il suo valore predefinito (neutro). */
+/** v1.11.0 — valori dei geni estesi, per chiave (vedi simulation/biology/geneRegistry.ts). Un gene assente vale il suo valore predefinito. */
 export type GeneMap = Record<string, number>;
 
 /**
- * v1.11.0 — Advanced Fauna Genome. I 13 tratti di base restano campi diretti; i geni avanzati stanno in `genes`,
- * facoltativo: un genoma senza `genes` (salvataggi precedenti, test) si comporta esattamente come prima.
+ * v1.11.0 — Advanced Fauna Genome (specifica di Vibe). I 13 tratti di base restano campi di primo livello; i geni
+ * estesi stanno in `ext`, facoltativo: assente nei genomi v1 (migrazione al caricamento) e nei mondi con
+ * `enableAdvancedGenome: false`, dove la simulazione è identica alla v1.10.
  */
 export interface Genome extends BaseGenome {
-  genes?: GeneMap;
+  ext?: GeneMap;
 }
 
 export type TraitName = keyof BaseGenome;
@@ -161,6 +162,11 @@ export interface Cell {
    * = not a lake, for the same snapshot-compatibility reason as riverFlow.
    */
   isLake?: boolean;
+  /**
+   * v1.11.0 — scostamento stagionale della temperatura già incluso in `temperature` (vedi seasons.ts). Serve ai geni
+   * di robustezza stagionale. Opzionale: assente nei salvataggi precedenti (trattato come 0) e sulle celle d'oceano.
+   */
+  seasonalOffset?: number;
 }
 
 export interface PlanetConfig {
@@ -316,12 +322,14 @@ export interface WorldSnapshot {
   randomState: number;
   speciesRegistry: SpeciesRecord[];
   /**
-   * v1.11.0 — versione dello schema del genoma (2 = geni avanzati). Assente nei salvataggi precedenti: al caricamento
-   * vengono migrati (geni avanzati ai valori predefiniti, tratti di base intatti).
+   * v1.11.0 — versione del genoma nello snapshot (2 = geni estesi). Assente = 1 (v1.10 e precedenti): al caricamento i
+   * genomi vengono migrati (geni estesi ai valori predefiniti, tratti di base intatti).
    */
-  genomeSchema?: number;
+  genomeVersion?: number;
   /** v1.11.0 — se il mondo faceva evolvere i geni avanzati (opzione sperimentale per i confronti con la v1.10). */
   advancedGenome?: boolean;
+  /** v1.11.0 — se i geni avanzati avevano effetto sul fenotipo (falso = controllo neutro degli esperimenti). Assente = vero. */
+  geneEffects?: boolean;
 }
 
 /**
