@@ -9,7 +9,11 @@ import type {
 import { Random } from "./random";
 import { Planet } from "../planet/planet";
 import { createRandomOrganism, upkeepCost, dispersalCost, DISPERSAL_HOME_RADIUS, isDying } from "../biology/organism";
-import { averageGenome, randomGenome, founderGenes, deriveGeneRandom, migrateGenome } from "../biology/genome";
+import { markExtInert } from "../biology/geneExpression";
+import { averageGenome, randomGenome } from "../biology/genome";
+import { founderExt, deriveGeneRandom } from "../biology/genomeExt";
+import { migrateSnapshot } from "../biology/genomeMigration";
+import { GENOME_VERSION_CURRENT } from "../biology/geneRegistry";
 import { moveOrganism } from "../ecology/movement";
 import { resolveCollisions } from "../ecology/collision";
 import { feedOrganisms, regionKey, FEEDING_REGION_SIZE } from "../ecology/feeding";
@@ -36,8 +40,6 @@ import { RegionEstablishment } from "../ecology/regionEcology";
  */
 const SETTLEMENT_MORTALITY_MAX = 0.004;
 
-/** v1.11.0 — versione dello schema del genoma nei salvataggi: 2 = geni avanzati (assente = 1, solo i 13 tratti di base). */
-export const GENOME_SCHEMA = 2;
 
 /**
  * World is the top-level simulation object. It owns the planet, the
@@ -94,11 +96,13 @@ export class World {
    * simulazione è identica, tick per tick, a quella precedente).
    */
   private enableAdvancedGenome: boolean;
+  /** Controllo neutro (esperimenti): i geni avanzati esistono ma non hanno effetto sul fenotipo. */
+  private enableGeneEffects: boolean;
 
   constructor(
     config: PlanetConfig,
     initialPopulation: number,
-    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean; enableCollisions?: boolean; enableAdvancedGenome?: boolean },
+    options?: { enableDispersalCost?: boolean; enableSettlement?: boolean; enableCollisions?: boolean; enableAdvancedGenome?: boolean; enableGeneEffects?: boolean },
   ) {
     this.rng = new Random(config.seed);
     this.planet = new Planet(config);
@@ -106,6 +110,7 @@ export class World {
     this.enableDispersalCost = options?.enableDispersalCost ?? false;
     this.enableCollisions = options?.enableCollisions ?? true;
     this.enableAdvancedGenome = options?.enableAdvancedGenome ?? true;
+    this.enableGeneEffects = options?.enableGeneEffects ?? true;
     this.regionEstablishment = (options?.enableSettlement ?? false) ? new RegionEstablishment() : null;
     this.seedPopulation(initialPopulation);
     // v1.2 — the founding population represents organisms already settled
@@ -158,7 +163,10 @@ export class World {
       if (cell.terrain === "ocean") continue;
       const organism = createRandomOrganism(this.nextOrganismId++, speciesId, x, y, this.rng);
       // v1.11.0 — geni avanzati dei fondatori: generatore separato, il flusso casuale del mondo non cambia
-      if (this.enableAdvancedGenome) organism.genome.genes = founderGenes(deriveGeneRandom(this.rng.getState(), organism.id));
+      if (this.enableAdvancedGenome) {
+        organism.genome.ext = founderExt(deriveGeneRandom(this.rng.getState(), organism.id));
+        if (!this.enableGeneEffects) markExtInert(organism.genome.ext);
+      }
       this.organisms.push(organism);
       founders.push(organism);
       placed++;
@@ -324,8 +332,9 @@ export class World {
       nextSpeciesId: this.nextSpeciesId,
       randomState: this.rng.getState(),
       speciesRegistry: Array.from(this.speciesRegistry.values()),
-      genomeSchema: GENOME_SCHEMA,
+      genomeVersion: GENOME_VERSION_CURRENT,
       advancedGenome: this.enableAdvancedGenome,
+      geneEffects: this.enableGeneEffects,
     };
   }
 
@@ -337,13 +346,14 @@ export class World {
     world.planet = snapshot.planet.chunks
       ? Planet.fromChunkSnapshot(snapshot.planet.config, snapshot.planet.chunks)
       : Planet.fromLegacyDenseCells(snapshot.planet.config, snapshot.planet.cells ?? []);
-    // v1.11.0 — migrazione del genoma. Un salvataggio senza `genomeSchema` (v1.10 e precedenti) ha solo i 13 tratti di
-    // base: restano intatti e i geni avanzati partono dal valore neutro (comportamento identico fin da subito, poi
-    // evolvono). La migrazione è idempotente: ricaricare un salvataggio già migrato non cambia nulla.
+    // v1.11.0 — migrazione del genoma (specifica di Vibe §6). Un salvataggio senza `genomeVersion` (v1.10 e precedenti) ha
+    // solo i 13 tratti: restano intatti e i geni estesi partono dal predefinito (fenotipo equivalente alla v1.10, poi
+    // evolvono). Idempotente: ricaricare un salvataggio già migrato non cambia nulla. Un mondo salvato con
+    // `advancedGenome: false` resta senza geni estesi.
     world.enableAdvancedGenome = snapshot.advancedGenome ?? true;
-    world.organisms = world.enableAdvancedGenome
-      ? snapshot.organisms.map((o) => ({ ...o, genome: migrateGenome(o.genome) }))
-      : snapshot.organisms;
+    world.organisms = migrateSnapshot({ ...snapshot, advancedGenome: world.enableAdvancedGenome }).snapshot.organisms;
+    world.enableGeneEffects = snapshot.geneEffects ?? true;
+    if (!world.enableGeneEffects) for (const o of world.organisms) markExtInert(o.genome.ext);
     world.tick = snapshot.tick;
     world.nextOrganismId = snapshot.nextOrganismId;
     world.nextSpeciesId = snapshot.nextSpeciesId;
