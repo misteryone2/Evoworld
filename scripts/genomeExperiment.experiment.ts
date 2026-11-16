@@ -7,11 +7,14 @@
 import { it } from "vitest";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { World } from "../simulation/core/world";
-import { geneticDistance, advancedGeneStats, TRAIT_RANGES } from "../simulation/biology/genome";
-import { GENE_CATALOG } from "../simulation/biology/geneRegistry";
+import { geneticDistance, TRAIT_RANGES } from "../simulation/biology/genome";
+import { EXTENDED_GENES } from "../simulation/biology/geneRegistry";
+import { getGene } from "../simulation/biology/genomeExt";
 import { Random } from "../simulation/core/random";
 import type { Genome } from "../types";
 
+/** baseline = v1.10 (nessun gene avanzato); advanced = v1.11.0; neutral = geni presenti che ereditano e mutano ma senza effetto (controllo della deriva). */
+type Condition = "baseline" | "advanced" | "neutral";
 const TICKS = Number(process.env.GENOME_TICKS ?? 4000);
 const SEEDS = (process.env.GENOME_SEEDS ?? "11,12,13,14,15").split(",").map(Number);
 const SIZE = Number(process.env.GENOME_SIZE ?? 256);
@@ -25,7 +28,7 @@ const STATE_DIR = process.env.GENOME_STATE_DIR;
 const CHUNK = Number(process.env.GENOME_CHUNK ?? Infinity);
 const OUT = process.env.GENOME_OUT ?? "/tmp/genome-experiment.json";
 /** Condizioni da eseguire (predefinito entrambe): utile per spezzare le esecuzioni lunghe. */
-const CONDITIONS = (process.env.GENOME_CONDITIONS ?? "baseline,advanced").split(",") as ("baseline" | "advanced")[];
+const CONDITIONS = (process.env.GENOME_CONDITIONS ?? "baseline,advanced").split(",") as Condition[];
 
 function meanDistance(genomes: Genome[], rng: Random): number {
   if (genomes.length < 2) return 0;
@@ -39,14 +42,20 @@ function meanDistance(genomes: Genome[], rng: Random): number {
   return total / pairs;
 }
 
-function sample(w: World, label: "baseline" | "advanced") {
+function sample(w: World, label: Condition) {
   const gs = w.organisms.map((o) => o.genome);
   const n = gs.length;
   const traitMean: Record<string, number> = {};
   for (const t of Object.keys(TRAIT_RANGES)) traitMean[t] = n ? gs.reduce((s, g) => s + (g as never)[t], 0) / n : 0;
-  const stats = label === "advanced" && n ? advancedGeneStats(gs) : null;
-  const geneSummary: Record<string, { mean: number; sd: number }> = {};
-  if (stats) for (const d of GENE_CATALOG) geneSummary[d.id] = { mean: +stats[d.id].mean.toFixed(3), sd: +stats[d.id].stdDev.toFixed(3) };
+  const geneSummary: Record<string, { mean: number; sd: number; default: number }> = {};
+  if (label !== "baseline" && n) {
+    for (const d of EXTENDED_GENES) {
+      const vals = gs.map((g) => getGene(g, d.key));
+      const mean = vals.reduce((a, b) => a + b, 0) / n;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n);
+      geneSummary[d.id + " " + d.key] = { mean: +mean.toFixed(3), sd: +sd.toFixed(3), default: +d.defaultValue.toFixed(3) };
+    }
+  }
   const s = w.getStats();
   return {
     tick: w.tick,
@@ -63,14 +72,14 @@ function sample(w: World, label: "baseline" | "advanced") {
 type Sample = ReturnType<typeof sample>;
 interface RunState { snapshot: unknown; series: Sample[]; extinctAt: number | null; seconds: number; done: boolean }
 
-function runOne(seed: number, label: "baseline" | "advanced") {
+function runOne(seed: number, label: Condition) {
   const path = STATE_DIR ? `${STATE_DIR}/${label}_${seed}.json` : null;
   let state: RunState | null = path && existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as RunState) : null;
   if (state?.done) return state;
   const t0 = Date.now();
   const w = state
     ? World.fromSnapshot(state.snapshot as never)
-    : new World({ width: SIZE, height: SIZE, seed }, POP, { enableAdvancedGenome: label === "advanced" });
+    : new World({ width: SIZE, height: SIZE, seed }, POP, { enableAdvancedGenome: label !== "baseline", enableGeneEffects: label !== "neutral" });
   const series: Sample[] = state ? state.series : [sample(w, label)];
   let extinctAt = state ? state.extinctAt : null;
   const stopAt = Math.min(TICKS, w.tick + CHUNK);
