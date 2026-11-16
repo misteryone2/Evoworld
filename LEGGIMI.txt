@@ -10,7 +10,7 @@ IMPORTANTE — PRIMA DI APPLICARE
 - Il branch consegnato è integration/v1.11.0-vibe-spec; backup/v1.11.0-13geni conserva una prima versione a 13 geni (non consegnata).
 
 ORDINE (una cartella alla volta, dalla radice)
-1. types/   2. simulation/planet/   3. simulation/biology/   4. simulation/ecology/   5. simulation/evolution/
+1. types/   2. simulation/planet/   3. simulation/biology/ (compreso phenotype.ts, ora un segnaposto)   4. simulation/ecology/   5. simulation/evolution/
 6. simulation/core/   7. components/simulation/   8. lib/   9. tests/   10. scripts/ e radice (CHANGELOG.md, LEGGIMI.txt,
 vitest.experiment.config.ts)   11. docs/
 In alternativa: estrai EvoWorld-v1.11.0.zip nella radice del repository (stessi percorsi).
@@ -50,7 +50,13 @@ FILE
   vitest.experiment.config.ts  (NUOVO)
   LEGGIMI.txt  (sostituisce)
 
-Nessun file eliminato o rinominato. Nessuna nuova dipendenza.
+Nessun file da eliminare, ma ATTENZIONE: se avevi già applicato il pacchetto PRECEDENTE (versione a 13 geni), nel repository
+restano due file di quella versione che con i tipi nuovi non compilano (errori "Property 'genes' does not exist" e
+"genomeSchema", che fanno fallire `npm run build` su Vercel):
+    simulation/biology/phenotype.ts      -> in questo pacchetto è un segnaposto vuoto (sostituisce)
+    tests/advancedGenome.test.ts         -> in questo pacchetto è un segnaposto con un test saltato (sostituisce)
+Basta sostituirli come tutti gli altri; poi puoi eliminarli quando vuoi (nessun modulo li importa).
+Nessuna nuova dipendenza.
 
 COSA CAMBIA (dettagli: docs/GENOMA-v1.11.0.md, docs/REPORT-v1.11.0.md)
 - Genoma esteso secondo la specifica di Vibe: 20 geni in `genome.ext`, registro, espressione fenotipica, distanza normalizzata,
