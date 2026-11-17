@@ -31,6 +31,12 @@ export interface SpeciationSummary {
   meanEvents: number;
 }
 
+/**
+ * Tabella storica (3 decimali) per df 1..30, verificata contro NIST/SEMATECH
+ * e Statistics Kingdom. Viene mantenuta per non alterare i report E1.3 a 4
+ * decimali: con df=11 il valore esatto 2.2009851601 sposterebbe un limite da
+ * -21.2672 a -21.2671. Per df > 30 si usa il calcolo sotto, non 1.96.
+ */
 const T_CRITICAL_95: Record<number, number> = {
   1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262,
   10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110,
@@ -38,9 +44,118 @@ const T_CRITICAL_95: Record<number, number> = {
   26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
 };
 
+const LANCZOS = [
+  676.5203681218851, -1259.1392167224028, 771.32342877765313,
+  -176.61502916214059, 12.507343278686905, -0.13857109526572012,
+  9.9843695780195716e-6, 1.5056327351493116e-7,
+];
+
+/** log Gamma: Lanczos per z < 10, serie di Stirling per z >= 10. */
+function logGamma(z: number): number {
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
+  if (z >= 10) {
+    const z2 = z * z;
+    return (z - 0.5) * Math.log(z) - z + 0.5 * Math.log(2 * Math.PI)
+      + 1 / (12 * z) - 1 / (360 * z * z2) + 1 / (1260 * z2 * z2 * z)
+      - 1 / (1680 * z2 * z2 * z2 * z);
+  }
+  const w = z - 1;
+  let x = 0.99999999999980993;
+  for (let i = 0; i < LANCZOS.length; i++) x += LANCZOS[i] / (w + i + 1);
+  const t = w + LANCZOS.length - 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (w + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+/** Frazione continua di Lentz per la beta incompleta (Numerical Recipes 6.4). */
+function betaContinuedFraction(x: number, a: number, b: number): number {
+  const MAX_ITERATIONS = 300;
+  const EPSILON = 1e-15;
+  const FPMIN = 1e-300;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1;
+  let d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= MAX_ITERATIONS; m++) {
+    const m2 = 2 * m;
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    h *= d * c;
+    aa = -((a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const delta = d * c;
+    h *= delta;
+    if (Math.abs(delta - 1) < EPSILON) break;
+  }
+  return h;
+}
+
+/** Beta incompleta regolarizzata I_x(a,b). */
+function regularizedIncompleteBeta(x: number, a: number, b: number): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const front = Math.exp(
+    logGamma(a + b) - logGamma(a) - logGamma(b) + a * Math.log(x) + b * Math.log1p(-x),
+  );
+  return x < (a + 1) / (a + b + 2)
+    ? (front * betaContinuedFraction(x, a, b)) / a
+    : 1 - (front * betaContinuedFraction(1 - x, b, a)) / b;
+}
+
+/**
+ * Quantile 0.975 della t di Student (IC95 bilaterale) per `df` >= 1, senza
+ * dipendenze esterne. Si inverte la coda
+ *   P(|T| > t) = I_{df/(df+t^2)}(df/2, 1/2)
+ * con bisezione su t >= 0 fino a P(|T| > t) = 0.05.
+ *
+ * Verificato contro Statistics Kingdom (df 1,2,11,30,40,50,100) e jStat 1.9.6
+ * (df 1,2,11,30,49,99,999,10^6); errori assoluti < 5e-8.
+ *
+ * NOTA: `summarize` usa la tabella a 3 decimali per df 1..30 (fedelta' ai
+ * report E1.3) e questa funzione per df > 30.
+ */
+export function studentTQuantile95(df: number): number {
+  if (!Number.isFinite(df) || df < 1) {
+    throw new Error(`E1 statistiche: gradi di liberta' non validi per la t di Student: ${df}`);
+  }
+  const upperTail = (t: number) => regularizedIncompleteBeta(df / (df + t * t), df / 2, 0.5);
+  let low = 0;
+  let high = 1000;
+  while (upperTail(high) > 0.05) high *= 2;
+  for (let i = 0; i < 200; i++) {
+    const mid = (low + high) / 2;
+    if (upperTail(mid) > 0.05) low = mid;
+    else high = mid;
+  }
+  return (low + high) / 2;
+}
+
+/** Valore critico effettivamente usato dagli IC95: tabella storica, poi calcolo esatto. */
+function tCritical95(df: number): number {
+  return Number.isInteger(df) && df >= 1 && df <= 30
+    ? T_CRITICAL_95[df]
+    : studentTQuantile95(df);
+}
+
 function round(value: number, digits = 4): number {
   const f = 10 ** digits;
   return Math.round(value * f) / f;
+}
+
+/** I valori non finiti non possono contribuire a media, SD o IC. */
+function finiteValues(values: number[]): number[] {
+  return values.filter((v) => Number.isFinite(v));
 }
 
 export function mean(values: number[]): number {
@@ -55,20 +170,21 @@ export function sampleSd(values: number[]): number {
 }
 
 export function summarize(values: number[]): NumericSummary {
-  if (!values.length) {
+  const finite = finiteValues(values);
+  if (!finite.length) {
     return { n: 0, mean: 0, sd: 0, min: 0, max: 0, ci95: null };
   }
-  const m = mean(values);
-  const sd = sampleSd(values);
-  const df = values.length - 1;
-  const t = df > 0 ? (T_CRITICAL_95[df] ?? 1.96) : 0;
-  const half = df > 0 ? (t * sd) / Math.sqrt(values.length) : 0;
+  const m = mean(finite);
+  const sd = sampleSd(finite);
+  const df = finite.length - 1;
+  const t = df > 0 ? tCritical95(df) : 0;
+  const half = df > 0 ? (t * sd) / Math.sqrt(finite.length) : 0;
   return {
-    n: values.length,
+    n: finite.length,
     mean: round(m),
     sd: round(sd),
-    min: round(Math.min(...values)),
-    max: round(Math.max(...values)),
+    min: round(Math.min(...finite)),
+    max: round(Math.max(...finite)),
     ci95: df > 0 ? { low: round(m - half), high: round(m + half) } : null,
   };
 }

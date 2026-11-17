@@ -9,7 +9,8 @@ Questo file è l'indice autorevole dei risultati **realmente eseguiti**. Le fasi
 | E1.0 | `9cfb12a` | [`E1_VALIDATION_REPORT_E1_0.md`](E1_VALIDATION_REPORT_E1_0.md) | Audit iniziale, 12 scenari, prime 24 corse |
 | E1.1 | `a60148b` | [`E1_VALIDATION_REPORT_E1_1.md`](E1_VALIDATION_REPORT_E1_1.md) | Vegetazione su celle distinte, guard snapshot, output portabile; 24 corse seed 11/12 |
 | E1.2 | `d1e2b5b` | [`E1_2_SCIENTIFIC_REFINEMENT_REPORT.md`](E1_2_SCIENTIFIC_REFINEMENT_REPORT.md) | Correzioni metodologiche, cull stratificato, habitat campionato, fase multi-seed |
-| E1.3 | commit corrente | [`E1_3_SCIENTIFIC_INTEGRITY_REPORT.md`](E1_3_SCIENTIFIC_INTEGRITY_REPORT.md) | Correzione spaziale, confronti appaiati, dataset con checksum, confronto prima/dopo |
+| E1.3 | `de41bfc` / `f55b821` | [`E1_3_SCIENTIFIC_INTEGRITY_REPORT.md`](E1_3_SCIENTIFIC_INTEGRITY_REPORT.md) | Correzione spaziale, confronti appaiati, dataset con checksum, confronto prima/dopo |
+| E1.3.1 | commit corrente | [`E1_3_1_STATISTICAL_ENGINE_HARDENING.md`](E1_3_1_STATISTICAL_ENGINE_HARDENING.md) | Quantile t esatto oltre 30 df, gestione valori non finiti, invarianza dei risultati E1.3 |
 
 I dettagli delle correzioni E1.1 sono in [`E1_1_HARDENING_REPORT.md`](E1_1_HARDENING_REPORT.md). Definizioni operative aggiornate in [`E1_METRICS.md`](E1_METRICS.md); protocolli in [`E1_EXPERIMENTS.md`](E1_EXPERIMENTS.md).
 

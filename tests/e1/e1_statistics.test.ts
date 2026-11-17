@@ -8,6 +8,8 @@ import {
   buildPhase2Report,
   pairedDifference,
   seedValues,
+  studentTQuantile95,
+  summarize,
   type PairedComparison,
   type SeedValue,
 } from "../../tools/e1/statistics";
@@ -160,5 +162,88 @@ describe("E1.3 — differenze appaiate per seed", () => {
     // La differenza descrittiva di gruppo resta disponibile ma non sostituisce
     // il confronto appaiato.
     expect(typeof report.habitat.contrasts[0].meanDifference).toBe("number");
+  });
+});
+
+describe("E1.3.1 — quantile t di Student e IC95 robusto", () => {
+  // Riferimenti: tavola Statistics Kingdom (12 cifre) e jStat 1.9.6 (indipendente).
+  const cases: Array<{ n: number; df: number; exact: number; used: number }> = [
+    { n: 2, df: 1, exact: 12.706204736, used: 12.706 },
+    { n: 12, df: 11, exact: 2.200985160, used: 2.201 },
+    { n: 31, df: 30, exact: 2.042272456, used: 2.042 },
+    { n: 50, df: 49, exact: 2.009575234, used: 2.009575234 },
+    { n: 100, df: 99, exact: 1.984216952, used: 1.984216952 },
+    { n: 1000, df: 999, exact: 1.962341461, used: 1.962341461 },
+  ];
+  const round4 = (value: number) => Math.round(value * 10000) / 10000;
+
+  for (const c of cases) {
+    it(`n=${c.n} (df=${c.df}): quantile e IC95 coerenti con i riferimenti`, () => {
+      expect(studentTQuantile95(c.df)).toBeCloseTo(c.exact, 7);
+
+      const values = Array.from({ length: c.n }, (_, i) => i + 1);
+      const m = (c.n + 1) / 2;
+      const sd = Math.sqrt((c.n * (c.n + 1)) / 12);
+      const half = (c.used * sd) / Math.sqrt(c.n);
+      const summary = summarize(values);
+
+      expect(summary.n).toBe(c.n);
+      expect(summary.mean).toBe(round4(m));
+      expect(summary.sd).toBe(round4(sd));
+      expect(summary.min).toBe(1);
+      expect(summary.max).toBe(c.n);
+      expect(summary.ci95).toEqual({ low: round4(m - half), high: round4(m + half) });
+    });
+  }
+
+  it("per df > 30 non usa piu' l'approssimazione normale 1.96", () => {
+    expect(studentTQuantile95(49)).toBeGreaterThan(1.96);
+    expect(studentTQuantile95(999)).toBeGreaterThan(1.96);
+    expect(studentTQuantile95(49)).toBeLessThan(2.01);
+  });
+
+  it("regressione E1.3: i 12 seed conservano i limiti a 4 decimali", () => {
+    // Differenze S08 - S01 del report E1.3 (df=11, tabella storica 2.201).
+    const cullDifferences = [-25, -9, -12, -20, -8, -12, -19, -32, -15, -20, -18, -12];
+    const s = summarize(cullDifferences);
+    expect(s.n).toBe(12);
+    expect(s.mean).toBe(-16.8333);
+    expect(s.sd).toBe(6.9783);
+    expect(s.ci95).toEqual({ low: -21.2672, high: -12.3995 });
+  });
+
+  it("gestisce campioni vuoti, singoli e valori non finiti", () => {
+    expect(summarize([])).toEqual({ n: 0, mean: 0, sd: 0, min: 0, max: 0, ci95: null });
+    expect(summarize([5])).toEqual({ n: 1, mean: 5, sd: 0, min: 5, max: 5, ci95: null });
+    expect(summarize([Number.NaN]).ci95).toBeNull();
+
+    const withBad = summarize([
+      1, 2, Number.NaN, 4, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY,
+    ]);
+    expect(withBad.n).toBe(3);
+    expect(withBad.mean).toBe(2.3333);
+    expect(withBad.min).toBe(1);
+    expect(withBad.max).toBe(4);
+    expect(withBad.ci95).toEqual(summarize([1, 2, 4]).ci95);
+  });
+
+  it("differenze non finiti non generano un IC spurio", () => {
+    const r = pairedDifference(
+      [{ seed: 1, value: 10 }, { seed: 2, value: Number.NaN }, { seed: 3, value: 12 }],
+      [{ seed: 1, value: 5 }, { seed: 2, value: 2 }, { seed: 3, value: 7 }],
+      meta,
+    );
+    expect(r.pairs).toHaveLength(3); // la coppia anomalo resta visibile
+    expect(r.validPairs).toBe(2);
+    expect(r.ci95).not.toBeNull();
+    expect(Number.isFinite(r.ci95!.low)).toBe(true);
+    expect(Number.isFinite(r.ci95!.high)).toBe(true);
+  });
+
+  it("rifiuta gradi di liberta' non validi", () => {
+    expect(() => studentTQuantile95(0)).toThrow(/gradi di liberta/);
+    expect(() => studentTQuantile95(-1)).toThrow(/gradi di liberta/);
+    expect(() => studentTQuantile95(Number.NaN)).toThrow(/gradi di liberta/);
+    expect(() => studentTQuantile95(Number.POSITIVE_INFINITY)).toThrow(/gradi di liberta/);
   });
 });
