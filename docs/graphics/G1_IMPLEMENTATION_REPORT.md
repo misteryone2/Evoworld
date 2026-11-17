@@ -131,5 +131,52 @@ Screenshot: `screenshot.jpeg` (3D vista dall'alto) e `screenshot.jpeg` (mappa 2D
 1. Riprodurre la baseline su un checkout con git e CI, registrando commit e comandi. ✅ Fatto: clone `Evoworld-git`, commit `c35c287` (main), Node v22.14.0 portable; esiti identici al progetto caricato.
 2. Smoke visivo browser: 2D (100/600) e 3D (100/500/1500/3000) per `basso`/`medio`/`alto`, desktop + mobile, con screenshot prima/dopo. ⚠️ Parziale: fatto 3D "Completa" e 2D su desktop, senza controllo popolazione né mobile (§7).
 3. Profiling browser (Performance panel): ms/frame, p95, draw call, memoria. ⚠️ Parziale: tempi main-thread e rAF raccolti, mancano draw call e memoria.
-4. Refactor modulare G1-b e adozione descriptor con buffer riusabili (zero-alloc).
+4. Refactor modulare G1-b e adozione descriptor con buffer riusabili (zero-alloc). ✅ Refactor completato (§9); adozione descriptor nel loop caldo resta rinviata a G3.
 5. Materiali/pattern reali (G3) e ambiente (G5) con verifica visiva.
+
+## 9. G1-b — Refactor modulare di `Planet3DView` (senza cambi di comportamento)
+
+**Data:** 2026-11-17  
+**Obiettivo:** scomporre il renderer monolitico in sottosistemi riutilizzabili mantenendo **parità di API e di comportamento**. Nessuna modifica alla simulazione biologica.
+
+### 9.1 Struttura
+
+`components/simulation/Planet3DView.tsx`: **2199 → 1072 righe** (orchestratore React + effetti di setup/aggiornamento scena).
+
+Nuovi moduli in `components/simulation/planet3d/`:
+
+| Modulo | Contenuto |
+|---|---|
+| `constants.ts` | costanti condivise (`PLANET_RADIUS`, `CREATURE_BUFFER_SLACK`, `LEGS_PER_CREATURE`, `AGGRESSION_VISIBLE_THRESHOLD`, `CONE_BASE_RADIUS`) |
+| `types.ts` | `SceneRefs`, `CreatureTrack`, `HeightmapSample` |
+| `terrainTiers.ts` | tier LOD del terreno e selection per profilo qualità |
+| `sky.ts` | colori cielo, gradiente zenit/orizzonte, nuvole procedurali |
+| `sun.ts` | sole orbitante, posizione follow e extent ombre |
+| `terrainSampling.ts` | `restingRadius` (surface locale o heightmap viewport) |
+| `cameraRig.ts` | follow/free camera, drag, pan, stato follow e scratch dedicato |
+| `selectionRing.ts` | posizionamento anello di selezione |
+| `creatureInstancing.ts` | `configureInstancedMesh`, `addBellyGradient`, `updateCreatureInstances` e tutto lo scratch del loop creature |
+
+### 9.2 Decisioni
+
+- **API storica preservata**: `Planet3DView`, `CameraMode`, `SceneRefs`, `CreatureTrack`, `updateCreatureInstances`, `configureInstancedMesh`, `addBellyGradient`, `placeFollowSun`, `setSunShadowExtent`, `createCloudTexture`, `createSkyDome`, `createFollowState`, `resetFollowState`, `applyFollowDrag`, `updateFollowCamera`, `updateFreeCamera`, `panFreeCamera`, `FollowState` restano esportati da `Planet3DView.tsx` tramite re-export. Nessun chiamante (`app/page.tsx`, `CameraModeBar`, test) modificato.
+- **Nessuno stato mutabile condiviso tra moduli**: ogni modulo ha propri scratch (`THREE.Vector3`, `Matrix4`, quaternioni). In particolare `creatureInstancing.ts` ha una copia privata di `UP`, separata da quella del componente: nessun rischio di interferenza tra camera e creature.
+- **Pure code move**: nessun algoritmo, costante o soglia cambiata; `SPACE_COLOR` (vista dall'alto) resta nel componente, distinto da `SKY_COLOR` (terza persona).
+- **Nessuna dipendenza nuova**, nessun file `simulation/**` toccato, nessun formato dati cambiato.
+
+### 9.3 Verifica reale (2026-11-17, Node v22.14.0 portable)
+
+| Comando | Esito |
+|---|---|
+| `npx tsc --noEmit` | ✅ exit 0 |
+| `npx next build` | ✅ `Compiled successfully`; TypeScript OK; 3/3 pagine statiche generate |
+| Test mirati grafica (12 file, creature/descriptor/follow/animazione/LOD) | ⚠️ **184 pass, 2 fail preesistenti** su 186 (`fauna180` belly 1.08 vs 1.0, `livingBehavior` ampieze fallito anche su baseline stash) |
+| `npx vitest run` (suite completa) | ⚠️ **684 pass, 13 fail, 1 skip** su 698; baseline con stash delle modifiche G1-b: **682 pass, 15 fail, 1 skip** → differenza dentro il range flaky noto |
+| Smoke browser desktop (dev server `127.0.0.1:3101`, profilo **Completa**) | ✅ pagina caricata, canvas WebGL 1250×875 (DPR 1.25), **nessun errore console**, nessun `webglcontextlost`; tutte e tre le modalità camera (dall'alto/libera/terza persona) attivabili senza errori |
+| Smoke browser, passaggio a **Mappa 2D** | ✅ canvas `planet-canvas` 640×640 attivo, nessun errore console |
+
+**Nota sull'ambiente browser:** il primo avvio su porta 3100 ha legato solo IPv6 (`::`) e il browser ha ricevuto 502; il server è stato riavviato con `-H 127.0.0.1 -p 3101`. Durante questo smoke la finestra desktop non era visibile, quindi Chromium ha limitato `requestAnimationFrame` a ~1 fps (1016 ms/frame): **la misura non è confrontabile** con i 30 fps del §7 e non va interpretata come regressione. Per lo stesso motivo non è stato possibile acquisire nuovi screenshot.
+
+### 9.4 Stato
+
+G1-b è pronto per la review in PR #1 sul branch `graphics/g1-creature-visuals`. Restano da verificare (come in §7): carichi forzati 1500/3000 creature, build di produzione, GPU/FPS reali, mobile e confronto visivo prima/dopo a parità di seed a giudizio umano.
