@@ -13,7 +13,7 @@ Questa cartella contiene gli artefatti scientifici compressi della fase E1.2 e d
 Ogni archivio decompresso è un oggetto con:
 
 - `schema`: versione del formato (`evoworld.e1.dataset.v1`);
-- `provenance`: commit, `workingTreeDirty`, SHA-256 dei sorgenti E1.3, runtime Node/V8, timestamp ISO, nota;
+- `provenance`: commit, `workingTreeDirty`, SHA-256 dei sorgenti E1.3, runtime Node/V8, timestamp ISO, nota. `sourceSha256` è calcolato sui byte dei sorgenti con terminatori di riga **LF**, come memorizzati nel repository: su Windows con `core.autocrlf=true`, normalizzare i file a LF prima di ricalcolarlo;
 - `protocol`: scenario ID, seed, tick, `sampleEvery`, numero di corse e comando di riproduzione;
 - `configuration`: per corsa — scenario, seed, dimensioni, popolazione iniziale, setup con metadati, perturbazione, opzioni;
 - `results`: campioni grezzi per tick (senza tempi di esecuzione);
