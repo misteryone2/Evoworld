@@ -1,7 +1,8 @@
 # E1 — Metriche osservazionali
 
 **Branch:** `research/e1-ecosystem-qa`  
-**Implementazione:** `tools/e1/metrics.ts` (`sampleState()`, `accumulate()`, `sampledGeneticDistance()`, `E1TickEvents`)  
+**Fase corrente:** E1.2 (E1.0/E1.1 archiviati in `E1_VALIDATION_REPORT_E1_0.md` e `E1_VALIDATION_REPORT_E1_1.md`)  
+**Implementazione:** `tools/e1/metrics.ts` (`sampleState()`, `accumulate()`, `sampledGeneticDistance()`, `sampleGeneticPairs()`, `hash32()`, `E1TickEvents`)  
 **Principio:** ogni metrica è calcolata **solo** da dati che il motore espone già: `World.getStats()`, `world.organisms`, `world.planet.peekCell()` e i genomi presenti negli organismi. Nessun valore viene inventato, stimato da modelli esterni o letto da campi privati del motore.
 
 ---
@@ -13,7 +14,7 @@
 | `World.getStats()` | `tick`, `year`, `season`, `population`, `speciesCount`, `speciesAlive`, `speciesTotalEver`, `speciesExtinct`, `births`, `deaths`, `predationKills`, `averageGenome` | Statistiche calcolate dal motore una volta per tick. **`births/deaths/predationKills` sono per tick, non cumulativi** (`world.ts:286-305`). |
 | `world.organisms` | `id`, `speciesId`, `position`, `energy`, `age`, `genome` (tratti base) | Stato individuale vivo. È l’unica fonte per conteggi per specie, energia, età e tratti. |
 | `world.planet.peekCell(x, y)` | `vegetation`, `terrain` | Lettura read-only; restituisce la cella solo se il chunk è già materializzato, altrimenti `null`. **Non materializza chunk** (`planet.ts:282-299`). |
-| `world.planet.sampleBaseline(x, y)` | `vegetation`, `terrain` | Baseline analitica senza materializzazione. Usata solo per scegliere le condizioni iniziali di S09/S10, non per le serie temporali. |
+| `world.planet.sampleBaseline(x, y)` | `vegetation`, `terrain` | Baseline analitica senza materializzazione. Usata solo per scegliere le condizioni iniziali di S09/S10/S13/S14, su una **griglia campionata**, non per le serie temporali. |
 | `shannonDiversityIndex()` | array di popolazioni per specie | Funzione pura già presente in `lib/biodiversity.ts:14-25`. |
 | `geneticDistance(a, b)` | genomi di due organismi | Funzione pura già presente in `simulation/biology/genome.ts`. |
 
@@ -44,7 +45,12 @@ Per ogni tick \(t\):
 - **`births`** = `getStats().births` al tick \(t\).
 - **`deaths`** = `getStats().deaths` al tick \(t\). **Non include le uccisioni da predazione**, che il motore tiene in un contatore separato (`world.ts:283,302-303`).
 - **`predationKills`** = `getStats().predationKills` al tick \(t\).
-- **`birthRate`** = `births / max(1, N)`, **`deathRate`** = `deaths / max(1, N)`, **`predationPressure`** = `predationKills / max(1, N)`.
+- **`populationAtStart`** = popolazione vivo all’inizio del passo, prima di `step()` e della perturbazione.
+- **`populationAfterStep`** = popolazione dopo `step()`, prima dell’eventuale perturbazione.
+- **`eventDenominator`** = `max(1, populationAtStart)`.
+- **`birthRate`** = `births / eventDenominator`, **`deathRate`** = `deaths / eventDenominator`, **`predationPressure`** = `predationKills / eventDenominator`.
+
+Il denominatore è coerente con il momento in cui gli eventi avvengono (durante lo step, sulla popolazione di partenza), **non** con la popolazione sopravvissuta al cull: usare quest’ultima farebbe apparire tassi artificialmente alti proprio nel tick della perturbazione. `population` resta lo stato **dopo** la perturbazione per compatibilità con E1.0/E1.1; `perturbationRemoved`/`perturbationKept` quantificano il salto.
 
 L’harness accumula i tre contatori per tick in `cumulativeBirths`, `cumulativeDeaths`, `cumulativePredationKills`. `accumulate()` restituisce anche gli eventi del singolo tick (`E1TickEvents`): il runner li passa a `sampleState()` prima di eventuali perturbazioni, così i campioni al tick del cull conservano nascite/morti/uccisioni reali anche se il `World` viene ricostruito da snapshot (che azzera `lastStats`). I contatori cumulativi vivono invece nel runner, fuori dal `World`, e non possono essere azzerati dalla ricostruzione. **Non è possibile separare morte per fame da morte per vecchiaia** con i dati disponibili: servirebbe una modifica al motore, non eseguita.
 
@@ -83,7 +89,24 @@ Queste medie sono descrittive della popolazione campionata. **Non dimostrano ada
 
 ### 2.8 Distanza genetica
 
-`meanGeneticDistance` è la media di `geneticDistance()` su al più 120 coppie (o `3N` se \(N\) è piccolo), campionate con `new Random(tick + 1)`, **separato dall’RNG del mondo**. È quindi riproducibile e non perturba il corso della simulazione. È un proxy di divergenza intra-popolazione, non una misura di fitness né una prova di selezione.
+`meanGeneticDistance` è la media di `geneticDistance()` su coppie **uniche e ordinate per ID** (`i < j`): non esistono confronti di un organismo con sé stesso né coppie duplicate.
+
+- `geneticPairsTotal` = numero di coppie disponibili \(N(N-1)/2\) sugli ID distinti.
+- Se `pairsTotal <= 120`, vengono confrontate **tutte** le coppie (`geneticPairMethod = "all_pairs"`).
+- Altrimenti vengono confrontate 120 coppie con `geneticPairMethod = "coprime_stride_sample"`: lo stride è il primo intero coprimo con `pairsTotal` vicino a `pairsTotal/120`, il punto di partenza è `hash32("genetic-pairs", tick, N, ...) mod pairsTotal`. Poiché lo stride è invertibile modulo `pairsTotal`, la sequenza non ha ripetizioni.
+- L’hash FNV-1a a 32 bit dell’harness (`hash32`) è separato dall’RNG del mondo e non ne consuma lo stato.
+
+**Limiti statistici:** il campione sistematico non è un campione aleatorio e non fornisce un intervallo di confidenza valido per la distanza media; può essere sensibile a periodicità nell’ordine degli ID (che qui sono monotonicamente crescenti alla nascita). La distanza è un proxy di divergenza intra-popolazione, non una misura di fitness né una prova di selezione. `geneticPairsSampled` dichiara sempre la copertura effettiva.
+
+### 2.9 Perturbazioni e conteggi esatti
+
+S08 usa una selezione **deterministica stratificata per specie** (`planPerturbation()`): per ogni specie viene riservato `ceil(n_species / 5)` sopravvissuti (ripartizione dei resti per maior remainder, tie-break su `speciesId`), poi gli organismi sono ordinati per `hash32(tick, speciesId, id)` e per ID. L’ordine dell’array, il genoma e l’RNG del motore non influenzano la scelta. Il report `perturbationReport` contiene `populationBefore`, `populationAfter`, `removed`, `kept`, `expectedKept` e i conteggi `perSpecies`; il runner verifica che rimossi + conservati = totale e che il mondo ricostruito abbia esattamente `kept` organismi.
+
+### 2.10 Selezione spaziale degli habitat
+
+S09/S10/S13/S14 scelgono le celle con `planet.sampleBaseline()` su una **griglia regolare campionata** con passo `max(2, floor(min(width,height)/32))`, scartando l’oceano e ordinando per vegetazione (tie-break sulle coordinate). I metadati `setupInfo.habitat` dichiarano `method`, `step`, `gridSamples`, `landCandidates`, `selectedCells` e `globalExtremesClaimed: false`. **Non vengono quindi identificate le celle globalmente più ricche o più povere**: servirebbe una scansione esaustiva che l’harness non esegue.
+
+S13/S14 separano posizione e risorse: mantengono le posizioni di una griglia e sovrascrivono nello snapshot la vegetazione iniziale con i valori dell’altra griglia agli stessi indici. Il confronto 2×2 (`habitatComparison()`) calcola gli effetti di posizione a parità di vegetazione e gli effetti di risorsa a parità di posizione.
 
 ---
 
@@ -107,12 +130,15 @@ Queste medie sono descrittive della popolazione campionata. **Non dimostrano ada
 | Campo JSON | Unità | Formula / origine |
 |---|---|---|
 | `tick`, `year`, `season` | tick / anni / stagione | `getStats()` |
-| `population` | individui | `len(organisms)` |
+| `population` | individui | `len(organisms)` dopo l’eventuale perturbazione |
+| `populationAtStart`, `populationAfterStep` | individui | popolazione a inizio tick / dopo `step()` prima del cull |
+| `perturbationRemoved`, `perturbationKept` | individui | conteggi esatti del cull nel tick |
+| `eventDenominator` | individui | `max(1, populationAtStart)` |
 | `speciesCounts` | individui per `speciesId` | conteggio diretto |
 | `shannon`, `evenness` | adimensionale | Shannon ed evenness sopra |
 | `births`, `deaths`, `predationKills` | eventi/tick | `getStats()` (per tick) |
 | `cumulativeBirths`, `cumulativeDeaths`, `cumulativePredationKills` | eventi assoluti | somma dei campi per tick |
-| `birthRate`, `deathRate`, `predationPressure` | eventi/individuo/tick | conteggio / `max(1,N)` |
+| `birthRate`, `deathRate`, `predationPressure` | eventi/individuo/tick | conteggio / `eventDenominator` (pre-cull) |
 | `meanEnergy`, `energySd` | energia | media e deviazione standard di `energy` |
 | `meanAge` | tick | media di `age` |
 | `carnivoreFraction`, `herbivoreFraction` | frazione | soglia `carnivory 0.35` |
@@ -121,10 +147,12 @@ Queste medie sono descrittive della popolazione campionata. **Non dimostrano ada
 | `occupiedCellsSampled` | celle | coordinate geografiche distinte con organismo campionato |
 | `occupiedVegetation` | 0..1 circa | media `peekCell().vegetation` sulle celle distinte |
 | `occupiedLandFraction` | frazione | celle distinte non-ocean / celle distinte campionate |
-| `meanGeneticDistance` | distanza | campione deterministico con RNG separato |
+| `meanGeneticDistance` | distanza | media su coppie uniche |
+| `geneticPairsTotal`, `geneticPairsSampled` | coppie | disponibili / effettivamente confrontate |
+| `geneticPairMethod` | metodo | `all_pairs` o `coprime_stride_sample` |
 
 ---
 
 ## 5. Reproducibilità
 
-Ogni riga del JSON di output contiene `seed`, dimensioni del mondo, popolazione iniziale, `setup`, `perturbation`, opzioni, tick completati, `extinctAt`, tempo trascorso e l’intera serie di campioni. Con gli stessi seed e gli stessi parametri d’ambiente, `tools/e1/runner.ts` produce la stessa serie; questo è verificato dal test deterministico in `tests/e1/e1_metrics.test.ts`.
+Ogni riga del JSON di output contiene `seed`, dimensioni del mondo, popolazione iniziale, `setup`, `setupInfo`, `perturbation`, `perturbationReport`, opzioni, tick completati, `extinctAt`, tempo trascorso e l’intera serie di campioni. Con gli stessi seed e gli stessi parametri d’ambiente, `tools/e1/runner.ts` produce la stessa serie; questo è verificato dai test in `tests/e1/e1_metrics.test.ts` e `tests/e1/e1_integration.test.ts`. `stripVariableData()` rimuove solo tempi/timestamp, permettendo il confronto byte-per-valore dell’output scientifico a parità di condizioni. La destinazione è risolta da `tools/e1/experiment.ts`: `E1_OUT` se impostato, altrimenti `join(tmpdir(), "e1-results.json")`; le directory mancanti vengono create.

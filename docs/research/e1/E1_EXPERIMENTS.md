@@ -1,12 +1,12 @@
 # E1 — Scenari sperimentali riproducibili
 
-Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.ts`, `World.step()` e seed espliciti. **`E1_TICKS`, `E1_LONG_TICKS`, `E1_SEEDS`, `E1_SAMPLE_EVERY` controllano durata e repliche**; ogni scenario dichiara dimensioni del mondo, popolazione iniziale e condizioni iniziali. Nessuna regola biologica viene modificata: le condizioni iniziali sono scritte nello snapshot prima del primo step; la perturbazione S08 è una rimozione esplicita di organismi a un tick stabilito.
+Tutti gli scenari usano `tools/e1/runner.ts`, `World.step()` e seed espliciti. La fase E1.0/E1.1 usa `scripts/e1_ecosystem.experiment.ts` con **`E1_TICKS`, `E1_LONG_TICKS`, `E1_SEEDS`, `E1_SAMPLE_EVERY`**; la fase E1.2 usa `scripts/e1_ecosystem.phase2.experiment.ts` con **`E1_PHASE2_SEEDS`, `E1_PHASE2_TICKS`, `E1_PHASE2_SAMPLE_EVERY`, `E1_PHASE2_OUT`**. Ogni scenario dichiara dimensioni del mondo, popolazione iniziale e condizioni iniziali. Nessuna regola biologica viene modificata: le condizioni iniziali sono scritte nello snapshot prima del primo step; la perturbazione S08 è una rimozione esplicita di organismi a un tick stabilito, con selezione deterministica stratificata per specie.
 
 > `TICKS_PER_YEAR = 400`: 900 tick ≈ 2.25 anni simulati; 2700 tick ≈ 6.75 anni.
 
 ## Variabili monitorate in tutti gli scenari
 
-`population`, `speciesAlive/TotalEver/Extinct`, `speciesCounts`, Shannon `H` e evenness, `births/deaths/predationKills` per tick e cumulativi, tassi per capita, `meanEnergy`, `meanAge`, frazione carnivori/erbivori, medie dei tratti ereditari (carnivory, size, speed, metabolism, vision, evasion, huntingSkill), vegetazione media nelle **celle geografiche distinte** (`organismsSampled` vs `occupiedCellsSampled`), distanza genetica media campionata. Definizioni in `E1_METRICS.md`.
+`population` (post-perturbazione), `populationAtStart`/`populationAfterStep`, `perturbationRemoved`/`perturbationKept`, `speciesAlive/TotalEver/Extinct`, `speciesCounts`, Shannon `H` e evenness, `births/deaths/predationKills` per tick e cumulativi, tassi per capita con denominatore pre-perturbazione, `meanEnergy`, `meanAge`, frazione carnivori/erbivori, medie dei tratti ereditari, vegetazione media nelle **celle geografiche distinte** (`organismsSampled` vs `occupiedCellsSampled`), distanza genetica su coppie uniche con copertura dichiarata. Definizioni in `E1_METRICS.md`.
 
 ---
 
@@ -82,10 +82,11 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 - **Anomalia:** popolazione che resta bloccata a pochi individui; nascite nulle nonostante energia media alta.
 - **Successo:** popolazione dopo il cull che torna a crescere in modo significativo entro 450 tick.
 - **Controllo E1.1:** il runner verifica che `advancedGenome`/`geneEffects` sopravvivano a `World.fromSnapshot()` e conserva gli eventi del tick e i contatori cumulativi fuori dal `World` ricostruito; il cull non altera quindi le misure del tick 450.
+- **Controllo E1.2:** la selezione non usa più l’indice dell’array ma `hash32(tick, speciesId, id)` con quota per specie; il report dichiara rimossi/conservati totali e per specie, e i tassi del tick usano la popolazione pre-cull.
 
 ## S09 — Habitat povero
 
-- **Condizioni:** 150 fondatori riposizionati nelle 24 celle con vegetazione baseline più bassa (non ocean); 128×128.
+- **Condizioni:** 150 fondatori riposizionati nelle 24 celle con vegetazione baseline più bassa **nella griglia campionata** (non ocean, `globalExtremesClaimed: false`); 128×128.
 - **Variabili:** vegetazione occupata, energia, popolazione, mortalità.
 - **Durata:** 900 tick.
 - **Atteso:** minore guadagno energetico e maggiore declino rispetto a S10.
@@ -94,7 +95,7 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 
 ## S10 — Habitat ricco
 
-- **Condizioni:** come S09 ma nelle 24 celle con vegetazione baseline più alta.
+- **Condizioni:** come S09 ma nelle 24 celle con vegetazione baseline più alta della stessa griglia campionata.
 - **Variabili:** come S09.
 - **Durata:** 900 tick.
 - **Atteso:** crescita o sopravvivenza maggiore rispetto a S09.
@@ -119,6 +120,22 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 - **Anomalia:** speciazione in ogni seed indipendentemente da geografia/genetica; oppure nessuna variazione.
 - **Successo:** almeno un evento documentato oppure conclusione esplicita “non osservato in questi semi”; mai inferito.
 
+## S13 — Controllo habitat: posizione povera, risorse ricche
+
+- **Condizioni:** stesse posizioni campionate di S09, ma vegetazione iniziale sovrascritta con i valori della griglia ricca di S10 (stessi indici di selezione); 128×128/150.
+- **Variabili:** come S09/S10, più `setupInfo.habitat.resourceCells`.
+- **Durata:** 900 tick.
+- **Atteso:** isola l’effetto della risorsa a parità di posizione.
+- **Successo:** differenza misurabile S13 vs S09 e confronto 2×2 con S10/S14.
+
+## S14 — Controllo habitat: posizione ricca, risorse povere
+
+- **Condizioni:** stesse posizioni campionate di S10, ma vegetazione iniziale sovrascritta con i valori della griglia povera di S09.
+- **Variabili:** come S13.
+- **Durata:** 900 tick.
+- **Atteso:** isola l’effetto della posizione a parità di vegetazione iniziale.
+- **Successo:** differenza misurabile S14 vs S10 e confronti incrociati con S09/S13.
+
 ---
 
 ## Esecuzione
@@ -131,4 +148,15 @@ $env:E1_OUT="C:\Users\matti\AppData\Local\Temp\e1-results-e1.1.json"
 npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.experiment.ts
 ```
 
-Per eseguire un solo scenario: `E1_SCENARIOS=S06_predator_prey_mixed`. L’output JSON contiene per ogni run: seed, condizioni, tick completati, `extinctAt`, tempo di esecuzione e l’intera serie di campioni. Il percorso predefinito è portabile (`join(tmpdir(), "e1-results.json")`); `E1_OUT` continua a sovrascriverlo.
+Per eseguire un solo scenario della fase 1: `E1_SCENARIOS=S06_predator_prey_mixed`. L’output JSON contiene per ogni run: seed, condizioni, tick completati, `extinctAt`, tempo di esecuzione e l’intera serie di campioni. Il percorso predefinito è portabile (`join(tmpdir(), "e1-results.json")`); `E1_OUT` continua a sovrascriverlo.
+
+### Fase E1.2 — protocollo multi-seed
+
+```powershell
+$env:E1_PHASE2_SEEDS="1,2,3,4,5,6,7,8,9,10,11,12"
+$env:E1_PHASE2_TICKS="900"; $env:E1_PHASE2_SAMPLE_EVERY="50"
+$env:E1_PHASE2_OUT="C:\Users\matti\AppData\Local\Temp\e1-phase2-results.json"
+npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.phase2.experiment.ts
+```
+
+Il protocollo esegue 12 seed × 7 scenari (S01, S06, S08, S09, S10, S13, S14) = 84 corse. L’output JSON separa `scientificReport` (senza tempi), `results` (senza `elapsedMs`) e `timing`. Il report contiene media, deviazione standard campionaria, min/max, IC95 con t di Student, distribuzione delle popolazioni finali, tasso di estinzione, frequenza di speciazione, confronto habitat 2×2 e confronto con/senza perturbazione. I percorsi sono risolti da `tools/e1/experiment.ts`; `E1_PHASE2_OUT` / `E1_OUT` sovrascrivono il predefinito portabile.

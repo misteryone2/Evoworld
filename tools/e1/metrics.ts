@@ -8,7 +8,6 @@
  */
 import type { Organism, Season } from "../../types";
 import type { World } from "../../simulation/core/world";
-import { Random } from "../../simulation/core/random";
 import { geneticDistance } from "../../simulation/biology/genome";
 import { shannonDiversityIndex } from "../../lib/biodiversity";
 
@@ -30,11 +29,42 @@ export interface E1TickEvents {
   predationKills: number;
 }
 
+/**
+ * Contesto temporale del campione: separa gli eventi del tick dallo stato
+ * osservato dopo l'eventuale perturbazione. `populationAtStart` è il numero di
+ * organismi vivo all'inizio del passo ed è il denominatore di tutti i tassi.
+ */
+export interface E1SampleContext {
+  populationAtStart: number;
+  populationAfterStep: number;
+  perturbationRemoved: number;
+  perturbationKept: number;
+}
+
+export type GeneticPairMethod = "all_pairs" | "coprime_stride_sample";
+
+export interface GeneticDistanceSample {
+  mean: number;
+  pairsTotal: number;
+  pairsSampled: number;
+  method: GeneticPairMethod;
+}
+
 export interface E1Sample {
   tick: number;
   year: number;
   season: Season;
   population: number;
+  /** Popolazione all'inizio del tick, prima di step() e della perturbazione. */
+  populationAtStart: number;
+  /** Popolazione dopo step(), prima dell'eventuale perturbazione. */
+  populationAfterStep: number;
+  /** Organismi rimossi dalla perturbazione in questo tick (0 se assente). */
+  perturbationRemoved: number;
+  /** Organismi conservati dopo la perturbazione in questo tick. */
+  perturbationKept: number;
+  /** Denominatore usato per birthRate/deathRate/predationPressure. */
+  eventDenominator: number;
   speciesAlive: number;
   speciesExtinct: number;
   speciesTotalEver: number;
@@ -70,8 +100,13 @@ export interface E1Sample {
   organismsSampled: number;
   /** Celle geografiche distinte con almeno un organismo campionato (deduplicate per coordinata). */
   occupiedCellsSampled: number;
-  /** Distanza genetica media tra coppie di organismi campionati (RNG separato). */
+  /** Distanza genetica media tra coppie di organismi campionati. */
   meanGeneticDistance: number;
+  /** Coppie totali disponibili e coppie effettivamente confrontate. */
+  geneticPairsTotal: number;
+  geneticPairsSampled: number;
+  /** Metodo di campionamento: enumerazione completa o stride coprimo. */
+  geneticPairMethod: GeneticPairMethod;
 }
 
 function mean(values: number[]): number {
@@ -95,31 +130,139 @@ function wrapCellCoord(value: number, size: number): number {
   return wrapped < 0 ? wrapped + size : wrapped;
 }
 
-/** Distanza genetica media su al più `pairs` coppie, con RNG dedicato (mai quello del mondo). */
-export function sampledGeneticDistance(organisms: Organism[], tick: number, pairs = 120): number {
-  if (organisms.length < 2) return 0;
-  const rng = new Random(tick + 1);
-  const n = Math.min(pairs, organisms.length * 3);
-  let total = 0;
-  for (let k = 0; k < n; k++) {
-    const a = organisms[rng.intRange(0, organisms.length - 1)];
-    const b = organisms[rng.intRange(0, organisms.length - 1)];
-    total += geneticDistance(a.genome, b.genome);
+/**
+ * Hash FNV-1a a 32 bit, usato solo per scelte deterministiche dell'harness.
+ * Non è crittografico e non consuma l'RNG del motore.
+ */
+export function hash32(...parts: Array<string | number>): number {
+  let h = 0x811c9dc5;
+  const text = parts.join("|");
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
   }
-  return total / n;
+  return h >>> 0;
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y) {
+    const r = x % y;
+    x = y;
+    y = r;
+  }
+  return x;
+}
+
+/**
+ * Converte un indice piatto (0..n(n-1)/2-1) nella coppia (i,j) con i<j,
+ * enumerando le coppie per primo indice crescente.
+ */
+function pairAt(flat: number, n: number): [number, number] {
+  let lo = 0;
+  let hi = n - 2;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    const before = (mid * (2 * n - mid - 1)) / 2;
+    if (before <= flat) lo = mid;
+    else hi = mid - 1;
+  }
+  const i = lo;
+  const before = (i * (2 * n - i - 1)) / 2;
+  return [i, i + 1 + (flat - before)];
+}
+
+/**
+ * Coppie di ID uniche e ordinate per confronto genetico.
+ *
+ * - ID duplicati vengono eliminati e ordinati: ogni coppia compare una sola volta.
+ * - Se il numero totale di coppie è ≤ `maxPairs`, vengono usate TUTTE le coppie.
+ * - Altrimenti viene scelto uno stride coprimo con il numero totale di coppie e
+ *   un punto di partenza deterministico (hash di tick e dimensione):
+ *   la sequenza `(start + k*stride) mod pairsTotal` non si ripete finché k < pairsTotal.
+ *
+ * Il metodo è riproducibile e non tocca l'RNG del mondo. Il campione sistematico
+ * non è uno stimatore aleatorio: copre l'intera popolazione con passo costante,
+ * ma può essere sensibile a pattern periodici nell'ordine degli ID.
+ */
+export function sampleGeneticPairs(ids: number[], tick: number, maxPairs = 120): Array<[number, number]> {
+  const sorted = Array.from(new Set(ids)).sort((a, b) => a - b);
+  const n = sorted.length;
+  if (n < 2) return [];
+  const pairsTotal = (n * (n - 1)) / 2;
+  const limit = Math.max(1, Math.min(maxPairs, pairsTotal));
+  const pairs: Array<[number, number]> = [];
+
+  if (pairsTotal <= limit) {
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) pairs.push([sorted[i], sorted[j]]);
+    }
+    return pairs;
+  }
+
+  let stride = Math.max(1, Math.floor(pairsTotal / limit));
+  while (gcd(stride, pairsTotal) !== 1) stride++;
+  const start = hash32("genetic-pairs", tick, n, ids.length) % pairsTotal;
+  for (let k = 0; k < limit; k++) {
+    const [i, j] = pairAt((start + k * stride) % pairsTotal, n);
+    pairs.push([sorted[i], sorted[j]]);
+  }
+  return pairs;
+}
+
+/** Distanza genetica media su coppie uniche, con metodo e copertura espliciti. */
+export function sampledGeneticDistance(
+  organisms: Organism[],
+  tick: number,
+  maxPairs = 120,
+): GeneticDistanceSample {
+  const ids = organisms.map((o) => o.id);
+  const distinctCount = new Set(ids).size;
+  const pairsTotal = Math.max(0, (distinctCount * (distinctCount - 1)) / 2);
+  const pairs = sampleGeneticPairs(ids, tick, maxPairs);
+  if (!pairs.length) {
+    return { mean: 0, pairsTotal, pairsSampled: 0, method: "all_pairs" };
+  }
+  const byId = new Map(organisms.map((o) => [o.id, o]));
+  let total = 0;
+  for (const [a, b] of pairs) {
+    total += geneticDistance(byId.get(a)!.genome, byId.get(b)!.genome);
+  }
+  return {
+    mean: total / pairs.length,
+    pairsTotal,
+    pairsSampled: pairs.length,
+    method: pairs.length === pairsTotal ? "all_pairs" : "coprime_stride_sample",
+  };
 }
 
 /**
  * Campiona lo stato corrente. `counters` è lo stato cumulativo mantenuto dal
  * runner: i campi `births/deaths/predationKills` di getStats() sono PER TICK.
+ *
+ * `tickEvents` sono gli eventi del passo appena eseguito, catturati prima di una
+ * perturbazione. `context` identifica la popolazione a inizio tick, dopo lo step
+ * e dopo l'eventuale cull: i tassi usano sempre la popolazione a inizio tick.
  */
-export function sampleState(world: World, counters: E1Counters, tickEvents?: E1TickEvents): E1Sample {
+export function sampleState(
+  world: World,
+  counters: E1Counters,
+  tickEvents?: E1TickEvents,
+  context?: E1SampleContext,
+): E1Sample {
   const stats = world.getStats();
+  const organisms = world.organisms;
+  const n = organisms.length;
+  const ctx: E1SampleContext = context ?? {
+    populationAtStart: n,
+    populationAfterStep: n,
+    perturbationRemoved: 0,
+    perturbationKept: n,
+  };
   // Dopo una perturbazione il World viene ricostruito da snapshot e i contatori
   // per tick di lastStats sono zero: usiamo gli eventi catturati prima del cull.
   const events = tickEvents ?? stats;
-  const organisms = world.organisms;
-  const n = organisms.length;
 
   const speciesCounts: Record<number, number> = {};
   for (const o of organisms) speciesCounts[o.speciesId] = (speciesCounts[o.speciesId] ?? 0) + 1;
@@ -153,12 +296,18 @@ export function sampleState(world: World, counters: E1Counters, tickEvents?: E1T
   const vegetationSum = sampledCells.reduce((sum, c) => sum + c.vegetation, 0);
   const land = sampledCells.reduce((count, c) => count + (c.land ? 1 : 0), 0);
 
-  const pop = Math.max(1, n);
+  const denominator = Math.max(1, ctx.populationAtStart);
+  const genetic = sampledGeneticDistance(organisms, stats.tick);
   return {
     tick: stats.tick,
     year: stats.year,
     season: stats.season,
     population: n,
+    populationAtStart: ctx.populationAtStart,
+    populationAfterStep: ctx.populationAfterStep,
+    perturbationRemoved: ctx.perturbationRemoved,
+    perturbationKept: ctx.perturbationKept,
+    eventDenominator: denominator,
     speciesAlive: stats.speciesAlive,
     speciesExtinct: stats.speciesExtinct,
     speciesTotalEver: stats.speciesTotalEver,
@@ -171,9 +320,9 @@ export function sampleState(world: World, counters: E1Counters, tickEvents?: E1T
     cumulativeBirths: counters.births,
     cumulativeDeaths: counters.deaths,
     cumulativePredationKills: counters.predationKills,
-    birthRate: round(events.births / pop, 5),
-    deathRate: round(events.deaths / pop, 5),
-    predationPressure: round(events.predationKills / pop, 5),
+    birthRate: round(events.births / denominator, 5),
+    deathRate: round(events.deaths / denominator, 5),
+    predationPressure: round(events.predationKills / denominator, 5),
     meanEnergy: round(mean(energies)),
     energySd: round(sd(energies)),
     meanAge: round(mean(organisms.map((o) => o.age))),
@@ -190,7 +339,10 @@ export function sampleState(world: World, counters: E1Counters, tickEvents?: E1T
     occupiedLandFraction: round(distinctCells ? land / distinctCells : 0),
     organismsSampled,
     occupiedCellsSampled: distinctCells,
-    meanGeneticDistance: round(sampledGeneticDistance(organisms, stats.tick)),
+    meanGeneticDistance: round(genetic.mean),
+    geneticPairsTotal: genetic.pairsTotal,
+    geneticPairsSampled: genetic.pairsSampled,
+    geneticPairMethod: genetic.method,
   };
 }
 

@@ -6,10 +6,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { createWorld, runScenario, type ScenarioSpec } from "../../tools/e1/runner";
-import { sampleState, accumulate } from "../../tools/e1/metrics";
-import { applyPerturbation } from "../../tools/e1/initialConditions";
-import { buildScenarios } from "../../tools/e1/scenarios";
+import { createWorld, createWorldWithInfo, runScenario, type ScenarioSpec } from "../../tools/e1/runner";
+import { hash32, sampleGeneticPairs, sampledGeneticDistance, sampleState, accumulate } from "../../tools/e1/metrics";
+import { applyPerturbation, applyPerturbationWithReport, planPerturbation } from "../../tools/e1/initialConditions";
+import { buildPhase2Scenarios, buildScenarios } from "../../tools/e1/scenarios";
 
 const base: ScenarioSpec = {
   id: "TEST",
@@ -169,11 +169,164 @@ describe("E1 harness — coerenza delle metriche", () => {
     expect(a.samples.map((s) => s.population)).not.toEqual(b.samples.map((s) => s.population));
   });
 
-  it("lo script usa una destinazione temporanea portabile", () => {
-    const source = readFileSync(resolve(process.cwd(), "scripts/e1_ecosystem.experiment.ts"), "utf8");
-    expect(source).toContain('from "node:os"');
-    expect(source).toContain("tmpdir()");
-    expect(source).toContain("process.env.E1_OUT");
-    expect(source).not.toMatch(/C:[\\/]Users/i);
+  it("la destinazione predefinita è portabile e centralizzata", () => {
+    const helper = readFileSync(resolve(process.cwd(), "tools/e1/experiment.ts"), "utf8");
+    expect(helper).toContain('from "node:os"');
+    expect(helper).toContain("tmpdir()");
+    expect(helper).toContain("e1-results.json");
+    expect(helper).not.toMatch(/C:[\\/]Users/i);
+    for (const script of ["scripts/e1_ecosystem.experiment.ts", "scripts/e1_ecosystem.phase2.experiment.ts"]) {
+      const source = readFileSync(resolve(process.cwd(), script), "utf8");
+      expect(source).toContain("resolveOutputPath");
+      expect(source).not.toMatch(/C:[\\/]Users/i);
+    }
+  });
+
+  it("hash32 è deterministico e non usa casualità", () => {
+    expect(hash32(11, 7, 42)).toBe(hash32(11, 7, 42));
+    expect(hash32(11, 7, 42)).not.toBe(hash32(11, 7, 43));
+    expect(hash32("tick", 1)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("le coppie genetiche escludono sé stessi e duplicati, usando tutte le coppie se piccole", () => {
+    expect(sampleGeneticPairs([5], 11)).toEqual([]);
+    expect(sampleGeneticPairs([5, 5], 11)).toEqual([]);
+    const pairs = sampleGeneticPairs([5, 1, 5, 3], 11, 120);
+    expect(pairs).toEqual([[1, 3], [1, 5], [3, 5]]);
+    expect(pairs.every(([a, b]) => a < b)).toBe(true);
+    expect(new Set(pairs.map((p) => p.join(","))).size).toBe(pairs.length);
+  });
+
+  it("il campionamento genetico grande è deterministico e senza ripetizioni", () => {
+    const ids = Array.from({ length: 40 }, (_, i) => i + 1);
+    const a = sampleGeneticPairs(ids, 11, 10);
+    const b = sampleGeneticPairs(ids, 11, 10);
+    expect(a).toEqual(b);
+    expect(a).toHaveLength(10);
+    expect(new Set(a.map((p) => p.join(","))).size).toBe(10);
+    expect(a.every(([x, y]) => x < y)).toBe(true);
+    expect(sampleGeneticPairs(ids, 12, 10)).not.toEqual(a);
+
+    const genetic = sampledGeneticDistance(createWorld(base).organisms, 11, 120);
+    expect(genetic.pairsSampled).toBeLessThanOrEqual(genetic.pairsTotal);
+    expect(Number.isFinite(genetic.mean)).toBe(true);
+    expect(["all_pairs", "coprime_stride_sample"]).toContain(genetic.method);
+  });
+
+  it("i campioni riportano coppie totali/campionate e la popolazione vuota è sicura", () => {
+    const world = createWorld(base);
+    const small = sampleState(world, { ...zeroCounters });
+    expect(small.geneticPairsTotal).toBe((world.organisms.length * (world.organisms.length - 1)) / 2);
+    expect(small.geneticPairsSampled).toBe(120);
+    expect(small.geneticPairMethod).toBe("coprime_stride_sample");
+
+    const exhaustive = sampledGeneticDistance(world.organisms, 11, 1000);
+    expect(exhaustive.pairsSampled).toBe(exhaustive.pairsTotal);
+    expect(exhaustive.method).toBe("all_pairs");
+
+    world.organisms = [];
+    const empty = sampledGeneticDistance(world.organisms, 1);
+    expect(empty.pairsTotal).toBe(0);
+    expect(empty.pairsSampled).toBe(0);
+    expect(empty.mean).toBe(0);
+  });
+
+  it("S08 conserva eventi del tick e usa il denominatore pre-cull", () => {
+    const opts = { ...base, ticks: 8, sampleEvery: 1 };
+    const plain = runScenario(opts);
+    const culled = runScenario({ ...opts, perturbation: { atTick: 4, kind: "cull80" } });
+    const plainAt4 = plain.samples.find((s) => s.tick === 4)!;
+    const cullAt4 = culled.samples.find((s) => s.tick === 4)!;
+
+    expect(cullAt4.populationAtStart).toBe(plainAt4.populationAtStart);
+    expect(cullAt4.populationAfterStep).toBe(plainAt4.populationAfterStep);
+    expect(cullAt4.eventDenominator).toBe(Math.max(1, cullAt4.populationAtStart));
+    expect(cullAt4.birthRate).toBe(plainAt4.birthRate);
+    expect(cullAt4.deathRate).toBe(plainAt4.deathRate);
+    expect(cullAt4.predationPressure).toBe(plainAt4.predationPressure);
+    expect(cullAt4.perturbationRemoved).toBeGreaterThan(0);
+    expect(cullAt4.perturbationKept).toBe(cullAt4.population);
+    expect(cullAt4.populationAfterStep - cullAt4.perturbationRemoved).toBe(cullAt4.population);
+    expect(culled.perturbationReport).not.toBeNull();
+    expect(culled.perturbationReport!.removed).toBe(cullAt4.perturbationRemoved);
+    expect(culled.perturbationReport!.kept).toBe(cullAt4.perturbationKept);
+    expect(culled.perturbationReport!.populationBefore).toBe(cullAt4.populationAfterStep);
+  });
+
+  it("il cull è stratificato, esatto e indipendente da ordine, genoma e RNG", () => {
+    const world = createWorld({ ...base, setup: "mixed", population: 40 });
+    const before = world.toSnapshot().randomState;
+    const organisms = world.organisms.map((o, i) => ({
+      ...o,
+      id: i + 100,
+      speciesId: i % 2 === 0 ? 1 : 2,
+      position: { ...o.position },
+      home: { ...o.home },
+      memory: null,
+    }));
+    const plan = planPerturbation(organisms, "cull80", 450);
+    const reversed = planPerturbation(organisms.slice().reverse(), "cull80", 450);
+    const changedGenome = planPerturbation(
+      organisms.map((o) => ({ ...o, genome: { ...o.genome, carnivory: o.speciesId === 1 ? 0.6 : 0.05 } })),
+      "cull80",
+      450,
+    );
+
+    expect(plan.report.expectedKept).toBe(Math.ceil(organisms.length / 5));
+    expect(plan.kept.length + plan.removed.length).toBe(organisms.length);
+    expect(plan.report.perSpecies.reduce((s, p) => s + p.kept, 0)).toBe(plan.kept.length);
+    expect(plan.report.perSpecies.every((p) => p.kept === Math.ceil(p.before / 5))).toBe(true);
+    expect(reversed.kept.map((o) => o.id).sort()).toEqual(plan.kept.map((o) => o.id).sort());
+    expect(changedGenome.kept.map((o) => o.id)).toEqual(plan.kept.map((o) => o.id));
+
+    const applied = applyPerturbationWithReport(world, "cull80", 450);
+    expect(applied.report.kept).toBe(applied.world.organisms.length);
+    expect(applied.world.toSnapshot().randomState).toBe(before);
+  });
+
+  it("su più tick il cull non favorisce sistematicamente un gruppo genetico", () => {
+    const source = createWorld(base);
+    const organisms = source.organisms.map((o, i) => ({
+      ...o,
+      id: i + 1,
+      speciesId: 1,
+      genome: { ...o.genome, carnivory: i % 2 === 0 ? 0.05 : 0.6 },
+      position: { ...o.position },
+      home: { ...o.home },
+      memory: null,
+    }));
+    let keptA = 0;
+    let keptB = 0;
+    const totalPerGroup = 20 * 60;
+    for (let tick = 0; tick < 60; tick++) {
+      for (const o of planPerturbation(organisms, "cull80", tick).kept) {
+        if (o.genome.carnivory === 0.05) keptA++;
+        else keptB++;
+      }
+    }
+    expect(Math.abs(keptA / totalPerGroup - keptB / totalPerGroup)).toBeLessThan(0.15);
+  });
+
+  it("la selezione dell'habitat dichiara il campionamento e i controlli scambiati", () => {
+    const poor = createWorldWithInfo({ ...base, setup: "poorHabitat" });
+    const rich = createWorldWithInfo({ ...base, setup: "richHabitat" });
+    expect(poor.info.habitat?.method).toBe("sampled_regular_grid");
+    expect(poor.info.habitat?.globalExtremesClaimed).toBe(false);
+    expect(poor.info.habitat?.selectedCells).toHaveLength(24);
+    expect(poor.info.habitat!.gridSamples).toBeGreaterThan(24);
+    expect(rich.info.habitat?.globalExtremesClaimed).toBe(false);
+
+    const swapped = createWorldWithInfo({ ...base, setup: "poorPositionRichResources" });
+    const habitat = swapped.info.habitat!;
+    expect(habitat.resourceCells).toHaveLength(24);
+    expect(habitat.selectedCells).toHaveLength(24);
+    expect(habitat.meanResourceVegetation).toBeGreaterThan(habitat.meanSelectedVegetation);
+    habitat.selectedCells.forEach((cell, i) => {
+      expect(swapped.world.planet.getCell(cell.x, cell.y).vegetation).toBeCloseTo(habitat.resourceCells![i].vegetation, 5);
+    });
+
+    const phase2 = buildPhase2Scenarios({ ticks: 4, sampleEvery: 1, seeds: [11, 12] });
+    expect(phase2).toHaveLength(14);
+    expect(new Set(phase2.map((s) => s.id)).size).toBe(7);
   });
 });
