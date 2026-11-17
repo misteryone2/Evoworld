@@ -18,6 +18,8 @@ Audit scientifico **del codice effettivamente eseguito** del motore biologico/ec
 | `E1_VALIDATION_REPORT_E1_1.md` | Report E1.1 archiviato (24 corse, seed 11/12) |
 | `E1_1_HARDENING_REPORT.md` | Correzioni E1.1, file modificati, test eseguiti, anomalie aperte, compatibilità con `main` `db86444` |
 | `E1_2_SCIENTIFIC_REFINEMENT_REPORT.md` | Correzioni metodologiche E1.2, comandi, seed, durate, esiti e confronto con `main` |
+| `E1_3_SCIENTIFIC_INTEGRITY_REPORT.md` | Correzione spaziale, statistiche appaiate, dataset riproducibile e confronto prima/dopo |
+| `datasets/` | Dataset E1.2/E1.3 compressi con manifest SHA-256 e istruzioni di riproduzione |
 | `scripts/e1_ecosystem.experiment.ts` | Harness fase 1 (usato con `vitest.experiment.config.ts`), output predefinito in `os.tmpdir()` |
 | `scripts/e1_ecosystem.phase2.experiment.ts` | Harness fase E1.2 multi-seed con report statistico |
 | `tools/e1/README.md` | Istruzioni d’uso degli strumenti indipendenti |

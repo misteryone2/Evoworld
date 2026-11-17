@@ -319,14 +319,31 @@ export function applySetup(world: World, kind: SetupKind): World {
 /**
  * Piano di cull deterministico e stratificato per specie.
  *
- * - Per ogni specie si riserva `ceil(n_species / keepEvery)` sopravvissuti, con
- *   ripartizione dei resti per maior remainder (tie-break: speciesId crescente).
- * - Entro ogni specie gli organismi sono ordinati per hash(tick, speciesId, id),
- *   poi per id: l'ordine dell'array e l'RNG del motore non influenzano la scelta.
- * - Il conteggio rimosso/conservato è esatto per costruzione e verificato.
- * - L'hash non usa alcun dato del genoma: non può favorire sistematicamente un
- *   gruppo genetico; la stratificazione garantisce inoltre che ogni specie
- *   conservi la propria quota.
+ * Quota TOTALE (non per specie): vengono conservati esattamente
+ * `ceil(N / keepEvery)` organismi, dove `N` è la popolazione complessiva e
+ * `keepEvery` è 5 per `cull80` (20 per `cull95`).
+ *
+ * Ripartizione per specie — metodo dei maggiori resti (largest remainder):
+ *  1. quota base di ogni specie: `floor(n_species / keepEvery)`;
+ *  2. i seggi ancora disponibili fino a `ceil(N / keepEvery)` sono assegnati
+ *     alle specie con il resto `n_species / keepEvery` più grande, in ordine
+ *     decrescente di resto e con tie-break su `speciesId` crescente;
+ *  3. ogni assegnazione è limitata da `n_species` (una specie non può conservare
+ *     più organismi di quelli che possiede).
+ *
+ * Di conseguenza NON è vero che ogni specie conserva sempre
+ * `ceil(n_species / keepEvery)`: una specie può conservare meno o più di quella
+ * quantità, a seconda dei resti delle altre specie. Esempio con `keepEvery = 5`
+ * e due specie da 1 e 9 organismi: `ceil(10/5) = 2` sopravvissuti in totale,
+ * quote base 0 e 1, un seggio residuo al resto maggiore (0.8 della specie da 9):
+ * la specie da 1 conserva 0 organismi (non `ceil(1/5) = 1`) e quella da 9 ne
+ * conserva 2.
+ *
+ * Entro ogni specie gli organismi sono ordinati per hash(tick, speciesId, id),
+ * poi per id: l'ordine dell'array e l'RNG del motore non influenzano la scelta.
+ * L'hash non usa alcun dato del genoma: non può favorire sistematicamente un
+ * gruppo genetico. Il conteggio rimosso/conservato è esatto per costruzione e
+ * verificato (nessun organismo duplicato o perso).
  */
 export function planPerturbation(organisms: Organism[], kind: PerturbationKind, tick: number): PerturbationPlan {
   if (kind === "none") {

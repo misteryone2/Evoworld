@@ -124,9 +124,20 @@ function round(value: number, digits = 4): number {
   return Math.round(value * f) / f;
 }
 
-/** Coordinata di cella con lo stesso wrap toroidale usato da Planet.peekCell(). */
-function wrapCellCoord(value: number, size: number): number {
-  const wrapped = Math.round(value) % size;
+/**
+ * Coordinata di cella identica a quella calcolata da `Planet.wrapCoord()`:
+ * `MathFloor(value) % size`, con wrap dei negativi in [0, size).
+ *
+ * Il motore indicizza le celle con `Math.floor` (`planet.ts:8-12`), usato sia da
+ * `getCell()` sia da `peekCell()`. Usare `Math.round` faceva leggere a E1 la
+ * cella successiva per ogni posizione frazionaria — in particolare per i centri
+ * di cella `(x + 0.5, y + 0.5)` assegnati dagli scenari S09/S10/S13/S14.
+ *
+ * Esportata per i test di regressione che confrontano la cella individuata da
+ * E1 con quella effettivamente restituita da `peekCell()`.
+ */
+export function wrapCellCoord(value: number, size: number): number {
+  const wrapped = Math.floor(value) % size;
   return wrapped < 0 ? wrapped + size : wrapped;
 }
 

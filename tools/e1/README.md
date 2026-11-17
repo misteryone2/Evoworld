@@ -6,14 +6,16 @@ Questa cartella contiene solo helper di misurazione e orchestrazione per gli esp
 
 | File | Ruolo |
 |---|---|
-| `metrics.ts` | `sampleState()` / `accumulate()`; coppie genetiche uniche (`sampleGeneticPairs`, `hash32`), eventi pre/post perturbazione, vegetazione su celle distinte |
-| `initialConditions.ts` | Setup dichiarativi (erbivori, carnivori, misto, habitat campionato, S13/S14 a risorse scambiate) e cull deterministico stratificato con report esatto |
+| `metrics.ts` | `sampleState()` / `accumulate()`; `wrapCellCoord()` allineata a `Planet.wrapCoord()` (`Math.floor` + wrap toroidale); coppie genetiche uniche (`sampleGeneticPairs`, `hash32`), eventi pre/post perturbazione, vegetazione su celle distinte |
+| `initialConditions.ts` | Setup dichiarativi (erbivori, carnivori, misto, habitat campionato, S13/S14 a risorse scambiate) e cull deterministico stratificato: quota totale `ceil(N/5)` ripartita per maggiori resti |
 | `runner.ts` | `createWorld()` / `createWorldWithInfo()` e `runScenario()`: step loop deterministico, contesto pre/post e report perturbazione |
 | `scenarios.ts` | 12 scenari S01–S12 della fase 1, più S13/S14 e `buildPhase2Scenarios()` per la fase E1.2 |
 | `experiment.ts` | `resolveOutputPath()`, `writeExperimentOutput()`, `collectResults()`, `stripVariableData()` |
-| `statistics.ts` | Media/SD/min/max/IC95, distribuzioni finali, tassi di estinzione/speciazione, confronti habitat e perturbazione |
+| `statistics.ts` | Media/SD/min/max/IC95, distribuzioni finali, tassi; **confronti appaiati per seed** (`pairedDifference`, `seedValues`) con differenze individuali, IC95 t e seed mancanti/duplicati dichiarati |
+| `dataset.ts` | Dataset canonico gzip + manifest con SHA-256, provenance (commit/timestamp) e controllo di portabilità (nessun percorso assoluto o dato personale) |
+| `comparison.ts` | Confronto prima/dopo: solo i campi spaziali possono cambiare; ogni differenza non spaziale è un errore |
 
-Entry point: `scripts/e1_ecosystem.experiment.ts` (fase 1) e `scripts/e1_ecosystem.phase2.experiment.ts` (fase 2). Test: `tests/e1/e1_metrics.test.ts`, `tests/e1/e1_integration.test.ts`. Documentazione: `docs/research/e1/`.
+Entry point: `scripts/e1_ecosystem.experiment.ts` (fase 1), `scripts/e1_ecosystem.phase2.experiment.ts` (fase 2), `scripts/e1_dataset.experiment.ts` (dataset), `scripts/e1_compare.experiment.ts` (confronto). Test: `tests/e1/*.test.ts`. Documentazione: `docs/research/e1/`.
 
 ## Comandi
 
@@ -46,6 +48,10 @@ Variabili d’ambiente: fase 1 — `E1_TICKS`, `E1_LONG_TICKS`, `E1_SEEDS` (CSV)
 - `getStats().births/deaths/predationKills` sono per tick: l’harness li accumula in `cumulative*` e passa gli eventi del tick a `sampleState()` prima di eventuali ricostruzioni da snapshot. I tassi usano la popolazione a inizio tick, non quella dopo il cull.
 - `World.fromSnapshot()` conserva `advancedGenome`/`geneEffects` ma azzera altri flag interni non serializzati: `initialConditions.ts` verifica le due opzioni usate da E1 e fallisce se cambiano.
 - I contatori cumulativi risiedono nel runner, fuori dal `World`: la perturbazione S08 non può azzerarli.
-- `peekCell()` non materializza chunk; non sostituirlo con `getCell()` nelle metriche. `getCell()` è usato solo in `prepareSwap()` per materializzare le posizioni dei controlli S13/S14 prima di scrivere lo snapshot.
+- `peekCell()` non materializza chunk; non sostituirlo con `getCell()` nelle metriche. `getCell()` è usato solo in `prepareSwap()` e nei test spaziali per materializzare i chunk prima della lettura.
+- E1.3: `wrapCellCoord()` usa `Math.floor(value) % size` con wrap dei negativi, identico a `Planet.wrapCoord()`. I centri di cella `(x+0.5, y+0.5)` devono quindi mappare alla cella `x,y`, non a `x+1,y+1`.
+- I confronti tra scenari con gli stessi seed usano `pairedDifference()` (differenze per seed e IC95); `meanDifference` resta solo una statistica descrittiva di gruppo e non va presentata come prova causale.
+- Il cull conserva in totale `ceil(N/5)` organismi; la quota di ciascuna specie deriva dai maggiori resti, non da `ceil(n_species/5)`.
+- Il dataset scientifico è distribuito come `.json.gz` con manifest: `payloadSha256` copre il payload canonico, `sourceSha256` identifica i sorgenti E1.3 usati.
 - La vegetazione è mediata su celle geografiche distinte (wrap toroidale), non sul numero di organismi; le celle S09/S10/S13/S14 provengono da una griglia campionata, non da estremi globali.
 - Nessun risultato va riportato senza seed, durata e comando che lo ha prodotto.

@@ -275,7 +275,21 @@ describe("E1 harness — coerenza delle metriche", () => {
     expect(plan.report.expectedKept).toBe(Math.ceil(organisms.length / 5));
     expect(plan.kept.length + plan.removed.length).toBe(organisms.length);
     expect(plan.report.perSpecies.reduce((s, p) => s + p.kept, 0)).toBe(plan.kept.length);
-    expect(plan.report.perSpecies.every((p) => p.kept === Math.ceil(p.before / 5))).toBe(true);
+    // Allocazione reale: quota totale ceil(N/5) e maggiori resti per specie,
+    // NON ceil(n_species/5) per ciascuna specie.
+    const sizes = plan.report.perSpecies.map((p) => p.before);
+    const floors = sizes.map((n) => Math.floor(n / 5));
+    const expected = floors.slice();
+    let residual = Math.ceil(organisms.length / 5) - floors.reduce((a, b) => a + b, 0);
+    const byRemainder = sizes
+      .map((n, i) => ({ i, remainder: n / 5 - floors[i] }))
+      .sort((a, b) => b.remainder - a.remainder || a.i - b.i);
+    for (const { i } of byRemainder) {
+      if (residual <= 0) break;
+      expected[i] = Math.min(sizes[i], expected[i] + 1);
+      residual--;
+    }
+    expect(plan.report.perSpecies.map((p) => p.kept)).toEqual(expected);
     expect(reversed.kept.map((o) => o.id).sort()).toEqual(plan.kept.map((o) => o.id).sort());
     expect(changedGenome.kept.map((o) => o.id)).toEqual(plan.kept.map((o) => o.id));
 

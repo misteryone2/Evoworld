@@ -73,6 +73,111 @@ export function summarize(values: number[]): NumericSummary {
   };
 }
 
+/** Osservazione di uno scenario indicizzata per seed (base dei confronti appaiati). */
+export interface SeedValue {
+  seed: number;
+  value: number;
+}
+
+/** Differenza individuale `a - b` per uno seed presente in entrambi i gruppi. */
+export interface PairedSeedDifference {
+  seed: number;
+  a: number;
+  b: number;
+  difference: number;
+}
+
+/**
+ * Confronto appaiato per seed. Mantiene le differenze individuali oltre al
+ * riassunto, così l'IC95 può essere verificato a partire dai dati grezzi.
+ */
+export interface PairedComparison {
+  label: string;
+  description: string;
+  scenarioA?: string;
+  scenarioB?: string;
+  metric?: string;
+  pairs: PairedSeedDifference[];
+  validPairs: number;
+  meanDifference: number;
+  sd: number;
+  min: number;
+  max: number;
+  ci95: { low: number; high: number } | null;
+  missingInA: number[];
+  missingInB: number[];
+}
+
+/** Converte le corse di uno scenario in coppie seed/valore, senza ordinarle. */
+export function seedValues(results: RunResult[], extract: (r: RunResult) => number = finalPopulation): SeedValue[] {
+  return results.map((r) => ({ seed: r.seed, value: extract(r) }));
+}
+
+function assertUniqueSeeds(values: SeedValue[], side: string): void {
+  const seen = new Set<number>();
+  const duplicates = new Set<number>();
+  for (const v of values) {
+    if (seen.has(v.seed)) duplicates.add(v.seed);
+    seen.add(v.seed);
+  }
+  if (duplicates.size) {
+    throw new Error(
+      `E1 statistiche appaiate: seed duplicati in ${side}: ` +
+      [...duplicates].sort((a, b) => a - b).join(", "),
+    );
+  }
+}
+
+/**
+ * Confronto appaiato: per ogni seed comune calcola `a - b`, poi riassume le
+ * differenze con media, SD campionaria, min/max e IC95 t di Student (n-1 df).
+ *
+ * - Seed duplicati in uno dei due gruppi sono un errore: il disegno appaiato
+ *   richiede un'unica osservazione per seed per scenari.
+ * - Seed mancenti vengono dichiarati in `missingInA`/`missingInB`; l'analisi
+ *   usa l'intersezione e riporta `validPairs`.
+ * - L'ordine di arrivo dei risultati è irrilevante: le coppie sono ordinate
+ *   per seed, quindi il risultato è riproducibile.
+ *
+ * Il confronto è descrittivo/inferenziale sulle differenze, NON una prova
+ * causale: la casualizzazione è limitata ai 12 seed dell'harness.
+ */
+export function pairedDifference(
+  a: SeedValue[],
+  b: SeedValue[],
+  meta: Pick<PairedComparison, "label" | "description"> &
+    Partial<Pick<PairedComparison, "scenarioA" | "scenarioB" | "metric">>,
+): PairedComparison {
+  assertUniqueSeeds(a, "A");
+  assertUniqueSeeds(b, "B");
+  const mapA = new Map(a.map((v) => [v.seed, v.value]));
+  const mapB = new Map(b.map((v) => [v.seed, v.value]));
+  const seedsA = [...mapA.keys()].sort((x, y) => x - y);
+  const seedsB = [...mapB.keys()].sort((x, y) => x - y);
+  const setA = new Set(seedsA);
+  const setB = new Set(seedsB);
+  const pairs: PairedSeedDifference[] = seedsA
+    .filter((seed) => setB.has(seed))
+    .map((seed) => {
+      const va = mapA.get(seed)!;
+      const vb = mapB.get(seed)!;
+      return { seed, a: va, b: vb, difference: round(va - vb) };
+    });
+  const summary = summarize(pairs.map((p) => p.difference));
+  return {
+    ...meta,
+    pairs,
+    validPairs: summary.n,
+    meanDifference: summary.mean,
+    sd: summary.sd,
+    min: summary.min,
+    max: summary.max,
+    ci95: summary.ci95,
+    missingInA: seedsB.filter((seed) => !setA.has(seed)),
+    missingInB: seedsA.filter((seed) => !setB.has(seed)),
+  };
+}
+
 export function groupByScenario(results: RunResult[]): Record<string, RunResult[]> {
   const groups: Record<string, RunResult[]> = {};
   for (const r of results) (groups[r.scenario] ??= []).push(r);
@@ -133,41 +238,101 @@ function delta(a: NumericSummary, b: NumericSummary): number {
 
 export interface FactorialContrast {
   label: string;
+  /** Differenza descrittiva tra medie di gruppo indipendenti (conservata da E1.2). */
   meanDifference: number;
   description: string;
+  /** Confronto appaiato per seed: base dell'inferenza in E1.3. */
+  paired: PairedComparison;
+}
+
+export interface HabitatComparisonReport {
+  finalPopulation: Record<string, NumericSummary>;
+  finalOccupiedVegetation: Record<string, NumericSummary>;
+  extinction: Record<string, RateSummary>;
+  contrasts: FactorialContrast[];
+}
+
+export interface PerturbationComparisonReport {
+  controlScenario: string;
+  perturbedScenario: string;
+  finalPopulation: {
+    withoutPerturbation: NumericSummary;
+    withPerturbation: NumericSummary;
+    meanDifference: number;
+    paired: PairedComparison;
+  };
+  extinction: {
+    withoutPerturbation: RateSummary;
+    withPerturbation: RateSummary;
+  };
+  cull: Record<string, unknown>;
 }
 
 /**
  * Confronto 2x2: S09/S13 condividono le posizioni povere, S10/S14 quelle
  * ricche; S09/S14 condividono la vegetazione povera, S10/S13 quella ricca.
  */
-export function habitatComparison(groups: Record<string, RunResult[]>): Record<string, unknown> {
+const POOR = "S09_poor_habitat";
+const RICH = "S10_rich_habitat";
+const POOR_POS_RICH_RES = "S13_poor_position_rich_resources";
+const RICH_POS_POOR_RES = "S14_rich_position_poor_resources";
+
+export function habitatComparison(groups: Record<string, RunResult[]>): HabitatComparisonReport {
   const summaries = Object.fromEntries(
     Object.entries(groups).map(([id, runs]) => [id, summarize(runs.map(finalPopulation))]),
   );
   const vegetation = Object.fromEntries(
     Object.entries(groups).map(([id, runs]) => [id, summarize(runs.map(finalOccupiedVegetation))]),
   );
+  const pop = (id: string) => seedValues(groups[id] ?? []);
   const contrasts: FactorialContrast[] = [
     {
       label: "resource_effect_at_poor_positions",
-      meanDifference: delta(summaries["S13_poor_position_rich_resources"], summaries["S09_poor_habitat"]),
+      meanDifference: delta(summaries[POOR_POS_RICH_RES], summaries[POOR]),
       description: "S13 - S09: stessa posizione povera, vegetazione iniziale ricca vs povera",
+      paired: pairedDifference(pop(POOR_POS_RICH_RES), pop(POOR), {
+        label: "resource_effect_at_poor_positions",
+        description: "S13 - S09 appaiato per seed (final population)",
+        scenarioA: POOR_POS_RICH_RES,
+        scenarioB: POOR,
+        metric: "finalPopulation",
+      }),
     },
     {
       label: "resource_effect_at_rich_positions",
-      meanDifference: delta(summaries["S10_rich_habitat"], summaries["S14_rich_position_poor_resources"]),
+      meanDifference: delta(summaries[RICH], summaries[RICH_POS_POOR_RES]),
       description: "S10 - S14: stessa posizione ricca, vegetazione iniziale ricca vs povera",
+      paired: pairedDifference(pop(RICH), pop(RICH_POS_POOR_RES), {
+        label: "resource_effect_at_rich_positions",
+        description: "S10 - S14 appaiato per seed (final population)",
+        scenarioA: RICH,
+        scenarioB: RICH_POS_POOR_RES,
+        metric: "finalPopulation",
+      }),
     },
     {
       label: "position_effect_with_poor_resources",
-      meanDifference: delta(summaries["S14_rich_position_poor_resources"], summaries["S09_poor_habitat"]),
+      meanDifference: delta(summaries[RICH_POS_POOR_RES], summaries[POOR]),
       description: "S14 - S09: stessa vegetazione povera, posizione ricca vs povera",
+      paired: pairedDifference(pop(RICH_POS_POOR_RES), pop(POOR), {
+        label: "position_effect_with_poor_resources",
+        description: "S14 - S09 appaiato per seed (final population)",
+        scenarioA: RICH_POS_POOR_RES,
+        scenarioB: POOR,
+        metric: "finalPopulation",
+      }),
     },
     {
       label: "position_effect_with_rich_resources",
-      meanDifference: delta(summaries["S10_rich_habitat"], summaries["S13_poor_position_rich_resources"]),
+      meanDifference: delta(summaries[RICH], summaries[POOR_POS_RICH_RES]),
       description: "S10 - S13: stessa vegetazione ricca, posizione ricca vs povera",
+      paired: pairedDifference(pop(RICH), pop(POOR_POS_RICH_RES), {
+        label: "position_effect_with_rich_resources",
+        description: "S10 - S13 appaiato per seed (final population)",
+        scenarioA: RICH,
+        scenarioB: POOR_POS_RICH_RES,
+        metric: "finalPopulation",
+      }),
     },
   ];
   return {
@@ -178,7 +343,7 @@ export function habitatComparison(groups: Record<string, RunResult[]>): Record<s
   };
 }
 
-export function perturbationComparison(groups: Record<string, RunResult[]>): Record<string, unknown> {
+export function perturbationComparison(groups: Record<string, RunResult[]>): PerturbationComparisonReport {
   const control = groups["S01_stability_baseline"] ?? [];
   const perturbed = groups["S08_recovery_after_cull80"] ?? [];
   const cullSamples = perturbed
@@ -190,10 +355,18 @@ export function perturbationComparison(groups: Record<string, RunResult[]>): Rec
     finalPopulation: {
       withoutPerturbation: summarize(control.map(finalPopulation)),
       withPerturbation: summarize(perturbed.map(finalPopulation)),
+      // Differenza descrittiva di gruppo, conservata per confronto con E1.2.
       meanDifference: delta(
         summarize(perturbed.map(finalPopulation)),
         summarize(control.map(finalPopulation)),
       ),
+      paired: pairedDifference(seedValues(perturbed), seedValues(control), {
+        label: "cull_effect_S08_minus_S01",
+        description: "S08 - S01 appaiato per seed (final population)",
+        scenarioA: "S08_recovery_after_cull80",
+        scenarioB: "S01_stability_baseline",
+        metric: "finalPopulation",
+      }),
     },
     extinction: {
       withoutPerturbation: extinctionRate(control),
@@ -211,7 +384,7 @@ export function perturbationComparison(groups: Record<string, RunResult[]>): Rec
   };
 }
 
-/** Report completo della fase E1.2, serializzato dallo script phase2. */
+/** Report completo della fase E1.2/E1.3, serializzato dallo script phase2. */
 export function buildPhase2Report(results: RunResult[], protocol: { ticks: number; sampleEvery: number; seeds: number[] }) {
   const groups = groupByScenario(results);
   const byId = Object.fromEntries(
@@ -223,13 +396,22 @@ export function buildPhase2Report(results: RunResult[], protocol: { ticks: numbe
       speciation: speciationFrequency(runs),
     }]),
   );
+  const habitat = habitatComparison(groups);
+  const perturbation = perturbationComparison(groups);
+  const pairedComparisons: PairedComparison[] = [
+    ...habitat.contrasts.map((c) => c.paired),
+    perturbation.finalPopulation.paired,
+  ];
   return {
     protocol: { ...protocol, scenarioIds: Object.keys(groups).sort(), totalRuns: results.length },
     byScenario: byId,
-    habitat: habitatComparison(groups),
-    perturbation: perturbationComparison(groups),
+    habitat,
+    perturbation,
+    pairedComparisons,
     note:
-      "Media e deviazione standard campionarie; IC95 con t di Student (approssimativo, " +
-      "assume indipendenza e normalita' dei seed). Nessun valore e' stato ottenuto modificando le regole biologiche.",
+      "Confronti appaiati per seed (differenze a-b, IC95 t di Student su n-1 gradi di " +
+      "liberta'); `meanDifference` resta solo una differenza descrittiva tra medie di " +
+      "gruppo indipendenti. I seed non sono stati randomizzati: le differenze non sono " +
+      "una prova causale. Nessun valore e' stato ottenuto modificando le regole biologiche.",
   };
 }
