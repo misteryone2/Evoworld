@@ -1,85 +1,13 @@
-EvoWorld v1.11.0 — Advanced Fauna Genome (specifica di Vibe) + consolidamento v1.10.5
-===================================================================================
+EvoWorld — G2 Procedural Anatomy & Phenotype System
+Branch consigliato: graphics/g2-anatomy-phenotype (da graphics/g1-creature-visuals, commit efcf7b1). NON fare merge in main.
 
-IMPORTANTE — PRIMA DI APPLICARE
-- Applica questo pacchetto sopra il repository nello stato `1967a47` (HEAD di main, "Update Planet3DView.tsx" del 13 nov).
-  I file (sostituisce) derivano da quello stato e contengono il tuo lavoro successivo alla v1.10.5 (cielo, nuvole, camera libera).
-  NON applicarlo sopra il pacchetto v1.10.5 originale (`50c350b`): su quello `tsc` fallisce.
-- Se dopo `1967a47` hai modificato ancora uno dei file (sostituisce), NON sostituirlo: dimmelo e lo riconcilio.
-- Non committare package-lock.json (generato dall'installazione). Nessun merge su main, nessuna release.
-- Il branch consegnato è integration/v1.11.0-vibe-spec; backup/v1.11.0-13geni conserva una prima versione a 13 geni (non consegnata).
+Tutti i file sono NUOVI: non sostituiscono nulla, non sovrascrivere altri file.
 
-ORDINE (una cartella alla volta, dalla radice)
-1. types/   2. simulation/planet/   3. simulation/biology/ (compreso phenotype.ts, ora un segnaposto)   4. simulation/ecology/   5. simulation/evolution/
-6. simulation/core/   7. components/simulation/   8. lib/   9. tests/   10. scripts/ e radice (CHANGELOG.md, LEGGIMI.txt,
-vitest.experiment.config.ts)   11. docs/
-In alternativa: estrai EvoWorld-v1.11.0.zip nella radice del repository (stessi percorsi).
+(NUOVO) lib/phenotype/types.ts, derive.ts, index.ts
+(NUOVO) lib/anatomy/types.ts, util.ts, bodyPlan.ts, assemble.ts, generate.ts, lod.ts, validate.ts, serialize.ts, legacyAdapter.ts, index.ts
+(NUOVO) tests/anatomyG2.test.ts, tests/phenotypeG2.test.ts
+(NUOVO) docs/graphics/G2_AUDIT_REPORT.md, G2_ARCHITECTURE.md, G2_MISSING_GENETIC_DATA.md, G2_FINAL_REPORT.md
 
-FILE
-  CHANGELOG.md  (sostituisce)
-  components/simulation/Planet3DView.tsx  (sostituisce)
-  docs/GENOMA-v1.11.0.md  (NUOVO)
-  docs/LIMITE-CAMPIONAMENTO-POPOLAZIONE.md  (NUOVO)
-  docs/REPORT-v1.11.0.md  (NUOVO)
-  lib/animationScheduler.ts  (NUOVO)
-  scripts/genomeExperiment.experiment.ts  (NUOVO)
-  simulation/biology/brain.ts  (sostituisce)
-  simulation/biology/energy.ts  (NUOVO)
-  simulation/biology/environment.ts  (sostituisce)
-  simulation/biology/geneExpression.ts  (NUOVO)
-  simulation/biology/geneRegistry.ts  (NUOVO)
-  simulation/biology/genome.ts  (sostituisce)
-  simulation/biology/genomeExt.ts  (NUOVO)
-  simulation/biology/genomeMigration.ts  (NUOVO)
-  simulation/biology/organism.ts  (sostituisce)
-  simulation/biology/traitRanges.ts  (NUOVO)
-  simulation/core/world.ts  (sostituisce)
-  simulation/ecology/behavior.ts  (sostituisce)
-  simulation/ecology/collision.ts  (sostituisce)
-  simulation/ecology/feeding.ts  (sostituisce)
-  simulation/ecology/movement.ts  (sostituisce)
-  simulation/ecology/predation.ts  (sostituisce)
-  simulation/evolution/reproduction.ts  (sostituisce)
-  simulation/planet/planet.ts  (sostituisce)
-  tests/animationScheduler.test.ts  (NUOVO)
-  tests/genome.test.ts  (sostituisce)
-  tests/genomeV2.test.ts  (NUOVO)
-  tests/vibeCameraQa.test.ts  (sostituisce)
-  tests/vibeGenomeV1110.test.ts  (NUOVO)
-  types/index.ts  (sostituisce)
-  vitest.experiment.config.ts  (NUOVO)
-  LEGGIMI.txt  (sostituisce)
-
-Nessun file da eliminare, ma ATTENZIONE: se avevi già applicato il pacchetto PRECEDENTE (versione a 13 geni), nel repository
-restano due file di quella versione che con i tipi nuovi non compilano (errori "Property 'genes' does not exist" e
-"genomeSchema", che fanno fallire `npm run build` su Vercel):
-    simulation/biology/phenotype.ts      -> in questo pacchetto è un segnaposto vuoto (sostituisce)
-    tests/advancedGenome.test.ts         -> in questo pacchetto è un segnaposto con un test saltato (sostituisce)
-Basta sostituirli come tutti gli altri; poi puoi eliminarli quando vuoi (nessun modulo li importa).
-Nessuna nuova dipendenza.
-
-COSA CAMBIA (dettagli: docs/GENOMA-v1.11.0.md, docs/REPORT-v1.11.0.md)
-- Genoma esteso secondo la specifica di Vibe: 20 geni in `genome.ext`, registro, espressione fenotipica, distanza normalizzata,
-  migrazione. Con enableAdvancedGenome:false il mondo è identico alla v1.10 (verificato con impronte di riferimento).
-- Salvataggi vecchi: si caricano da soli (geni estesi ai valori predefiniti); i nuovi hanno genomeVersion 2.
-- Cell ha un campo opzionale nuovo, seasonalOffset (scritto in planet.ts), usato da ADA-01.
-- Consolidamento v1.10.5: le creature respirano e riposano anche in pausa; test vibeCameraQa corretto.
-
-DOPO L'AGGIORNAMENTO
-  npm install --legacy-peer-deps      (il semplice "npm install" fallisce per un bug di npm)
-  npx next build                      (genera i tipi: senza build `tsc` può segnalare "LayoutProps")
-  npx tsc --noEmit
-  npx vitest run --testTimeout=60000
-RISULTATO ATTESO: 680 superati, 5 falliti, 685 totali:
-  - tests/reproduction.test.ts ×2: PREESISTENTI (falliscono già alla v1.10.0).
-  - tests/fauna180.test.ts ×1: il 1,08 viene dal tuo aggiornamento di Planet3DView.tsx; dimmi se è voluto.
-  - tests/vibeGenomeV1110.test.ts ×2: la suite di Vibe è inclusa SENZA modifiche; i due fallimenti sono incoerenze tra suite e
-    specifica (chiave "socialTolerance" contro la ricerca di "social"; campo "movementCostFactor" contro la ricerca di "move").
-
-DECISIONI PROVVISORIE (in attesa di Mattia, tutte in costanti in simulation/biology/geneExpression.ts)
-  ADA-02 (quota), ECO-01 (domanda contro guadagno), ordine dei modulatori, tetto della corazza 2,2, predefiniti dei geni scelti
-  neutri, distanza con i pesi del catalogo (soglie 0,16 / 0,26 non toccate ma che valgono come ≈0,22 / ≈0,35 della v1.10).
-
-VERIFICHE NON EFFETTUATE
-  FPS e fluidità su telefono/PC; ridisegno in pausa a schermo; npm run benchmark; 10.000 tick solo sul seme 11 (le prove a
-  4.000 tick coprono 5 semi); salvataggi reali di Mattia; selezione dei nuovi geni (il controllo neutro non la distingue dalla deriva).
+Verifiche reali: 29/29 test G2; suite completa 721 pass / 5 fail preesistenti (fauna180, reproduction x2, vibeGenomeV1110 x2, presenti anche senza G2).
+Non eseguiti: next build, ESLint, prove su browser/telefono.
+Nessun file esistente è modificato: il codice G2 non è collegato al renderer.
