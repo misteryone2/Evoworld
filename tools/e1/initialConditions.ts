@@ -20,6 +20,30 @@ export type SetupKind =
 
 export type PerturbationKind = "none" | "cull80" | "cull95";
 
+/**
+ * `World.fromSnapshot()` conserva `advancedGenome`/`geneEffects`, ma azzera
+ * altri flag interni non serializzati. L'harness usa solo queste due opzioni:
+ * se una di esse cambiasse nella ricostruzione, la corsa deve fallire invece
+ * di produrre risultati silenziosamente non confrontabili.
+ */
+function assertSnapshotOptionsPreserved(before: WorldSnapshot, after: WorldSnapshot, context: string): void {
+  const wanted = {
+    advancedGenome: before.advancedGenome ?? true,
+    geneEffects: before.geneEffects ?? true,
+  };
+  const actual = {
+    advancedGenome: after.advancedGenome ?? true,
+    geneEffects: after.geneEffects ?? true,
+  };
+  if (wanted.advancedGenome !== actual.advancedGenome || wanted.geneEffects !== actual.geneEffects) {
+    throw new Error(
+      `E1 ${context}: opzioni alterate da World.fromSnapshot() ` +
+      `(advancedGenome ${wanted.advancedGenome}->${actual.advancedGenome}, ` +
+      `geneEffects ${wanted.geneEffects}->${actual.geneEffects})`,
+    );
+  }
+}
+
 function syncRegistry(snapshot: WorldSnapshot): void {
   const counts = new Map<number, number>();
   for (const o of snapshot.organisms) counts.set(o.speciesId, (counts.get(o.speciesId) ?? 0) + 1);
@@ -102,7 +126,9 @@ export function applySetup(world: World, kind: SetupKind): World {
   }
 
   syncRegistry(snapshot);
-  return WorldClass.fromSnapshot(snapshot);
+  const rebuilt = WorldClass.fromSnapshot(snapshot);
+  assertSnapshotOptionsPreserved(snapshot, rebuilt.toSnapshot(), `setup/${kind}`);
+  return rebuilt;
 }
 
 /** Perturbazione esplicita: rimozione di una frazione della popolazione, senza RNG. */
@@ -112,5 +138,7 @@ export function applyPerturbation(world: World, kind: PerturbationKind): World {
   const snapshot = world.toSnapshot();
   snapshot.organisms = snapshot.organisms.filter((_, i) => i % keepEvery === 0);
   syncRegistry(snapshot);
-  return WorldClass.fromSnapshot(snapshot);
+  const rebuilt = WorldClass.fromSnapshot(snapshot);
+  assertSnapshotOptionsPreserved(snapshot, rebuilt.toSnapshot(), `perturbation/${kind}`);
+  return rebuilt;
 }

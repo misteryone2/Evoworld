@@ -1,7 +1,7 @@
 # E1 — Metriche osservazionali
 
 **Branch:** `research/e1-ecosystem-qa`  
-**Implementazione:** `tools/e1/metrics.ts` (`sampleState()`, `accumulate()`, `sampledGeneticDistance()`)  
+**Implementazione:** `tools/e1/metrics.ts` (`sampleState()`, `accumulate()`, `sampledGeneticDistance()`, `E1TickEvents`)  
 **Principio:** ogni metrica è calcolata **solo** da dati che il motore espone già: `World.getStats()`, `world.organisms`, `world.planet.peekCell()` e i genomi presenti negli organismi. Nessun valore viene inventato, stimato da modelli esterni o letto da campi privati del motore.
 
 ---
@@ -46,7 +46,7 @@ Per ogni tick \(t\):
 - **`predationKills`** = `getStats().predationKills` al tick \(t\).
 - **`birthRate`** = `births / max(1, N)`, **`deathRate`** = `deaths / max(1, N)`, **`predationPressure`** = `predationKills / max(1, N)`.
 
-L’harness accumula i tre contatori per tick in `cumulativeBirths`, `cumulativeDeaths`, `cumulativePredationKills`. **Non è possibile separare morte per fame da morte per vecchiaia** con i dati disponibili: servirebbe una modifica al motore, non eseguita.
+L’harness accumula i tre contatori per tick in `cumulativeBirths`, `cumulativeDeaths`, `cumulativePredationKills`. `accumulate()` restituisce anche gli eventi del singolo tick (`E1TickEvents`): il runner li passa a `sampleState()` prima di eventuali perturbazioni, così i campioni al tick del cull conservano nascite/morti/uccisioni reali anche se il `World` viene ricostruito da snapshot (che azzera `lastStats`). I contatori cumulativi vivono invece nel runner, fuori dal `World`, e non possono essere azzerati dalla ricostruzione. **Non è possibile separare morte per fame da morte per vecchiaia** con i dati disponibili: servirebbe una modifica al motore, non eseguita.
 
 ### 2.4 Estinzioni
 
@@ -55,9 +55,14 @@ L’harness accumula i tre contatori per tick in `cumulativeBirths`, `cumulative
 
 ### 2.5 Risorse ambientali
 
-- **`occupiedVegetation`** = media di `cell.vegetation` sulle celle occupate da organismi vivi per cui `peekCell()` restituisce una cella.
-- **`occupiedLandFraction`** = frazione di quelle celle con `terrain !== "ocean"`.
-- **`occupiedCellsSampled`** = numero di celle effettivamente lette.
+Le coordinate di ogni organismo vengono arrotondate e avvolte con lo stesso wrap toroidale di `Planet.peekCell()`. Per ogni organismo con cella materializzata leggiamo `vegetation` e `terrain`, ma la cella entra nel campione **una sola volta per coordinata geografica distinta**.
+
+- **`organismsSampled`** = numero di organismi vivi per cui `peekCell()` ha restituito una cella (uno per organismo, anche se più organismi condividono la stessa cella).
+- **`occupiedCellsSampled`** = numero di **celle geografiche distinte** con almeno un organismo campionato. È sempre ≤ `organismsSampled`.
+- **`occupiedVegetation`** = media di `cell.vegetation` sulle `occupiedCellsSampled` celle distinte. Più organismi nella stessa cella non pesano due volte la media.
+- **`occupiedLandFraction`** = frazione di quelle celle distinte con `terrain !== "ocean"`.
+
+Se non esiste alcun organismo o nessuna cella materializzata, `organismsSampled = occupiedCellsSampled = 0` e le medie valgono `0`: non viene inventata vegetazione.
 
 **Limite importante:** questa è una misura *occupata e condizionata*, non la vegetazione globale del pianeta. Man mano che la popolazione cala, vengono campionate meno celle; un aumento della media finale può riflettere il fatto che restano organismi solo in zone vegetate. Il motore non espone una griglia globale live senza materializzare chunk, quindi non possiamo calcolare uno stock totale di risorse. Nei report, i valori di vegetazione occupata vanno letti come **indicatori parziali**, non come prova di abbondanza o carenza globale.
 
@@ -112,9 +117,10 @@ Queste medie sono descrittive della popolazione campionata. **Non dimostrano ada
 | `meanAge` | tick | media di `age` |
 | `carnivoreFraction`, `herbivoreFraction` | frazione | soglia `carnivory 0.35` |
 | `mean*` (tratti) | valore del tratto | media del genome base |
-| `occupiedVegetation` | 0..1 circa | media `peekCell().vegetation` |
-| `occupiedLandFraction` | frazione | celle non-ocean / celle campionate |
-| `occupiedCellsSampled` | celle | conteggio |
+| `organismsSampled` | individui | organismi con cella materializzata (uno per organismo) |
+| `occupiedCellsSampled` | celle | coordinate geografiche distinte con organismo campionato |
+| `occupiedVegetation` | 0..1 circa | media `peekCell().vegetation` sulle celle distinte |
+| `occupiedLandFraction` | frazione | celle distinte non-ocean / celle distinte campionate |
 | `meanGeneticDistance` | distanza | campione deterministico con RNG separato |
 
 ---

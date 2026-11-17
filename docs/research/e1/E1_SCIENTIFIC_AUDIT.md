@@ -108,7 +108,7 @@ Conseguenza: un animale ucciso dalla predazione in questo tick **ha già mangiat
 4. **Carnivoria apicale**: cap 0.85 + bersaglio “strettamente minore” rende i superpredatori invulnerabili per costruzione.
 5. **Tentativo di caccia può portare energia negativa** (costo 12 non clampato).
 6. **Trasferimento energetico non conservativo** (`target.energy + 30`).
-7. **Snapshot non conserva i flag sperimentali** (`World.fromSnapshot` forza dispersal/settlement off e collisions on, `world.ts:363-368`).
+7. **Snapshot non conserva tutti i flag sperimentali** (`World.fromSnapshot` forza dispersal/settlement off e collisions on, `world.ts:363-368`). `advancedGenome`/`geneEffects` sono conservati; E1.1 aggiunge un controllo nell’harness (`initialConditions.ts`) e fallisce se cambiano, senza toccare il motore.
 8. **Analisi specie materializza chunk** via `getCell` (`speciesAnalysis.ts:89`), in tensione con la garanzia di non-growth della render path.
 9. **Costanti/DAO obsoleti**: `BRAIN_SIZE` documentato 119 ma effettivo 130; `MEMORY_DECAY_TICKS` e `MIN_REPRODUCTION_AGE_FRACTION` unused; test `vibeGenomeV1110` con asserzioni vuote.
 10. **Soglia di distanza genetica V2 non ricalibrata** (0.16/0.26 effective ~0.22/0.35 in termini V1, `genome.ts:191-193`).
@@ -116,8 +116,8 @@ Conseguenza: un animale ucciso dalla predazione in questo tick **ha già mangiat
 ### 4.2 Rilevati con esperimenti (numeri nel report)
 11. **Carnivori omogenei non cacciano**: S05 (tutti a carnivory 0.6) produce **0 uccisioni** in 900 tick, perché non esiste alcun bersaglio con carnivoria inferiore.
 12. **Nessun recupero post-cull**: S08 passa da ~26 a ~5 individui al tick 450 e resta a 3–4 fino al 900, con 0–5 nascite cumulative: la soglia energetica 130 e la ricerca compagno nel raggio 4 creano un effetto Allee emergente.
-13. **Predazione trasiente**: S06 accumula 36–39 uccisioni entro tick 100 e poi solo +1/+2 in 800 tick; non si osserva un ciclo preda-predatore sostenuto.
-14. **Risorse non limitanti nei run brevi**: S02 (densa, scarsa) e S04 (erbivori) finiscono con vegetazione media **più alta** di quella iniziale (0.27→0.45, 0.26→0.30 circa), mentre la popolazione crolla: la mortalità dominates sulla carenza di risorse misurata.
+13. **Predazione trasiente**: S06 accumula 36–39 uccisioni entro tick 100 e poi sole +12/+12 in 800 tick (48/51 al tick 900); non si osserva un ciclo preda-predatore sostenuto.
+14. **Indicatore di risorse controintuitivo**: S02 (densa, scarsa) e S04 (erbivori) finiscono con vegetazione media occupata **più alta** di quella iniziale (0.2678→0.4960 e 0.2632→0.2901 per seed 11), mentre la popolazione crolla: il campione segue i superstiti, quindi non dimostra abbondanza globale. E1.1 media ora sulle celle geografiche distinte.
 15. **Speciazione rara e seed-dipendente**: a 2700 tick, seed 11 genera una seconda specie (Shannon 0.6581), seed 12 resta a una sola.
 16. **Shadow death cause**: `deaths` aggrega fame e vecchiaia; non è separabile senza modificare il motore (non consentito).
 

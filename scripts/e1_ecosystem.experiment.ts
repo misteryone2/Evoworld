@@ -6,10 +6,12 @@
  *   npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.experiment.ts
  *
  * Scrive un JSON con seme, condizioni iniziali, durata, campioni e tempi reali.
+ * Destinazione: E1_OUT, oppure `e1-results.json` nella temp di sistema (tmpdir()).
  */
 import { it } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { buildScenarios, SCENARIO_IDS } from "../tools/e1/scenarios";
 import { runScenario, type RunResult } from "../tools/e1/runner";
 
@@ -18,7 +20,7 @@ const LONG_TICKS = Number(process.env.E1_LONG_TICKS ?? TICKS * 3);
 const SAMPLE_EVERY = Number(process.env.E1_SAMPLE_EVERY ?? 50);
 const SEEDS = (process.env.E1_SEEDS ?? "11").split(",").map(Number).filter(Number.isFinite);
 const ONLY = process.env.E1_SCENARIOS?.split(",").filter((s) => SCENARIO_IDS.includes(s as never));
-const OUT = process.env.E1_OUT ?? "C:/Users/matti/AppData/Local/Temp/opencode/e1-results.json";
+const OUT = process.env.E1_OUT ?? join(tmpdir(), "e1-results.json");
 
 it("E1 — scenari ecologici con seed controllato", () => {
   const scenarios = buildScenarios({ ticks: TICKS, longTicks: LONG_TICKS, sampleEvery: SAMPLE_EVERY, seeds: SEEDS })

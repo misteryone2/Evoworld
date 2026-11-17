@@ -18,6 +18,18 @@ export interface E1Counters {
   predationKills: number;
 }
 
+/**
+ * Eventi del singolo passo appena eseguito. Vengono passati esplicitamente a
+ * `sampleState()` perché una perturbazione ricostruisce il World da snapshot:
+ * `World.fromSnapshot()` ricalcola `lastStats` con eventi a zero, quindi leggere
+ * `getStats()` dopo la ricostruzione perderebbe i valori del tick appena steppato.
+ */
+export interface E1TickEvents {
+  births: number;
+  deaths: number;
+  predationKills: number;
+}
+
 export interface E1Sample {
   tick: number;
   year: number;
@@ -50,11 +62,13 @@ export interface E1Sample {
   meanVision: number;
   meanEvasion: number;
   meanHuntingSkill: number;
-  /** Vegetazione media nelle celle occupate da organismi vivi (peekCell, read-only). */
+  /** Vegetazione media sulle celle geografiche DISTINTE occupate da organismi vivi. */
   occupiedVegetation: number;
-  /** Frazione di celle occupate classificate come terra (non ocean). */
+  /** Frazione di celle distinte occupate classificate come terra (non ocean). */
   occupiedLandFraction: number;
-  /** Numero di celle occupate effettivamente campionate (chunk materializzati). */
+  /** Organismi vivi per cui è stata trovata una cella materializzata (uno per organismo). */
+  organismsSampled: number;
+  /** Celle geografiche distinte con almeno un organismo campionato (deduplicate per coordinata). */
   occupiedCellsSampled: number;
   /** Distanza genetica media tra coppie di organismi campionati (RNG separato). */
   meanGeneticDistance: number;
@@ -75,6 +89,12 @@ function round(value: number, digits = 4): number {
   return Math.round(value * f) / f;
 }
 
+/** Coordinata di cella con lo stesso wrap toroidale usato da Planet.peekCell(). */
+function wrapCellCoord(value: number, size: number): number {
+  const wrapped = Math.round(value) % size;
+  return wrapped < 0 ? wrapped + size : wrapped;
+}
+
 /** Distanza genetica media su al più `pairs` coppie, con RNG dedicato (mai quello del mondo). */
 export function sampledGeneticDistance(organisms: Organism[], tick: number, pairs = 120): number {
   if (organisms.length < 2) return 0;
@@ -93,8 +113,11 @@ export function sampledGeneticDistance(organisms: Organism[], tick: number, pair
  * Campiona lo stato corrente. `counters` è lo stato cumulativo mantenuto dal
  * runner: i campi `births/deaths/predationKills` di getStats() sono PER TICK.
  */
-export function sampleState(world: World, counters: E1Counters): E1Sample {
+export function sampleState(world: World, counters: E1Counters, tickEvents?: E1TickEvents): E1Sample {
   const stats = world.getStats();
+  // Dopo una perturbazione il World viene ricostruito da snapshot e i contatori
+  // per tick di lastStats sono zero: usiamo gli eventi catturati prima del cull.
+  const events = tickEvents ?? stats;
   const organisms = world.organisms;
   const n = organisms.length;
 
@@ -110,16 +133,25 @@ export function sampleState(world: World, counters: E1Counters): E1Sample {
   const trait = (key: "carnivory" | "size" | "speed" | "metabolism" | "vision" | "evasion" | "huntingSkill") =>
     round(mean(genomes.map((g) => g[key])));
 
-  let vegetationSum = 0;
-  let land = 0;
-  let sampled = 0;
+  // Una cella può contenere più organismi: la vegetazione va contata una sola
+  // volta per coordinata geografica, altrimenti i individui in sovrannumero
+  // falsano la media e la frazione di terra.
+  const cells = new Map<string, { vegetation: number; land: boolean }>();
+  let organismsSampled = 0;
   for (const o of organisms) {
-    const cell = world.planet.peekCell(Math.round(o.position.x), Math.round(o.position.y));
+    const x = wrapCellCoord(o.position.x, world.planet.width);
+    const y = wrapCellCoord(o.position.y, world.planet.height);
+    const cell = world.planet.peekCell(x, y);
     if (!cell) continue;
-    sampled++;
-    vegetationSum += cell.vegetation;
-    if (cell.terrain !== "ocean") land++;
+    organismsSampled++;
+    const key = `${x},${y}`;
+    if (!cells.has(key)) cells.set(key, { vegetation: cell.vegetation, land: cell.terrain !== "ocean" });
   }
+
+  const sampledCells = [...cells.values()];
+  const distinctCells = sampledCells.length;
+  const vegetationSum = sampledCells.reduce((sum, c) => sum + c.vegetation, 0);
+  const land = sampledCells.reduce((count, c) => count + (c.land ? 1 : 0), 0);
 
   const pop = Math.max(1, n);
   return {
@@ -133,15 +165,15 @@ export function sampleState(world: World, counters: E1Counters): E1Sample {
     speciesCounts,
     shannon: round(shannon),
     evenness: round(evenness),
-    births: stats.births,
-    deaths: stats.deaths,
-    predationKills: stats.predationKills,
+    births: events.births,
+    deaths: events.deaths,
+    predationKills: events.predationKills,
     cumulativeBirths: counters.births,
     cumulativeDeaths: counters.deaths,
     cumulativePredationKills: counters.predationKills,
-    birthRate: round(stats.births / pop, 5),
-    deathRate: round(stats.deaths / pop, 5),
-    predationPressure: round(stats.predationKills / pop, 5),
+    birthRate: round(events.births / pop, 5),
+    deathRate: round(events.deaths / pop, 5),
+    predationPressure: round(events.predationKills / pop, 5),
     meanEnergy: round(mean(energies)),
     energySd: round(sd(energies)),
     meanAge: round(mean(organisms.map((o) => o.age))),
@@ -154,17 +186,22 @@ export function sampleState(world: World, counters: E1Counters): E1Sample {
     meanVision: trait("vision"),
     meanEvasion: trait("evasion"),
     meanHuntingSkill: trait("huntingSkill"),
-    occupiedVegetation: round(sampled ? vegetationSum / sampled : 0),
-    occupiedLandFraction: round(sampled ? land / sampled : 0),
-    occupiedCellsSampled: sampled,
+    occupiedVegetation: round(distinctCells ? vegetationSum / distinctCells : 0),
+    occupiedLandFraction: round(distinctCells ? land / distinctCells : 0),
+    organismsSampled,
+    occupiedCellsSampled: distinctCells,
     meanGeneticDistance: round(sampledGeneticDistance(organisms, stats.tick)),
   };
 }
 
-/** Cumula i contatori per tick; da chiamare subito dopo `world.step()`. */
-export function accumulate(counters: E1Counters, world: World): void {
+/**
+ * Cumula i contatori per tick e restituisce gli eventi del passo appena
+ * eseguito, da passare a `sampleState()` anche se il World verrà ricostruito.
+ */
+export function accumulate(counters: E1Counters, world: World): E1TickEvents {
   const s = world.getStats();
   counters.births += s.births;
   counters.deaths += s.deaths;
   counters.predationKills += s.predationKills;
+  return { births: s.births, deaths: s.deaths, predationKills: s.predationKills };
 }

@@ -6,7 +6,7 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 
 ## Variabili monitorate in tutti gli scenari
 
-`population`, `speciesAlive/TotalEver/Extinct`, `speciesCounts`, Shannon `H` e evenness, `births/deaths/predationKills` per tick e cumulativi, tassi per capita, `meanEnergy`, `meanAge`, frazione carnivori/erbivori, medie dei tratti ereditari (carnivory, size, speed, metabolism, vision, evasion, huntingSkill), vegetazione media nelle celle occupate, distanza genetica media campionata. Definizioni in `E1_METRICS.md`.
+`population`, `speciesAlive/TotalEver/Extinct`, `speciesCounts`, Shannon `H` e evenness, `births/deaths/predationKills` per tick e cumulativi, tassi per capita, `meanEnergy`, `meanAge`, frazione carnivori/erbivori, medie dei tratti ereditari (carnivory, size, speed, metabolism, vision, evasion, huntingSkill), vegetazione media nelle **celle geografiche distinte** (`organismsSampled` vs `occupiedCellsSampled`), distanza genetica media campionata. Definizioni in `E1_METRICS.md`.
 
 ---
 
@@ -81,6 +81,7 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 - **Atteso:** recupero demografico se risorse e compagni sono disponibili.
 - **Anomalia:** popolazione che resta bloccata a pochi individui; nascite nulle nonostante energia media alta.
 - **Successo:** popolazione dopo il cull che torna a crescere in modo significativo entro 450 tick.
+- **Controllo E1.1:** il runner verifica che `advancedGenome`/`geneEffects` sopravvivano a `World.fromSnapshot()` e conserva gli eventi del tick e i contatori cumulativi fuori dal `World` ricostruito; il cull non altera quindi le misure del tick 450.
 
 ## S09 — Habitat povero
 
@@ -125,7 +126,9 @@ Tutti gli scenari usano `tools/e1/runner.ts` + `scripts/e1_ecosystem.experiment.
 ```powershell
 $env:PATH = "C:\Users\matti\AppData\Local\Temp\opencode\node-v22.14.0-win-x64;$env:PATH"
 $env:E1_TICKS="900"; $env:E1_LONG_TICKS="2700"; $env:E1_SEEDS="11,12"; $env:E1_SAMPLE_EVERY="50"
+# facoltativo; senza E1_OUT lo script scrive e1-results.json nella temp di sistema (os.tmpdir())
+$env:E1_OUT="C:\Users\matti\AppData\Local\Temp\e1-results-e1.1.json"
 npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.experiment.ts
 ```
 
-Per eseguire un solo scenario: `E1_SCENARIOS=S06_predator_prey_mixed`. L’output JSON contiene per ogni run: seed, condizioni, tick completati, `extinctAt`, tempo di esecuzione e l’intera serie di campioni.
+Per eseguire un solo scenario: `E1_SCENARIOS=S06_predator_prey_mixed`. L’output JSON contiene per ogni run: seed, condizioni, tick completati, `extinctAt`, tempo di esecuzione e l’intera serie di campioni. Il percorso predefinito è portabile (`join(tmpdir(), "e1-results.json")`); `E1_OUT` continua a sovrascriverlo.

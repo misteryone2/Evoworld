@@ -51,13 +51,15 @@ export function createWorld(spec: ScenarioSpec): World {
 export function runScenario(spec: ScenarioSpec): RunResult {
   const started = Date.now();
   let world = createWorld(spec);
+  // I contatori cumulativi vivono qui, fuori dal World: la ricostruzione da
+  // snapshot fatta dalle perturbazioni non li riceve e non può azzerarli.
   const counters: E1Counters = { births: 0, deaths: 0, predationKills: 0 };
   const samples: E1Sample[] = [sampleState(world, counters)];
   let extinctAt: number | null = null;
 
   for (let i = 0; i < spec.ticks; i++) {
     world.step();
-    accumulate(counters, world);
+    const tickEvents = accumulate(counters, world);
 
     if (spec.perturbation && spec.perturbation.atTick === world.tick) {
       world = applyPerturbation(world, spec.perturbation.kind);
@@ -65,7 +67,7 @@ export function runScenario(spec: ScenarioSpec): RunResult {
 
     if (world.organisms.length === 0 && extinctAt === null) extinctAt = world.tick;
     if (world.tick % spec.sampleEvery === 0 || world.organisms.length === 0) {
-      samples.push(sampleState(world, counters));
+      samples.push(sampleState(world, counters, tickEvents));
     }
     if (world.organisms.length === 0) break;
   }
