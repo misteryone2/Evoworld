@@ -1,0 +1,49 @@
+{
+  "schema": "evoworld.e1.manifest.v1",
+  "artifact": "e1-phase2-e1.3.json.gz",
+  "payloadSha256": "695af719fe21541ad32ffb6b2e1e187eff02c5c86fb237ccfc7a92f899d801f7",
+  "archiveSha256": "283e6ef676d08d4f8ba72b4c93b71d5c5aae1a587e79985fefdfab273b71ba82",
+  "phase": "E1.3",
+  "codeCommit": "d1e2b5b1e2e37a1a3e95e85f60d3078360268e7f",
+  "workingTreeDirty": true,
+  "sourceSha256": "9ba76a72b1fca86768c1d5ccb2f749d46a5e95f436e6e560211fc0685c001600",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-17T18:12:16.290Z",
+  "scenarioIds": [
+    "S01_stability_baseline",
+    "S06_predator_prey_mixed",
+    "S08_recovery_after_cull80",
+    "S09_poor_habitat",
+    "S10_rich_habitat",
+    "S13_poor_position_rich_resources",
+    "S14_rich_position_poor_resources"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 84,
+  "reproduction": {
+    "env": {
+      "E1_PHASE2_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E1_PHASE2_TICKS": "900",
+      "E1_PHASE2_SAMPLE_EVERY": "50",
+      "E1_PHASE2_OUT": "<output>.json"
+    },
+    "command": "E1_PHASE2_SEEDS=1,2,3,4,5,6,7,8,9,10,11,12 E1_PHASE2_TICKS=900 E1_PHASE2_SAMPLE_EVERY=50 E1_PHASE2_OUT=<output>.json npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.phase2.experiment.ts"
+  },
+  "note": "E1.3: correzione spaziale Math.floor, confronti appaiati per seed; runtime Node v22.14.0 uguale al baseline. Nessun dato personale o percorso assoluto."
+}

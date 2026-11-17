@@ -1,0 +1,49 @@
+{
+  "schema": "evoworld.e1.manifest.v1",
+  "artifact": "e1-phase2-baseline.json.gz",
+  "payloadSha256": "9f78a585a9c1d1563c72844380cc6304e97044329b4f8abead9934070b8462f5",
+  "archiveSha256": "a3a9909fa5811ea8477e8b91e7e758800f5dd847b93ba4d5b41125f53c8fd632",
+  "phase": "E1.2-baseline",
+  "codeCommit": "d1e2b5b1e2e37a1a3e95e85f60d3078360268e7f",
+  "workingTreeDirty": false,
+  "sourceSha256": "not-recorded-before-e1.3",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-17T17:28:56.620Z",
+  "scenarioIds": [
+    "S01_stability_baseline",
+    "S06_predator_prey_mixed",
+    "S08_recovery_after_cull80",
+    "S09_poor_habitat",
+    "S10_rich_habitat",
+    "S13_poor_position_rich_resources",
+    "S14_rich_position_poor_resources"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 84,
+  "reproduction": {
+    "env": {
+      "E1_PHASE2_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E1_PHASE2_TICKS": "900",
+      "E1_PHASE2_SAMPLE_EVERY": "50",
+      "E1_PHASE2_OUT": "<output>.json"
+    },
+    "command": "E1_PHASE2_SEEDS=1,2,3,4,5,6,7,8,9,10,11,12 E1_PHASE2_TICKS=900 E1_PHASE2_SAMPLE_EVERY=50 E1_PHASE2_OUT=<output>.json npx vitest run --config vitest.experiment.config.ts scripts/e1_ecosystem.phase2.experiment.ts"
+  },
+  "note": "Baseline storico E1.2: metriche spaziali calcolate con la vecchia convenzione Math.round. Runtime Node v22.14.0. Nessun dato personale o percorso assoluto."
+}

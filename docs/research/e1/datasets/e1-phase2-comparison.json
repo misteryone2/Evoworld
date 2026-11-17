@@ -1,0 +1,172 @@
+{
+  "phase": "E1.3",
+  "schema": "evoworld.e1.comparison.v1",
+  "beforeRuns": 84,
+  "afterRuns": 84,
+  "matchedRuns": 84,
+  "comparedSamples": 1596,
+  "biologicalInvariance": true,
+  "descriptiveStatisticsIdentical": true,
+  "nonSpatialMismatches": [],
+  "missingInAfter": [],
+  "extraInAfter": [],
+  "spatial": [
+    {
+      "field": "occupiedVegetation",
+      "changedRuns": 84,
+      "changedSamples": 1596,
+      "comparedSamples": 1596,
+      "maxAbsDelta": 0.4442,
+      "examples": [
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 0,
+          "field": "occupiedVegetation",
+          "before": 0.2976,
+          "after": 0.296
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 50,
+          "field": "occupiedVegetation",
+          "before": 0.3017,
+          "after": 0.2603
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 100,
+          "field": "occupiedVegetation",
+          "before": 0.2836,
+          "after": 0.228
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 150,
+          "field": "occupiedVegetation",
+          "before": 0.2772,
+          "after": 0.2137
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 200,
+          "field": "occupiedVegetation",
+          "before": 0.3128,
+          "after": 0.2464
+        }
+      ]
+    },
+    {
+      "field": "occupiedLandFraction",
+      "changedRuns": 84,
+      "changedSamples": 1518,
+      "comparedSamples": 1596,
+      "maxAbsDelta": 0.8571,
+      "examples": [
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 0,
+          "field": "occupiedLandFraction",
+          "before": 1,
+          "after": 0.9933
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 50,
+          "field": "occupiedLandFraction",
+          "before": 1,
+          "after": 0.844
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 100,
+          "field": "occupiedLandFraction",
+          "before": 1,
+          "after": 0.7123
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 150,
+          "field": "occupiedLandFraction",
+          "before": 1,
+          "after": 0.66
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 200,
+          "field": "occupiedLandFraction",
+          "before": 1,
+          "after": 0.6585
+        }
+      ]
+    },
+    {
+      "field": "organismsSampled",
+      "changedRuns": 0,
+      "changedSamples": 0,
+      "comparedSamples": 1596,
+      "maxAbsDelta": 0,
+      "examples": []
+    },
+    {
+      "field": "occupiedCellsSampled",
+      "changedRuns": 52,
+      "changedSamples": 152,
+      "comparedSamples": 1596,
+      "maxAbsDelta": 2,
+      "examples": [
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 0,
+          "field": "occupiedCellsSampled",
+          "before": 149,
+          "after": 150
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 1,
+          "tick": 350,
+          "field": "occupiedCellsSampled",
+          "before": 30,
+          "after": 29
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 11,
+          "tick": 900,
+          "field": "occupiedCellsSampled",
+          "before": 18,
+          "after": 19
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 12,
+          "tick": 0,
+          "field": "occupiedCellsSampled",
+          "before": 149,
+          "after": 150
+        },
+        {
+          "scenario": "S01_stability_baseline",
+          "seed": 12,
+          "tick": 100,
+          "field": "occupiedCellsSampled",
+          "before": 64,
+          "after": 65
+        }
+      ]
+    }
+  ],
+  "spatialChangesFound": true,
+  "note": "Confronto tra output ottenuti con gli stessi 12 seed e parametri. Solo i campi spaziali possono cambiare: popolazioni, nascite, mortalita', predazione, tassi, specie e genetica devono essere identici."
+}
