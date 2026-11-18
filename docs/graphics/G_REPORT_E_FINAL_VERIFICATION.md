@@ -63,11 +63,11 @@ Confronto: `main` baseline `10 failed | 769 passed | 1 skipped (780)`, G2.1 `10 
 | Branch | Head | Stato |
 |---|---|---|
 | `graphics/g2-anatomy-hardening` | `0879a88` | pulito, pushato, non toccato |
-| `graphics/g-consolidation` | `dcb06f361def14014594dc816823fb6cbeef9e2f` | documenti, ponte, test e benchmark committati e pushati; working tree pulito |
+| `graphics/g-consolidation` | vedere `git rev-parse HEAD` / API GitHub | documenti, ponte, test e benchmark committati e pushati; working tree pulito |
 | `Evoworld-git` (`research/e2-ecosystem-dynamics`) | — | 17 file dirty E2 intatti, non toccati |
 | `main` | `d330c12` | non modificato |
 
-Verifica remota: `GET https://api.github.com/repos/misteryone2/Evoworld/branches/graphics/g-consolidation` restituisce `sha=dcb06f361def14014594dc816823fb6cbeef9e2f`, con `parent=fab8c671fe4624cd0001249266c64ed1e2b11da9`.
+Verifica remota effettuata dopo il push: `GET https://api.github.com/repos/misteryone2/Evoworld/branches/graphics/g-consolidation` restituisce lo stesso tip della branch locale; l'antenato comune con G2.1 resta `fab8c671fe4624cd0001249266c64ed1e2b11da9`.
 
 Prima del commit finale sono stati rimossi: `scripts/_abUpdate.benchmark.ts` da entrambi i worktree, e `AGENTS.md`/`CLAUDE.md` generati automaticamente da `next dev`. Il worktree G2.1 è pulito.
 
