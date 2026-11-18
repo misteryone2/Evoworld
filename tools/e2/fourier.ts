@@ -101,7 +101,7 @@ export function amplitudeSpectrum(values: number[]): number[] {
  * di Rader. Nessun campione viene aggiunto, rimosso o troncato. I piani sono
  * memorizzati per evitare di ricalcolare fattorizzazioni e twiddle.
  */
-const DIRECT_DFT_LIMIT = 32;
+const DIRECT_DFT_LIMIT = 600;
 
 interface ForwardPlan {
   size: number;
@@ -156,17 +156,25 @@ const directPlan = (size: number): ForwardPlan => {
   return {
     size,
     apply: (values) => {
+      const inputRe = new Float64Array(size);
+      const inputIm = new Float64Array(size);
+      for (let n = 0; n < size; n++) {
+        const value = asComplex(values[n]);
+        inputRe[n] = value.re;
+        inputIm[n] = value.im;
+      }
       const result = new Array<Complex>(size);
       for (let k = 0; k < size; k++) {
         let re = 0;
         let im = 0;
         const offset = k * size;
         for (let n = 0; n < size; n++) {
-          const value = asComplex(values[n]);
+          const valueRe = inputRe[n];
+          const valueIm = inputIm[n];
           const cosine = real[offset + n];
           const sine = imaginary[offset + n];
-          re += value.re * cosine - value.im * sine;
-          im += value.re * sine + value.im * cosine;
+          re += valueRe * cosine - valueIm * sine;
+          im += valueRe * sine + valueIm * cosine;
         }
         result[k] = { re, im };
       }
@@ -280,8 +288,8 @@ function getPlan(size: number): ForwardPlan {
   const existing = exactPlans.get(size);
   if (existing) return existing;
   let plan: ForwardPlan;
-  if (size <= DIRECT_DFT_LIMIT) plan = directPlan(size);
-  else if (isPowerOfTwo(size)) plan = radixTwoPlan(size);
+  if (isPowerOfTwo(size)) plan = radixTwoPlan(size);
+  else if (size <= DIRECT_DFT_LIMIT) plan = directPlan(size);
   else if (smallestFactor(size) === size) plan = raderPlan(size);
   else plan = cooleyTukeyPlan(size);
   exactPlans.set(size, plan);

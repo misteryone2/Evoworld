@@ -14,7 +14,7 @@
  * significatività non implica causalità.
  */
 import { summarize, type NumericSummary } from "../e1/statistics";
-import { exactAmplitudeSpectrum, exactIfftReal, exactTransform } from "./fourier";
+import { exactAmplitudeSpectrum, exactIfftReal, exactTransform, type Complex } from "./fourier";
 import {
   bestCrossCorrelation,
   crossCorrelation,
@@ -219,12 +219,12 @@ export function iaaftSurrogatesDetailed(
   const sorted = [...values].sort((a, b) => a - b);
   const allEqual = sorted.every((value) => value === sorted[0]);
 
-  const relativeSpectralError = (series: number[]): number => {
+  /** Errore calcolato dallo spettro già disponibile, senza una seconda DFT. */
+  const relativeSpectralError = (spectrum: Complex[]): number => {
     if (targetEnergy === 0) return 0;
-    const spectrum = exactAmplitudeSpectrum(series);
     let errorEnergy = 0;
     for (let index = 0; index < n; index++) {
-      const delta = spectrum[index] - targetAmplitude[index];
+      const delta = Math.hypot(spectrum[index].re, spectrum[index].im) - targetAmplitude[index];
       errorEnergy += delta * delta;
     }
     return Math.sqrt(errorEnergy / targetEnergy);
@@ -260,11 +260,11 @@ export function iaaftSurrogatesDetailed(
     }
 
     let current = shuffled;
+    let spectrum = exactTransform(current);
     let used = maxIterations;
     let finalError = Number.POSITIVE_INFINITY;
     let bestError = Number.POSITIVE_INFINITY;
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
-      const spectrum = exactTransform(current);
       const shaped = spectrum.map((value, index) => {
         const magnitude = Math.hypot(value.re, value.im);
         const phase = magnitude === 0 ? 0 : Math.atan2(value.im, value.re);
@@ -274,7 +274,8 @@ export function iaaftSurrogatesDetailed(
         };
       });
       current = remapRanks(exactIfftReal(shaped));
-      finalError = relativeSpectralError(current);
+      spectrum = exactTransform(current);
+      finalError = relativeSpectralError(spectrum);
       bestError = Math.min(bestError, finalError);
       if (finalError <= IAAFT_AMPLITUDE_TOLERANCE) {
         used = iteration;
