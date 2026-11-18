@@ -389,7 +389,7 @@ Tutti i comandi sono stati eseguiti da `C:\Users\matti\Documents\Progetto predef
 - Branch: `research/e2-ecosystem-dynamics`
 - Base `main`: `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 - Commit codice: `70e4f5bd15f36d8456b8b0934d20a54d1121a4e5`
-- Commit documentazione/dataset: `{{FINAL_COMMIT}}`
-- Push: `{{PUSH_STATUS}}`
+- Commit documentazione/dataset: `2bc64ef12b7ea96dfab643d4be593fa3b7f0e599`
+- Push: completato su `origin/research/e2-ecosystem-dynamics`; il primo push ha pubblicato `2bc64ef12b7ea96dfab643d4be593fa3b7f0e599`, il secondo pubblica la finalizzazione di questo report. Nessun push su `main`.
 - Nessun PR, nessun merge, nessuna modifica a `main`.
 - Raccomandazione: **fermarsi per revisione indipendente**; non approvare il merge.
