@@ -7,7 +7,7 @@ Questa cartella contiene la documentazione scientifica, i protocolli e i dataset
 | Sottofase | Stato | Documento |
 |---|---|---|
 | E2.0 — Engine Ecology Audit | Completata | [E2_0_ENGINE_ECOLOGY_AUDIT.md](E2_0_ENGINE_ECOLOGY_AUDIT.md) |
-| E2.1 — Population Stability | Pilota in esecuzione | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
+| E2.1 — Population Stability | Completata (pilota) | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
 | E2.2 — Food Web Dynamics | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
 | E2.3 — Competition & Coexistence | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
 | E2.4 — Biodiversity & Complexity | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |

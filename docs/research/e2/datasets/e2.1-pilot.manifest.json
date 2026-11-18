@@ -1,0 +1,48 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.1-pilot.json.gz",
+  "payloadSha256": "c2dc66e9f5769344080ad4bc49fa5c5c3c4b10386329af6307b7c339204c315a",
+  "archiveSha256": "b70031190c42d27dd70b67fd0b172fa4202d7d3a81b4cfa01fb6ad6493f67507",
+  "phase": "E2.1-pilot",
+  "experiment": "E2.1 population stability / predator-prey / resilience pilot",
+  "codeCommit": "81a84bdb7d2402512cc73e5afd8bb9ea686892c8",
+  "workingTreeDirty": true,
+  "sourceSha256": "d28d341d8f0809c5c0448f44aaa4530aaea6ebd3f2ff05c5c68a027eddcfe40c",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-18T10:22:27.659Z",
+  "scenarioIds": [
+    "S01_stability_baseline",
+    "S02_scarcity_dense",
+    "S06_predator_prey_mixed",
+    "S08_recovery_after_cull80"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 48,
+  "reproduction": {
+    "env": {
+      "E2_PILOT_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E2_PILOT_TICKS": "900",
+      "E2_PILOT_SAMPLE_EVERY": "10",
+      "E2_PILOT_OUT": "<output>.json"
+    },
+    "command": "E2_PILOT_SEEDS=1,2,3,4,5,6,7,8,9,10,11,12 E2_PILOT_TICKS=900 E2_PILOT_SAMPLE_EVERY=10 E2_PILOT_OUT=<output>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_population_pilot.experiment.ts"
+  },
+  "note": "Dataset E2: sorgenti E2 e E1 tracciati separatamente; nessun dato personale o percorso assoluto."
+}

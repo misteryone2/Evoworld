@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** disegno approvato per esecuzione autonoma; E2.1 in esecuzione, E2.2–E2.6 pianificate.
+**Stato:** disegno approvato per esecuzione autonoma; E2.1 completata (pilota), E2.2–E2.6 pianificate.
 
 Questo documento definisce le domande, i disegni e i criteri di decisione delle sottofasi E2. Le fasi successive possono essere riorganizzate se i dati E2.1 mostrano che un'altra sequenza è scientificamente più corretta. Nessun risultato è anticipato: i risultati appartengono ai report di fase.
 
@@ -36,7 +36,7 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 
 | ID | Fase | Domanda centrale | Scenari E1 riusati | Durata | Stato |
 |---|---|---|---|---|---|
-| E2.1 | Population Stability | Le popolazioni raggiungono equilibri stabili? | S01, S02, S06, S08 (pilota) | 900 tick | In esecuzione |
+| E2.1 | Population Stability | Le popolazioni raggiungono equilibri stabili? | S01, S02, S06, S08 (pilota) | 900 tick | Completata (pilota) |
 | E2.2 | Food Web Dynamics | I predatori dipendono realmente dalle prede e con quali ritardi? | S04, S05, S06 | 2700 tick | Pianificata |
 | E2.3 | Competition & Coexistence | La competizione produce esclusione o coesistenza? | S01, S06, S09, S10, S13, S14 | 900-2700 tick | Pianificata |
 | E2.4 | Biodiversity & Complexity | La biodiversità è persistente e correlata alla stabilità? | S01, S06, S09, S10, S12 | 2700 tick | Pianificata |
@@ -64,7 +64,7 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | **Risultati** | Vedere [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) e dataset `e2.1-pilot.json.gz` |
 | **Limiti** | 12 seed non randomizzati; 900 tick possono essere troppo brevi per equilibri evolutivi; `deaths` esclude `predationKills`; la vegetazione osservata è solo nelle celle occupate materializzate |
 | **Interpretazione** | Confronti descrittivi per seed; distinctiveness di regime valutata su distribuzioni complete, non su singole corse |
-| **Conclusione** | Da compilare nel report E2.1 con classificazione esplicita |
+| **Conclusione** | Vedere [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) §6: equilibrio non supportato a 900 tick, con classificazioni esplicite |
 
 ---
 
