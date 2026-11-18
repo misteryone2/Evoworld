@@ -80,10 +80,10 @@ Tipo verifica: **A** automatica, **M** manuale/browser, **C** code-only.
 
 | Stato | Conteggio |
 |---|---:|
-| COMPLETATA | 34 |
-| COMPLETATA CON LIMITAZIONI | 15 |
+| COMPLETATA | 37 |
+| COMPLETATA CON LIMITAZIONI | 10 |
 | BLOCCATA | 1 |
-| NON VERIFICATA | 6 |
+| NON VERIFICATA | 8 |
 | **Totale** | **56** |
 
 ## Giudizio finale

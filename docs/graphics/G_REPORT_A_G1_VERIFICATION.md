@@ -27,7 +27,7 @@ Tipi: **A** = test automatico, **M** = check manuale/browser, **C** = check solo
 | ID | Tipo | Comando / azione | Exit | Risultato | Errori | Skip |
 |---|---|---|---|---|---|---|
 | A-01 | A | `npx vitest run tests/creatureVisualDescriptor.test.ts --reporter=dot` | 0 | `12 passed (12)` | 0 | 0 |
-| A-02 | A | `npx vitest run tests/creatureVisualDescriptor.test.ts tests/creatureInstances.test.ts tests/creatureShape.test.ts --reporter=dot` | 0 | `3 files passed`, `29 passed (29)` | 0 | 0 |
+| A-02 | A | `npx vitest run tests/creatureVisualDescriptor.test.ts tests/creatureInstances.test.ts tests/graphicsConsolidation.test.ts --reporter=dot` | 0 | `3 files passed`, `29 passed (29)` | 0 | 0 |
 | A-03 | A | `npx next build` | 0 | `✓ Compiled successfully`, TypeScript OK, `3/3` pagine statiche | 0 | — |
 | A-04 | A | `npx tsc --noEmit --pretty false` (post-build) | 0 | nessun output | 0 | — |
 | A-05 | A | `npx vitest run --reporter=dot` (G1 storico) | 1 | `687 passed`, `10 failed`, `1 skipped (698)` | 10 preesistenti/flaky | 1 |
