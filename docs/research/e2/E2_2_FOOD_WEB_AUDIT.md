@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** audit completato; strumenti ed esperimenti additivi descritti in [E2_2_EXPERIMENTAL_MATRIX.md](E2_2_EXPERIMENTAL_MATRIX.md).
+**Stato:** audit completato; correzione P1 alla trasformata IAAFT applicata e validata; strumenti ed esperimenti additivi descritti in [E2_2_EXPERIMENTAL_MATRIX.md](E2_2_EXPERIMENTAL_MATRIX.md).
 
 Questo audit stabilisce **quali affermazioni sulle reti trofiche sono supportabili** con la sola strumentazione E1 immutata. Non modifica il motore, i geni, la selezione, la riproduzione, il metabolismo, la predazione, il renderer, G1/G1-b/G2, `lib/anatomy/**`, `lib/phenotype/**`, `tools/e1/**` o i formati di salvataggio. Tutto il codice E2.2 è additivo.
 
@@ -165,9 +165,26 @@ L'applicazione dei setup avviene su uno snapshot e ricostruisce il mondo; **non 
 La versione iniziale dell'audit usava `|r| >= 0.5` e la concordanza di seed come criterio di EVIDENZA. Criterio respinto: mescolava descrizione e inferenza e trattava implicitamente i campioni come indipendenti. Il protocollo corretto è:
 
 - detrendimento lineare dei residui;
-- surrogati IAAFT con fasi casuali indipendenti per le due serie, spettro di ampiezza preservato e distribuzione empirica conservata dal rank-remapping;
+- surrogati IAAFT con fasi casuali indipendenti per le due serie, trasformata alla lunghezza esatta e distribuzione empirica conservata dal rank-remapping; l'errore spettrale è misurato, non assunto;
 - statistica test = massimo `|r|` su **tutti i lag accettati**, non il picco scelto dopo averlo visto;
 - `p = (1 + #{nullMaxAbs >= observedMaxAbs}) / (B + 1)`;
 - combinazione Fisher dei p-value per seed; la direzione è valutata separatamente dal segno di `r` e del lag;
 - diagnostica obbligatoria: lag nominali, lag sulla griglia, lag senza coppie, lag accettati, minima sovrapposizione, coppie ai lag estremi;
 - limiti dichiarati: stazionarietà dei residui, struttura lineare di second'ordine, nullo sharp, assenza di intervento e di ID predatore/preda.
+
+---
+
+## 10. Aggiornamento P1: IAAFT a lunghezza esatta
+
+La review ha identificato un difetto P1 nel modulo statistico: la IAAFT usava una FFT radix-2 che arrotondava `N` alla potenza di due successiva e troncava l'anti-trasformata. Per `N=271`, `100` e `160` questo alterava la lunghezza effettiva dei surrogati. La correzione è contenuta nel commit `23778c4e8a29f0bf2e2d968a9322b50b5907f2c8` e non tocca il motore biologico.
+
+Regole ora applicate alla IAAFT:
+
+1. `exactAmplitudeSpectrum`, `exactTransform` e `exactIfftReal` lavorano su esattamente `N` campioni. Non esistono padding, troncamento o ricostruzione di lunghezza diversa.
+2. Il piano è scelto per lunghezza esatta: radix-2 per potenze di due, matrice DFT diretta cache per `N<=600`, Rader per primi maggiori, Cooley–Tukey a radix misto per composti maggiori. `fft()/transform()` restano solo per la convoluzione della cross-correlazione.
+3. Ogni surrogato conserva la distribuzione empirica tramite rank-remapping di `N` valori e viene verificato come finito.
+4. La convergenza è definita sull'errore spettrale normalizzato completo dopo il rank-remapping, con tolleranza `1e-3`. Criterio, tolleranza, budget, iterazioni effettive ed errori finali/migliori sono esposti in `SurrogateNullTest.convergence`.
+5. Le analisi usano un budget di 12 iterazioni e la tolleranza non viene raggiunta nei casi non degenerati: i report devono dichiarare il criterio, il budget, le iterazioni e l'errore misurato. Non è corretto affermare la preservazione dello spettro basandosi solo sull'autocorrelazione lag-1.
+6. La statistica di test resta `max|r|` su tutti i lag accettati, con p-value `(1+hits)/(B+1)` e Fisher cross-seed. La correzione P1 non ha cambiato alcun verdetto: 20/20 coppie/blocchi S06 e 50/50 verdict complessivi sono invariati; sono cambiati solo i p-value surrogati.
+
+La validazione v2 copre `N=100/160/271/256/512`, serie costanti/quasi costanti/con valori ripetuti, AR(1) indipendenti con `phi=0/0,25/0,65/0,9`, lag noti a `N=100/271`, sensibilità al numero di iterazioni e di surrogati. Dettagli, hash e comandi sono in [E2_2_FOOD_WEB_REVIEW_CORRECTIONS.md](E2_2_FOOD_WEB_REVIEW_CORRECTIONS.md). Le regole di osservabilità e inferenza di questo audit restano invariate: non è ancora possibile identificare ruoli trofici individuali o causalità.

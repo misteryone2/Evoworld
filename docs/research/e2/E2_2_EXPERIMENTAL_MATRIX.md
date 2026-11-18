@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** disegno approvato per esecuzione; audit in [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md).
+**Stato:** disegno eseguito; correzione P1 alla IAAFT applicata e validata; audit in [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md).
 
 ---
 
@@ -37,7 +37,7 @@
 | Runtime | Node `v22.14.0`, V8 `12.4.254.21-node.22` |
 | Output grezzo | JSON con `schema`, `env`, `protocol`, `scientificReport`, `results`, `runtime` |
 | Classificazione | `EVIDENZA_SEQUENZIALITA_POSITIVA/NEGATIVA` / `INDICATIVO_POSITIVO/NEGATIVO/MISTO` / `NON_DIMOSTRATO`; la causalità resta `NON_IDENTIFICABILE` |
-| Inferenza | EVIDENZA solo con test surrogato IAAFT significante e direzione descrittiva consistente; tick non sono repliche; `|r|` e concordanza di seed non bastano |
+| Inferenza | EVIDENZA solo con test surrogato IAAFT a lunghezza esatta significante e direzione descrittiva consistente; tick non sono repliche; `|r|` e concordanza di seed non bastano |
 
 ---
 
@@ -98,37 +98,42 @@ npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.e
 
 Solo i file `scripts/e2*.ts` vengono invocati: nessuna modifica a E1 o al motore.
 
-### 4.2 Rigenerazione review (senza rieseguire il motore)
+### 4.2 Rigenerazione review P1 (senza rieseguire il motore)
 
 ```bash
-# Analisi corrette dai quattro blocchi grezzi originali
-E2_FOODWEB_REANALYSIS_MAIN=<A> E2_FOODWEB_REANALYSIS_SEED=<B> \
-E2_FOODWEB_REANALYSIS_DURATION=<C> E2_FOODWEB_REANALYSIS_SAMPLING=<D> \
+# Analisi corrette dai quattro blocchi grezzi originali.
+# E2_FOODWEB_REANALYSIS_ONLY=main|seed|duration|sampling seleziona un blocco alla volta.
+E2_FOODWEB_REANALYSIS_MAIN=<raw>/e2.2-main.json E2_FOODWEB_REANALYSIS_SEED=<raw>/e2.2-seed.json \
+E2_FOODWEB_REANALYSIS_DURATION=<raw>/e2.2-duration.json E2_FOODWEB_REANALYSIS_SAMPLING=<raw>/e2.2-sampling.json \
 E2_FOODWEB_REANALYSIS_{MAIN,SEED,DURATION,SAMPLING}_OUT=<review>/... \
-E2_FOODWEB_REANALYSIS_EXECUTED_AT=2026-11-18T13:00:00.000Z \
+E2_FOODWEB_REANALYSIS_EXECUTED_AT=2026-11-18T14:10:00.000Z \
 npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_reanalysis.experiment.ts
 
 # Aggregazione della sensibilità dai report corretti
 E2_FOODWEB_SENS_MAIN=<review>/main E2_FOODWEB_SENS_SEED=<review>/seed \
 E2_FOODWEB_SENS_DURATION=<review>/duration E2_FOODWEB_SENS_SAMPLING=<review>/sampling \
 E2_FOODWEB_SENS_OUT=<review>/sensitivity.json \
-E2_FOODWEB_SENS_EXECUTED_AT=2026-11-18T13:10:00.000Z \
+E2_FOODWEB_SENS_EXECUTED_AT=2026-11-18T14:20:00.000Z \
 npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts
 
-# Validazione review e dataset corretto
+# Validazione estesa (schema v2)
 E2_FOODWEB_VALIDATION_RAW_{MAIN,SEED,DURATION,SAMPLING}=<raw>/... \
 E2_FOODWEB_VALIDATION_REVIEW_{MAIN,SEED,DURATION,SAMPLING}=<review>/... \
 E2_FOODWEB_VALIDATION_ORIGINAL_MANIFEST=docs/research/e2/datasets/e2.2-foodweb.manifest.json \
 E2_FOODWEB_VALIDATION_ORIGINAL_ARCHIVE=docs/research/e2/datasets/e2.2-foodweb.json.gz \
-E2_FOODWEB_VALIDATION_OUT=<review>/validation.json \
-E2_FOODWEB_VALIDATION_EXECUTED_AT=2026-11-18T13:20:00.000Z \
+E2_FOODWEB_VALIDATION_OUT=<review>/e2.2-iaaft-validation.json \
+E2_FOODWEB_VALIDATION_EXECUTED_AT=2026-11-18T14:30:00.000Z \
 npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_review_validation.experiment.ts
 
-E2_FOODWEB_DATASET_* E2_FOODWEB_DATASET_LABEL=e2.2-foodweb-review \
-E2_FOODWEB_DATASET_CODE_COMMIT=<code-commit> E2_FOODWEB_DATASET_WORKING_TREE_DIRTY=0 \
-E2_FOODWEB_DATASET_EXECUTED_AT=2026-11-18T13:30:00.000Z \
+# Dataset finale (codice committato, working tree pulita)
+E2_FOODWEB_DATASET_* E2_FOODWEB_DATASET_LABEL=e2.2-foodweb-iaaft-review \
+E2_FOODWEB_DATASET_CODE_COMMIT=23778c4e8a29f0bf2e2d968a9322b50b5907f2c8 \
+E2_FOODWEB_DATASET_WORKING_TREE_DIRTY=0 \
+E2_FOODWEB_DATASET_EXECUTED_AT=2026-11-18T14:40:00.000Z \
 npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.experiment.ts
 ```
+
+I quattro report rigenerati hanno SHA-256 `c8f46828…5599d35` (main), `17332ba6…e54c4f84` (seed), `7d0ea169…42d2df69` (duration) e `6b2af5c6…2f50b2` (sampling). Sensibilità: `e24e831e…4fbd0b97`. Validazione v2: `f4678ffa…7ce41f35a6`. Dataset: payload `d65c1dc8…538f03`, archivio `828189b5…25c60c4`, manifest `df1f8f9c…83a1eb8e`. Comandi PowerShell completi in [E2_2_FOOD_WEB_REVIEW_CORRECTIONS.md](E2_2_FOOD_WEB_REVIEW_CORRECTIONS.md).
 
 ---
 
@@ -140,7 +145,7 @@ npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.e
 | Predazione | `cumulativePredationKills`, tasso intervallare, `predationPressure` snapshot | `tools/e2/trophic.ts` |
 | Risorsa | `occupiedVegetation`, `occupiedLandFraction` | `tools/e2/trophic.ts` |
 | Stabilità | trend (slope, R²), lag-1, CV, oscillazioni per serie | `tools/e2/timeseries.ts` via `tools/e2/trophic.ts` |
-| Correlazione | lag-0 originale/detrendizzata, picco, segno(r)×segno(lag), diagnostica lag, rischio trend spurious, null IAAFT | `tools/e2/timeseries.ts`, `tools/e2/fourier.ts`, `tools/e2/surrogateInference.ts`, `tools/e2/foodWebReport.ts` |
+| Correlazione | lag-0 originale/detrendizzata, picco, segno(r)×segno(lag), diagnostica lag, rischio trend spurious, null IAAFT a lunghezza esatta, errore spettrale e iterazioni | `tools/e2/timeseries.ts`, `tools/e2/fourier.ts`, `tools/e2/surrogateInference.ts`, `tools/e2/foodWebReport.ts` |
 | Coppie | erbivori↔carnivori, erbivori↔kills, carnivori↔kills, vegetazione↔erbivori, vegetazione↔carnivori | `tools/e2/foodWebReport.ts` |
 | Persistenza | presenza, prima/ultimo tick, extinctionTick, frazione coesistenza | `tools/e2/trophic.ts` |
 | Confronto | S06−S05 e S06−S04 appaiati su kills, tratti, coesistenza, correlazione | `tools/e2/foodWebReport.ts` |
@@ -176,8 +181,25 @@ Con `sampleEvery=10`, solo lag multipli di 10 tick sono stimabili; il picco va l
 - Audit trofico: [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md)
 - Matrice: questo documento
 - Strumenti: `tools/e2/trophic.ts`, `tools/e2/timeseries.ts`, `tools/e2/fourier.ts`, `tools/e2/surrogateInference.ts`, `tools/e2/foodWebReport.ts` (+ estensione additiva di `tools/e2/scenarios.ts`)
-- Test: `tests/e2/trophic.test.ts`, `tests/e2/timeseries.test.ts`, `tests/e2/foodWebReport.test.ts`
+- Test: `tests/e2/trophic.test.ts`, `tests/e2/timeseries.test.ts`, `tests/e2/foodWebReport.test.ts`, `tests/e2/iaaft.test.ts`
 - Script: `scripts/e2_foodweb.experiment.ts`, `scripts/e2_foodweb_reanalysis.experiment.ts`, `scripts/e2_foodweb_sensitivity.experiment.ts`, `scripts/e2_foodweb_review_validation.experiment.ts`, `scripts/e2_foodweb_dataset.experiment.ts`
-- Output: 4 payload grezzi + 4 report review + sensibilità + validazione + archivi `e2.2-foodweb.json.gz` (immutato) e `e2.2-foodweb-review.json.gz`
+- Output: 4 payload grezzi + 4 report review P1 + sensibilità + validazione v2 + archivi `e2.2-foodweb.json.gz` (immutato), `e2.2-foodweb-review.json.gz` (superato, immutato) e `e2.2-foodweb-iaaft-review.json.gz` (finale)
 - Report finale: `docs/research/e2/E2_2_FOOD_WEB_REPORT.md`
-- Verifiche: `npx tsc --noEmit --incremental false`, `npm run build`, suite E2 e E1, diff file vietati vuoto
+- Verifiche: `npx tsc --noEmit --incremental false`, `npm run build`, suite E2 (63 test) e E1 (65 test), diff file protetti vuoto
+
+---
+
+## 8. Protocollo IAAFT dopo la correzione P1
+
+| Elemento | Regola finale |
+|---|---|
+| Trasformata | DFT/anti-DFT su `N` esatti; radix-2 per potenze di due, DFT diretta cache per `N<=600`, Rader per primi >600, Cooley–Tukey per composti >600 |
+| Padding/troncamento | vietati nella IAAFT; `fft()/transform()` restano solo per la convoluzione della cross-correlazione |
+| Distribuzione | rank-remapping di `N` valori; errore distribuzione `0` a priori e in validazione |
+| Spettro | errore normalizzato completo misurato dopo ogni iterazione; non dedotto da lag-1 |
+| Convergenza | `E<=1e-3`; criterio, tolleranza, budget, iterazioni usate ed errori finali/migliori registrati per ogni test |
+| Budget | `12` nelle analisi e nella calibrazione, `24` nella validazione dedicata; tolleranza non raggiunta nei casi non degenerati a 12 iterazioni |
+| Statistica | `max|r|` su tutti i lag accettati; `p=(1+hits)/(B+1)`; Fisher cross-seed |
+| Validazione | `N=100/160/271/256/512`, degenerati, AR(1) `phi=0/0,25/0,65/0,9`, lag noti, sensibilità a iterazioni e surrogati |
+| Esito | tutti i 50 verdict across scenarios e 20/20 coppie S06 invarianti rispetto al dataset review precedente; solo i p-value sono cambiati |
+| Stato | E2.2 non approvato; nuova review indipendente richiesta prima di E2.3 |
