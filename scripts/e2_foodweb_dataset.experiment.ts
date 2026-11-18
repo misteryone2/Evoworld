@@ -1,23 +1,35 @@
-/** E2.2 — dataset riproducibile, manifest e checksum sorgente. */
+/** E2.2 review — dataset corretto, manifest e provenance dell'archivio originale immutato. */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 import { resolveOutputPath } from "../tools/e1/experiment";
 import type { RunResult } from "../tools/e1/runner";
-import { checksumSources, e1SourceFiles, e2SourceFiles, writeDataset } from "../tools/e2/dataset";
+import { checksumSources, e1SourceFiles, e2SourceFiles, readDataset, writeDataset } from "../tools/e2/dataset";
+import type { FoodWebProtocol } from "../tools/e2/foodWebReport";
 
 interface BlockPayload {
   schema: string;
   label: string;
   env: { SEEDS: number[]; TICKS: number; SAMPLE_EVERY: number; MAX_LAG: number; SCENARIOS: string[] };
+  protocol: FoodWebProtocol;
   scientificReport: unknown;
   results: RunResult[];
+  review?: { sourceBlockSha256: string; originalLabel: string };
 }
 
 interface SensitivityPayload {
   schema: string;
   [key: string]: unknown;
 }
+
+const ORIGINAL_DATASET = {
+  manifest: "docs/research/e2/datasets/e2.2-foodweb.manifest.json",
+  archive: "docs/research/e2/datasets/e2.2-foodweb.json.gz",
+  payloadSha256: "755d2a4f778ba8c90243daee3dd01e63530380567ac36875d8ecc281dc5e772d",
+  archiveSha256: "d407c8d3a906ff1d0909681f95a9f441173f502eb61a3b39970a82ef17f7cb79",
+  codeCommit: "b604b031c32ac10f0fbcab67d3624942074c1ed0",
+  executedAt: "2026-11-18T12:30:00.000Z",
+} as const;
 
 const readJson = <T extends { schema: string }>(value: string | undefined, name: string, expectedSchema: string): {
   payload: T;
@@ -31,9 +43,9 @@ const readJson = <T extends { schema: string }>(value: string | undefined, name:
   return { payload, text, sha256: createHash("sha256").update(text).digest("hex") };
 };
 
-describe("E2.2 food-web dataset", () => {
+describe("E2.2 review food-web dataset", () => {
   it(
-    "writes a reproducible E2.2 dataset with a clean provenance manifest",
+    "writes a corrected reproducible E2.2 dataset while preserving the original archive",
     () => {
       const main = readJson<BlockPayload>(process.env.E2_FOODWEB_DATASET_MAIN, "E2_FOODWEB_DATASET_MAIN", "evoworld.e2.foodweb-block.v1");
       const seed = readJson<BlockPayload>(process.env.E2_FOODWEB_DATASET_SEED, "E2_FOODWEB_DATASET_SEED", "evoworld.e2.foodweb-block.v1");
@@ -41,8 +53,17 @@ describe("E2.2 food-web dataset", () => {
       const sampling = readJson<BlockPayload>(process.env.E2_FOODWEB_DATASET_SAMPLING, "E2_FOODWEB_DATASET_SAMPLING", "evoworld.e2.foodweb-block.v1");
       const sensitivity = readJson<SensitivityPayload>(process.env.E2_FOODWEB_DATASET_SENSITIVITY, "E2_FOODWEB_DATASET_SENSITIVITY", "evoworld.e2.foodweb-sensitivity.v1");
 
+      const original = readDataset(
+        resolveOutputPath(process.env.E2_FOODWEB_DATASET_ORIGINAL_ARCHIVE ?? ORIGINAL_DATASET.archive),
+        resolveOutputPath(process.env.E2_FOODWEB_DATASET_ORIGINAL_MANIFEST ?? ORIGINAL_DATASET.manifest),
+      );
+      if (original.payloadSha256 !== ORIGINAL_DATASET.payloadSha256
+        || original.manifest?.archiveSha256 !== ORIGINAL_DATASET.archiveSha256) {
+        throw new Error("Original e2.2-foodweb dataset changed: refusing to write the review dataset");
+      }
+
       const outDir = resolveOutputPath(process.env.E2_FOODWEB_DATASET_OUT_DIR ?? "docs/research/e2/datasets");
-      const label = process.env.E2_FOODWEB_DATASET_LABEL ?? "e2.2-foodweb";
+      const label = process.env.E2_FOODWEB_DATASET_LABEL ?? "e2.2-foodweb-review";
       const codeCommit = process.env.E2_FOODWEB_DATASET_CODE_COMMIT;
       if (!codeCommit) throw new Error("E2_FOODWEB_DATASET_CODE_COMMIT is required");
       const dirtyFlag = process.env.E2_FOODWEB_DATASET_WORKING_TREE_DIRTY ?? "1";
@@ -60,26 +81,59 @@ describe("E2.2 food-web dataset", () => {
       };
       const reproduction = {
         env: {
-          E2_FOODWEB_LABEL: "main",
-          E2_FOODWEB_SEEDS: env.SEEDS.join(","),
-          E2_FOODWEB_TICKS: String(env.TICKS),
-          E2_FOODWEB_SAMPLE_EVERY: String(env.SAMPLE_EVERY),
-          E2_FOODWEB_MAX_LAG: String(env.MAX_LAG),
-          E2_FOODWEB_SCENARIOS: env.SCENARIOS.join(","),
+          E2_FOODWEB_REANALYSIS_MAIN: "<raw>/e2.2-main.json",
+          E2_FOODWEB_REANALYSIS_SEED: "<raw>/e2.2-seed.json",
+          E2_FOODWEB_REANALYSIS_DURATION: "<raw>/e2.2-duration.json",
+          E2_FOODWEB_REANALYSIS_SAMPLING: "<raw>/e2.2-sampling.json",
+          E2_FOODWEB_REANALYSIS_EXECUTED_AT: "2026-11-18T13:00:00.000Z",
+          E2_FOODWEB_SENS_EXECUTED_AT: "2026-11-18T13:10:00.000Z",
         },
         command: [
-          "E2_FOODWEB_LABEL=main E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_MAX_LAG=200 E2_FOODWEB_OUT=<main>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts",
-          "E2_FOODWEB_LABEL=seed E2_FOODWEB_SEEDS=13..24 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_OUT=<seed>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts",
-          "E2_FOODWEB_LABEL=duration E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=900 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_OUT=<duration>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts",
-          "E2_FOODWEB_LABEL=sampling E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=5 E2_FOODWEB_SCENARIOS=S06_predator_prey_mixed E2_FOODWEB_OUT=<sampling>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts",
-          "E2_FOODWEB_SENS_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts",
+          "# Original 120 executed runs are unchanged; see the e2.2-foodweb archive.",
+          "E2_FOODWEB_REANALYSIS_* E2_FOODWEB_REANALYSIS_*_OUT=<review>/... npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_reanalysis.experiment.ts",
+          "E2_FOODWEB_SENS_MAIN=<review>/main E2_FOODWEB_SENS_SEED=<review>/seed E2_FOODWEB_SENS_DURATION=<review>/duration E2_FOODWEB_SENS_SAMPLING=<review>/sampling E2_FOODWEB_SENS_OUT=<review>/sensitivity.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts",
+          "E2_FOODWEB_VALIDATION_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_review_validation.experiment.ts",
           "E2_FOODWEB_DATASET_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.experiment.ts",
         ].join("\n"),
       };
 
+      const review = {
+        schema: "evoworld.e2.foodweb-review.v1",
+        surrogate: main.payload.protocol.surrogate ?? null,
+        originalDataset: {
+          artifact: `${label}.json.gz`.replace("-review", ""),
+          payloadSha256: ORIGINAL_DATASET.payloadSha256,
+          archiveSha256: ORIGINAL_DATASET.archiveSha256,
+          codeCommit: ORIGINAL_DATASET.codeCommit,
+          executedAt: ORIGINAL_DATASET.executedAt,
+          unchanged: true,
+        },
+        originalInputHashes: {
+          main: main.payload.review?.sourceBlockSha256 ?? null,
+          seed: seed.payload.review?.sourceBlockSha256 ?? null,
+          duration: duration.payload.review?.sourceBlockSha256 ?? null,
+          sampling: sampling.payload.review?.sourceBlockSha256 ?? null,
+        },
+        conclusionChanges: {
+          confirmed: [
+            "Conteggi kills descrittivi, persistenza/coesistenza, identità strutturale delle frazioni e determinismo del troncamento A->900.",
+            "Direzione descrittiva del picco erbivori->kills a lag positivo nei quattro blocchi.",
+          ],
+          downgraded: [
+            "La sequenzialità erbivori->kills non deriva più da 12/12 seed o |r|>=0.5: richiede p-value IAAFT corretto per il massimo su tutti i lag e direzione esplicita.",
+            "La classificazione erbivori->carnivori resta NON_DIMOSTRATO ma ora separa descrittivo, statistico, sequenzialità e causalità.",
+          ],
+          rejected: [
+            "Qualsiasi significatività da soglia arbitraria |r|>=0.5 o concordanza tra seed.",
+            "Trattare i tick di una corsa come osservazioni indipendenti.",
+            "Equiparare correlazione negativa forte a sequenzialità positiva.",
+          ],
+        },
+      };
+
       const manifest = writeDataset(outDir, label, {
-        phase: "E2.2-foodweb",
-        experiment: "E2.2 food web dynamics: trait abundance, recorded kills, lagged sequencing and persistence",
+        phase: "E2.2-foodweb-review",
+        experiment: "E2.2 food web dynamics: corrected sign-aware, autocorrelation-aware and lag-corrected inference",
         env,
         scientificReport,
         results: [
@@ -94,7 +148,7 @@ describe("E2.2 food-web dataset", () => {
         sourceSha256: checksumSources(e2SourceFiles()),
         e1SourceSha256: checksumSources(e1SourceFiles()),
         runtime: { node: process.version, v8: process.versions.v8 },
-        note: "Dataset E2.2: 120 corse (primaria, replica seed, durata, campionamento), analisi trofiche additive; sorgenti E2 e E1 tracciati separatamente. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità.",
+        note: "Dataset E2.2 review: stesse 120 corse dell'archivio originale, analisi scientifica rigenerata. Segno di r e del lag separati, null IAAFT su residui detrendizzati, p-value del massimo su tutti i lag e combinazione Fisher cross-seed. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità.",
         reproduction,
         auxiliary: {
           inputs: {
@@ -104,12 +158,12 @@ describe("E2.2 food-web dataset", () => {
             sampling: { label: sampling.payload.label, sha256: sampling.sha256, schema: sampling.payload.schema, runs: sampling.payload.results.length },
             sensitivity: { sha256: sensitivity.sha256, schema: sensitivity.payload.schema },
           },
-          reviewId: "E2.2-foodweb-2026-11-18",
+          review,
         },
       });
 
       process.stdout.write(
-        `E2.2 dataset written: ${manifest.artifact}\npayloadSha256=${manifest.payloadSha256}\narchiveSha256=${manifest.archiveSha256}\nsourceSha256=${manifest.sourceSha256}\ne1SourceSha256=${manifest.e1SourceSha256}\ncodeCommit=${manifest.codeCommit}\nworkingTreeDirty=${manifest.workingTreeDirty}\ntotalRuns=${manifest.totalRuns}\n`,
+        `E2.2 review dataset written: ${manifest.artifact}\npayloadSha256=${manifest.payloadSha256}\narchiveSha256=${manifest.archiveSha256}\nsourceSha256=${manifest.sourceSha256}\ne1SourceSha256=${manifest.e1SourceSha256}\ncodeCommit=${manifest.codeCommit}\nworkingTreeDirty=${manifest.workingTreeDirty}\ntotalRuns=${manifest.totalRuns}\noriginalDatasetUnchanged=true\n`,
       );
     },
     120_000,

@@ -8,7 +8,24 @@
 import type { RunResult } from "../e1/runner";
 import { summarize, type NumericSummary, type PairedComparison } from "../e1/statistics";
 import { byScenario, pairedMetric } from "./statistics";
-import { compareCrossCorrelations, pearsonCorrelation, seriesMean, type Point } from "./timeseries";
+import {
+  bestNegativeCrossCorrelation,
+  bestPositiveCrossCorrelation,
+  compareCrossCorrelations,
+  pearsonCorrelation,
+  seriesMean,
+  type LagSearchDiagnostics,
+  type Point,
+} from "./timeseries";
+import {
+  combineSurrogatePValues,
+  minimumOverlapFor,
+  runSurrogateNullTest,
+  DEFAULT_SURROGATE_CONFIG,
+  type CombinedSurrogateEvidence,
+  type SurrogateConfig,
+  type SurrogateNullTest,
+} from "./surrogateInference";
 import {
   trophicPersistence,
   trophicSeriesSet,
@@ -43,6 +60,32 @@ const finite = (values: Array<number | null | undefined>): number[] =>
 const safe = (key: string, fallback: TrophicPairDef): TrophicPairDef =>
   FOOD_WEB_PAIRS.find((pair) => pair.id === key) ?? fallback;
 
+const normalizeSurrogateConfig = (config: Partial<SurrogateConfig> = {}): SurrogateConfig => ({
+  ...DEFAULT_SURROGATE_CONFIG,
+  ...config,
+  pairIds: config.pairIds ?? [...DEFAULT_SURROGATE_CONFIG.pairIds],
+});
+
+const sign = (value: number | null | undefined): -1 | 0 | 1 | null =>
+  value === null || value === undefined || !Number.isFinite(value)
+    ? null
+    : value > 0 ? 1 : value < 0 ? -1 : 0;
+
+const quadrantFor = (correlationSign: -1 | 0 | 1 | null, lagSign: -1 | 0 | 1 | null): CorrelationQuadrant => {
+  if (correlationSign === null || lagSign === null) return "non_stimibile";
+  if (lagSign === 0) return "lag_zero";
+  if (correlationSign > 0) return lagSign > 0 ? "r_positivo_lag_positivo" : "r_positivo_lag_negativo";
+  return lagSign > 0 ? "r_negativo_lag_positivo" : "r_negativo_lag_negativo";
+};
+
+export type CorrelationQuadrant =
+  | "r_positivo_lag_positivo"
+  | "r_negativo_lag_positivo"
+  | "r_positivo_lag_negativo"
+  | "r_negativo_lag_negativo"
+  | "lag_zero"
+  | "non_stimibile";
+
 export interface PairCorrelationSeed {
   seed: number;
   originalAtLagZero: number | null;
@@ -50,6 +93,16 @@ export interface PairCorrelationSeed {
   originalPeakLag: number | null;
   detrendedPeakLag: number | null;
   detrendedPeakCorrelation: number | null;
+  /** Segno di r e segno del lag sono campi distinti: "|r| grande" non è sequenzialità positiva. */
+  peakCorrelationSign: -1 | 0 | 1 | null;
+  peakLagSign: -1 | 0 | 1 | null;
+  peakQuadrant: CorrelationQuadrant;
+  bestPositivePeakLag: number | null;
+  bestPositivePeakCorrelation: number | null;
+  bestNegativePeakLag: number | null;
+  bestNegativePeakCorrelation: number | null;
+  lagSearch: LagSearchDiagnostics;
+  surrogate: SurrogateNullTest | null;
   commonTrendDetected: boolean;
   spuriousTrendRisk: boolean;
 }
@@ -67,13 +120,30 @@ export interface PairCorrelationSummary {
   originalPeakLag: NumericSummary;
   detrendedPeakLag: NumericSummary;
   detrendedPeakCorrelation: NumericSummary;
-  /** Seed con picco detrendizzato a lag > 0 (b dopo a). */
+  positivePeakCorrelation: NumericSummary;
+  negativePeakCorrelation: NumericSummary;
+  /** Numero nominale di lag provati e numero di lag accettati (diagnostica selezione). */
+  lagsAttempted: number;
+  lagsAcceptedPerRun: NumericSummary;
+  minimumOverlappingObservations: number;
+  extremeLagPairLossFraction: NumericSummary;
+  /** Seed con il picco a lag > 0 (b dopo a), indipendentemente dal segno di r. */
   positiveLagSeeds: number;
   negativeLagSeeds: number;
   zeroLagSeeds: number;
-  /** Seed con lag > 0 e |r| >= 0.5 al picco detrendizzato. */
+  positiveCorrelationSeeds: number;
+  negativeCorrelationSeeds: number;
+  /** Quadranti segno(r) × segno(lag). */
+  positiveCorrelationPositiveLagSeeds: number;
+  negativeCorrelationPositiveLagSeeds: number;
+  positiveCorrelationNegativeLagSeeds: number;
+  negativeCorrelationNegativeLagSeeds: number;
+  /** Campo legacy corretto: ora conta solo r>0 con lag>0 e r>=0.5. */
   strongPositiveLagSeeds: number;
+  strongNegativeCorrelationPositiveLagSeeds: number;
   spuriousTrendRiskSeeds: number;
+  /** Evidenza statistica cross-seed con massimo sui lag corretto dai surrogati. */
+  surrogate: CombinedSurrogateEvidence | null;
   note: string;
 }
 
@@ -87,12 +157,25 @@ export function analyzePairCorrelation(
   results: RunResult[],
   pair: TrophicPairDef,
   maxLag: number,
+  config: Partial<SurrogateConfig> = {},
 ): PairCorrelationSummary {
   if (!Number.isInteger(maxLag) || maxLag < 0) throw new Error("maxLag must be a non-negative integer");
+  const resolved = normalizeSurrogateConfig(config);
+  const runSurrogate = resolved.enabled
+    && (resolved.pairIds.length === 0 || resolved.pairIds.includes(pair.id));
   const sorted = [...results].sort((x, y) => x.seed - y.seed);
   const seeds: PairCorrelationSeed[] = sorted.map((result) => {
     const { a, b } = pairSeries(result, pair);
-    const comparison = compareCrossCorrelations(a, b, maxLag);
+    const minimum = minimumOverlapFor(a, b, resolved.minOverlappingObservations);
+    const comparison = compareCrossCorrelations(a, b, maxLag, minimum);
+    const correlationSign = sign(comparison.detrendedPeak?.correlation);
+    const lagSign = sign(comparison.detrendedPeak?.lag);
+    const positivePeak = bestPositiveCrossCorrelation(
+      comparison.detrendedPeak ? [comparison.detrendedPeak] : [],
+    );
+    const negativePeak = bestNegativeCrossCorrelation(
+      comparison.detrendedPeak ? [comparison.detrendedPeak] : [],
+    );
     return {
       seed: result.seed,
       originalAtLagZero: comparison.originalAtLagZero,
@@ -100,12 +183,35 @@ export function analyzePairCorrelation(
       originalPeakLag: comparison.originalPeak?.lag ?? null,
       detrendedPeakLag: comparison.detrendedPeak?.lag ?? null,
       detrendedPeakCorrelation: comparison.detrendedPeak?.correlation ?? null,
+      peakCorrelationSign: correlationSign,
+      peakLagSign: lagSign,
+      peakQuadrant: quadrantFor(correlationSign, lagSign),
+      bestPositivePeakLag: positivePeak?.lag ?? null,
+      bestPositivePeakCorrelation: positivePeak?.correlation ?? null,
+      bestNegativePeakLag: negativePeak?.lag ?? null,
+      bestNegativePeakCorrelation: negativePeak?.correlation ?? null,
+      lagSearch: comparison.lagSearch,
+      surrogate: runSurrogate
+        ? runSurrogateNullTest(pair.id, result.seed, a, b, maxLag, resolved)
+        : null,
       commonTrendDetected: comparison.commonTrendDetected,
       spuriousTrendRisk: comparison.spuriousTrendRisk,
     };
   });
 
-  const positive = seeds.filter((seed) => seed.detrendedPeakLag !== null && seed.detrendedPeakLag > 0);
+  const peakWithSign = (correlationSign: 1 | -1): PairCorrelationSeed[] => seeds.filter(
+    (seed) => seed.peakCorrelationSign === correlationSign,
+  );
+  const strong = (seed: PairCorrelationSeed, correlationSign: 1 | -1): boolean =>
+    seed.detrendedPeakCorrelation !== null
+    && Math.abs(seed.detrendedPeakCorrelation) >= 0.5
+    && seed.peakCorrelationSign === correlationSign;
+  const positiveLag = (seed: PairCorrelationSeed): boolean =>
+    seed.detrendedPeakLag !== null && seed.detrendedPeakLag > 0;
+  const negativeLag = (seed: PairCorrelationSeed): boolean =>
+    seed.detrendedPeakLag !== null && seed.detrendedPeakLag < 0;
+  const surrogateTests = finite(seeds.map((seed) => seed.surrogate?.pValue));
+
   return {
     pairId: pair.id,
     a: pair.a,
@@ -119,13 +225,34 @@ export function analyzePairCorrelation(
     originalPeakLag: summarize(finite(seeds.map((seed) => seed.originalPeakLag))),
     detrendedPeakLag: summarize(finite(seeds.map((seed) => seed.detrendedPeakLag))),
     detrendedPeakCorrelation: summarize(finite(seeds.map((seed) => seed.detrendedPeakCorrelation))),
-    positiveLagSeeds: positive.length,
-    negativeLagSeeds: seeds.filter((seed) => seed.detrendedPeakLag !== null && seed.detrendedPeakLag < 0).length,
+    positivePeakCorrelation: summarize(finite(seeds.map((seed) => seed.bestPositivePeakCorrelation))),
+    negativePeakCorrelation: summarize(finite(seeds.map((seed) => seed.bestNegativePeakCorrelation))),
+    lagsAttempted: seeds[0]?.lagSearch.lagsAttempted ?? 2 * maxLag + 1,
+    lagsAcceptedPerRun: summarize(finite(seeds.map((seed) => seed.lagSearch.lagsAccepted))),
+    minimumOverlappingObservations: seeds[0]?.lagSearch.minimumOverlappingObservations
+      ?? resolved.minOverlappingObservations,
+    extremeLagPairLossFraction: summarize(finite(seeds.map(
+      (seed) => seed.lagSearch.extremeLagPairs.lossFraction,
+    ))),
+    positiveLagSeeds: seeds.filter(positiveLag).length,
+    negativeLagSeeds: seeds.filter(negativeLag).length,
     zeroLagSeeds: seeds.filter((seed) => seed.detrendedPeakLag === 0).length,
-    strongPositiveLagSeeds: positive.filter((seed) =>
-      seed.detrendedPeakCorrelation !== null && Math.abs(seed.detrendedPeakCorrelation) >= 0.5).length,
+    positiveCorrelationSeeds: peakWithSign(1).length,
+    negativeCorrelationSeeds: peakWithSign(-1).length,
+    positiveCorrelationPositiveLagSeeds: seeds.filter((seed) =>
+      seed.peakCorrelationSign === 1 && positiveLag(seed)).length,
+    negativeCorrelationPositiveLagSeeds: seeds.filter((seed) =>
+      seed.peakCorrelationSign === -1 && positiveLag(seed)).length,
+    positiveCorrelationNegativeLagSeeds: seeds.filter((seed) =>
+      seed.peakCorrelationSign === 1 && negativeLag(seed)).length,
+    negativeCorrelationNegativeLagSeeds: seeds.filter((seed) =>
+      seed.peakCorrelationSign === -1 && negativeLag(seed)).length,
+    strongPositiveLagSeeds: seeds.filter((seed) => seed.peakCorrelationSign === 1 && positiveLag(seed) && strong(seed, 1)).length,
+    strongNegativeCorrelationPositiveLagSeeds: seeds.filter((seed) =>
+      seed.peakCorrelationSign === -1 && positiveLag(seed) && strong(seed, -1)).length,
     spuriousTrendRiskSeeds: seeds.filter((seed) => seed.spuriousTrendRisk).length,
-    note: "Lag in tick: lag positivo = b dopo a. Con sampleEvery=10 solo multipli di 10 sono stimabili. Sequenzialità ≠ causalità.",
+    surrogate: surrogateTests.length > 0 ? combineSurrogatePValues(surrogateTests, resolved.alpha) : null,
+    note: "Segno di r e segno del lag sono separati; |r| e concordanza tra seed non sono significatività. Il p-value surrogato corregge la ricerca del massimo su tutti i lag. Lag in tick: positivo = b dopo a; con sampleEvery=10 solo multipli di 10 sono stimabili. Sequenzialità ≠ causalità.",
   };
 }
 
@@ -134,43 +261,123 @@ export function analyzeFoodWebPairs(
   results: RunResult[],
   maxLag: number,
   pairIds: readonly string[] = FOOD_WEB_PAIRS.map((pair) => pair.id),
+  config: Partial<SurrogateConfig> = {},
 ): PairCorrelationSummary[] {
-  return pairIds.map((id) => analyzePairCorrelation(results, safe(id, FOOD_WEB_PAIRS[0]), maxLag));
+  return pairIds.map((id) => analyzePairCorrelation(results, safe(id, FOOD_WEB_PAIRS[0]), maxLag, config));
 }
 
 export type DependenceClass = "EVIDENZA_SEQUENZIALITA" | "INDICATIVO" | "NON_DIMOSTRATO";
+export type DescriptiveClass = "CONSISTENTE" | "PARZIALE" | "INCONSISTENTE";
+export type StatisticalClass = "SIGNIFICATIVO" | "NON_SIGNIFICATIVO" | "NON_VALUTABILE";
+export type DirectionClass = "POSITIVA" | "NEGATIVA" | "MISTA" | "ASSENTE";
+export type SequencingVerdict =
+  | "EVIDENZA_SEQUENZIALITA_POSITIVA"
+  | "EVIDENZA_SEQUENZIALITA_NEGATIVA"
+  | "INDICATIVO_POSITIVO"
+  | "INDICATIVO_NEGATIVO"
+  | "INDICATIVO_MISTO"
+  | "NON_DIMOSTRATO";
 
 export interface DependenceAssessment {
   scenario: string;
   pairId: string;
   runs: number;
+  /** Campi legacy conservati per compatibilità; non usati per la significatività. */
   strongPositiveLagSeeds: number;
   positiveLagSeeds: number;
   negativeLagSeeds: number;
   zeroLagSeeds: number;
   spuriousTrendRiskSeeds: number;
+  /** 1. Evidenza descrittiva: concordanza di segno/lag, mai significatività. */
+  descriptive: {
+    classification: DescriptiveClass;
+    positiveCorrelationPositiveLagSeeds: number;
+    negativeCorrelationPositiveLagSeeds: number;
+    dominantDirectionSeeds: number;
+  };
+  /** 2. Evidenza statistica: p-value surrogata combinata, corretta per il massimo sui lag. */
+  statistical: {
+    classification: StatisticalClass;
+    method: string | null;
+    combinedP: number | null;
+    tests: number;
+    alpha: number | null;
+  };
+  /** 3. Sequenzialità: direzione osservata; non implica causalità. */
+  sequencing: {
+    direction: DirectionClass;
+    /** Verdict esplicito per segno: una correlazione negativa non diventa mai evidenza positiva. */
+    verdict: SequencingVerdict;
+    classification: DependenceClass;
+  };
+  /** 4. Causalità: non identificabile senza intervento e ID predatore/preda. */
+  causality: {
+    classification: "NON_IDENTIFICABILE";
+  };
   classification: DependenceClass;
   rationale: string;
 }
 
 /**
- * Classificazione conservativa della sequenzialità erbivoro→carnivoro.
- * Non è una prova di dipendenza causale né di predazione effettiva.
+ * Classificazione conservativa della sequenzialità di una coppia di serie.
+ *
+ * La significatività statistica richiede il test surrogato con massimo sui lag;
+ * la concordanza tra seed descrive solo la direzione. Nessun ramo produce una
+ * classificazione causale: mancano manipolazione e ID predatore/preda.
  */
-export function assessCarnivoreDependence(
+export function assessPairSequencing(
   pair: PairCorrelationSummary,
   scenario: string,
 ): DependenceAssessment {
+  const positiveLagWithPositiveR = pair.positiveCorrelationPositiveLagSeeds;
+  const positiveLagWithNegativeR = pair.negativeCorrelationPositiveLagSeeds;
+  const directionalSeeds = positiveLagWithPositiveR + positiveLagWithNegativeR;
+  const dominant = Math.max(positiveLagWithPositiveR, positiveLagWithNegativeR);
+  const direction: DirectionClass = dominant === 0
+    ? "ASSENTE"
+    : positiveLagWithPositiveR === positiveLagWithNegativeR
+      ? "MISTA"
+      : positiveLagWithPositiveR > positiveLagWithNegativeR
+        ? "POSITIVA"
+        : "NEGATIVA";
+
+  const concordance = pair.runs > 0 ? dominant / pair.runs : 0;
+  const descriptiveClassification: DescriptiveClass = concordance >= 0.8
+    ? "CONSISTENTE"
+    : concordance >= 0.5 ? "PARZIALE" : "INCONSISTENTE";
+
+  const evidence = pair.surrogate;
+  const statisticalClassification: StatisticalClass = !evidence || evidence.tests === 0
+    ? "NON_VALUTABILE"
+    : evidence.significant ? "SIGNIFICATIVO" : "NON_SIGNIFICATIVO";
+
   let classification: DependenceClass = "NON_DIMOSTRATO";
-  if (pair.runs >= 10 && pair.strongPositiveLagSeeds >= 10) classification = "EVIDENZA_SEQUENZIALITA";
-  else if (pair.runs >= 10 && (pair.strongPositiveLagSeeds >= 6 || pair.positiveLagSeeds >= 10)) {
+  let verdict: SequencingVerdict = "NON_DIMOSTRATO";
+  if (
+    statisticalClassification === "SIGNIFICATIVO"
+    && descriptiveClassification === "CONSISTENTE"
+    && (direction === "POSITIVA" || direction === "NEGATIVA")
+  ) {
+    classification = "EVIDENZA_SEQUENZIALITA";
+    verdict = direction === "POSITIVA"
+      ? "EVIDENZA_SEQUENZIALITA_POSITIVA"
+      : "EVIDENZA_SEQUENZIALITA_NEGATIVA";
+  } else if (descriptiveClassification !== "INCONSISTENTE") {
     classification = "INDICATIVO";
+    verdict = direction === "POSITIVA"
+      ? "INDICATIVO_POSITIVO"
+      : direction === "NEGATIVA"
+        ? "INDICATIVO_NEGATIVO"
+        : "INDICATIVO_MISTO";
   }
-  const rationale = classification === "EVIDENZA_SEQUENZIALITA"
-    ? `${pair.strongPositiveLagSeeds}/${pair.runs} seed con lag detrendizzato positivo e |r|>=0.5: sequenzialità aggregata, non causalità.`
-    : classification === "INDICATIVO"
-      ? `Sequenzialità parziale (${pair.strongPositiveLagSeeds}/${pair.runs} forti, ${pair.positiveLagSeeds}/${pair.runs} lag positivi): classificazione indicativa.`
-      : `Sequenzialità non consistente (${pair.strongPositiveLagSeeds}/${pair.runs} forti, ${pair.positiveLagSeeds}/${pair.runs} lag positivi): non dimostrata.`;
+
+  const statisticalText = statisticalClassification === "SIGNIFICATIVO"
+    ? `Fisher p=${evidence?.fisherP} su ${evidence?.tests} corse (alpha=${evidence?.alpha})`
+    : statisticalClassification === "NON_SIGNIFICATIVO"
+      ? `Fisher p=${evidence?.fisherP} >= alpha=${evidence?.alpha}: non significativo`
+      : "test surrogato non disponibile: non valutabile";
+  const rationale = `${descriptiveClassification}: ${dominant}/${pair.runs} seed con lag positivo e segno r prevalente ${direction}; ${directionalSeeds}/${pair.runs} lag positivi in totale. ${statisticalText}. La direzione non deriva da |r|>=0.5 né dal numero di seed. Classificazione ${classification}: sequenzialità osservazionale, non causalità. Mancano ID predatore/preda: non è ricostruibile la rete individuale.`;
+
   return {
     scenario,
     pairId: pair.pairId,
@@ -180,10 +387,28 @@ export function assessCarnivoreDependence(
     negativeLagSeeds: pair.negativeLagSeeds,
     zeroLagSeeds: pair.zeroLagSeeds,
     spuriousTrendRiskSeeds: pair.spuriousTrendRiskSeeds,
+    descriptive: {
+      classification: descriptiveClassification,
+      positiveCorrelationPositiveLagSeeds: positiveLagWithPositiveR,
+      negativeCorrelationPositiveLagSeeds: positiveLagWithNegativeR,
+      dominantDirectionSeeds: dominant,
+    },
+    statistical: {
+      classification: statisticalClassification,
+      method: evidence?.method ?? null,
+      combinedP: evidence?.fisherP ?? null,
+      tests: evidence?.tests ?? 0,
+      alpha: evidence?.alpha ?? null,
+    },
+    sequencing: { direction, verdict, classification },
+    causality: { classification: "NON_IDENTIFICABILE" },
     classification,
-    rationale: `${rationale} Mancano ID predatore/preda: non è ricostruibile la rete individuale.`,
+    rationale,
   };
 }
+
+/** Nome storico: la valutazione è ora generica per qualsiasi coppia E2.2. */
+export const assessCarnivoreDependence = assessPairSequencing;
 
 export interface SeedCompositionCoupling {
   seed: number;
@@ -250,6 +475,8 @@ export interface FoodWebProtocol {
   maxLag: number;
   scenarioIds: string[];
   label?: string;
+  /** Configurazione additiva dei surrogati; default = IAAFT con 199 repliche. */
+  surrogate?: Partial<SurrogateConfig>;
 }
 
 export interface FoodWebPersistenceReport {
@@ -281,7 +508,10 @@ export interface FoodWebScenarioReport {
     pressureSnapshot: NumericSummary;
   };
   correlations: PairCorrelationSummary[];
+  /** Sequenzialità primaria erbivoro→carnivoro, mantenuta per compatibilità. */
   dependence: DependenceAssessment | null;
+  /** Verdetto esplicito per ogni coppia, incluso erbivoro→kills. */
+  sequencingByPair: Record<string, DependenceAssessment>;
 }
 
 export interface FoodWebReport {
@@ -318,7 +548,10 @@ const extractCoexistence = (result: RunResult): number => trophicPersistence(res
 const extractKillRate = (result: RunResult): number => seriesMean(trophicSeriesSet(result).killsIntervalRate) ?? 0;
 
 /** Confronti appaiati descrittivi. S06 differisce da S04/S05 anche per geometria e densità. */
-export function buildFoodWebComparisons(groups: Record<string, RunResult[]>): PairedComparison[] {
+export function buildFoodWebComparisons(
+  groups: Record<string, RunResult[]>,
+  config: Partial<SurrogateConfig> = {},
+): PairedComparison[] {
   const s06 = "S06_predator_prey_mixed";
   const s05 = "S05_carnivore_stress";
   const s04 = "S04_herbivore_monoculture";
@@ -359,7 +592,9 @@ export function buildFoodWebComparisons(groups: Record<string, RunResult[]>): Pa
     "Differenza di correlazione detrendizzata a lag 0 tra tratti; descrittiva.",
     "detrendedLagZeroHerbivoreCarnivore", (result) => {
       const { a, b } = pairSeries(result, lagZeroPair);
-      return compareCrossCorrelations(a, b, 0).detrendedAtLagZero ?? 0;
+      const minimum = minimumOverlapFor(a, b, config.minOverlappingObservations
+        ?? DEFAULT_SURROGATE_CONFIG.minOverlappingObservations);
+      return compareCrossCorrelations(a, b, 0, minimum).detrendedAtLagZero ?? 0;
     });
   return comparisons;
 }
@@ -381,8 +616,12 @@ export function buildFoodWebReport(
     const stability = {} as Record<Exclude<TrophicSeriesKey, "landFraction">, FoodWebStabilityReport>;
     for (const key of stabilityKeys) stability[key] = stabilityReport(group, key);
 
-    const correlations = analyzeFoodWebPairs(group, maxLag, pairIds);
-    const dependencePair = correlations.find((pair) => pair.pairId === "herbivore_carnivore");
+    const correlations = analyzeFoodWebPairs(group, maxLag, pairIds, protocol.surrogate ?? {});
+    const sequencingByPair = Object.fromEntries(correlations.map((pair) => [
+      pair.pairId,
+      assessPairSequencing(pair, scenario),
+    ]));
+    const dependencePair = sequencingByPair["herbivore_carnivore"] ?? null;
     byScenarioReport.push({
       scenario,
       runs: group.length,
@@ -408,14 +647,15 @@ export function buildFoodWebReport(
         pressureSnapshot: summarize(group.map((result) => last(result)?.predationPressure ?? 0)),
       },
       correlations,
-      dependence: dependencePair ? assessCarnivoreDependence(dependencePair, scenario) : null,
+      dependence: dependencePair,
+      sequencingByPair,
     });
   }
   return {
     schema: "evoworld.e2.foodweb.v1",
     protocol: { ...protocol, scenarioIds: [...protocol.scenarioIds].sort() },
     byScenario: byScenarioReport,
-    pairedComparisons: buildFoodWebComparisons(groups),
-    note: "E2.2 è osservazionale: tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità. Unità statistica = corsa/seed; confronti non randomizzati e S06 confuso per geometria/densità.",
+    pairedComparisons: buildFoodWebComparisons(groups, protocol.surrogate ?? {}),
+    note: "E2.2 è osservazionale: tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità. Unità statistica = corsa/seed; confronti non randomizzati e S06 confuso per geometria/densità. La significatività, quando presente, deriva da surrogati IAAFT con massimo sui lag corretto, non da |r| o numero di seed.",
   };
 }

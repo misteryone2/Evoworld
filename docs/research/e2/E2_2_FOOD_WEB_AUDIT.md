@@ -143,13 +143,31 @@ L'applicazione dei setup avviene su uno snapshot e ricostruisce il mondo; **non 
 3. **`herbivoreFraction` non misura consumo vegetale.** `occupiedVegetation` è un proxy su celle occupate.
 4. **Kills ≠ mortalità totale**, e kills nulle non provano assenza di dipendenza trofica quando mancano prede idonee (A04).
 5. **Confronti S04/S05/S06 non randomizzati e non bilanciati:** descrittivi, mai causali.
-6. **Classificazione massima consentita:** EVIDENZA per pattern ripetuti in ≥10/12 seed con CI95 che esclude 0; INDICATIVO per pattern minori; NON DIMOSTRATO per dipendenza causale.
+6. **I tick non sono repliche indipendenti.** L'unità statistica è la corsa/seed; una cross-correlazione dentro una corsa è descrittiva finché non viene confrontata con un nullo temporale.
+7. **Il segno di `r` e il segno del lag sono campi distinti.** `|r| >= 0.5` con lag negativo non è sequenzialità positiva; una forte correlazione negativa va etichettata `NEGATIVA`.
+8. **Classificazione massima consentita dopo la review:** `EVIDENZA_SEQUENZIALITA_POSITIVA/NEGATIVA` richiede (i) direzione descrittiva consistente, (ii) p-value surrogato significante per la combinazione cross-seed, (iii) verdetto esplicito per segno. `INDICATIVO_*` richiede consistenza descrittiva ma non significatività; `NON_DIMOSTRATO` vale quando la direzione è inconsistente o il test non è disponibile/significativo. La causalità resta sempre `NON_IDENTIFICABILE`.
+9. **Nessuna soglia arbitraria di `|r|` e nessuna concordanza di seed producono significatività.** Sono al massimo evidenza descrittiva.
 
 ---
 
 ## 8. Cosa E2.2 può concludere
 
-- Se, in S06, il conteggio carnivoro segue quello erbivoro con lag positivo in ≥10/12 seed e la correlazione detrendizzata resta forte → **EVIDENZA di sequenzialità demografica aggregata**, non di predazione causale.
+- Se, in S06, il conteggio carnivoro segue quello erbivoro con lag positivo in ≥10/12 seed, **e** il test surrogato con massimo sui lag è significante, allora si può parlare di **EVIDENZA di sequenzialità demografica aggregata**, non di predazione causale. Senza il test, al massimo `INDICATIVO_POSITIVO`.
 - Se S05 produce kills ≈0 → **coerente con A04** (mancanza di prede a carnivoria inferiore), non prova che i carnivori "non dipendano" dalle prede.
 - Se la persistenza dei due tratti in S06 è breve → **collapse dell'etichetta di tratto**, non necessariamente estinzione dell'attacco.
 - Se i risultati cambiano con durata/campionamento/seed → **sensibilità del disegno osservativo**, da riportare come limite.
+- Una correlazione negativa forte con lag positivo è **sequenzialità negativa**, mai evidenza positiva.
+
+---
+
+## 9. Aggiornamento dopo la review indipendente
+
+La versione iniziale dell'audit usava `|r| >= 0.5` e la concordanza di seed come criterio di EVIDENZA. Criterio respinto: mescolava descrizione e inferenza e trattava implicitamente i campioni come indipendenti. Il protocollo corretto è:
+
+- detrendimento lineare dei residui;
+- surrogati IAAFT con fasi casuali indipendenti per le due serie, spettro di ampiezza preservato e distribuzione empirica conservata dal rank-remapping;
+- statistica test = massimo `|r|` su **tutti i lag accettati**, non il picco scelto dopo averlo visto;
+- `p = (1 + #{nullMaxAbs >= observedMaxAbs}) / (B + 1)`;
+- combinazione Fisher dei p-value per seed; la direzione è valutata separatamente dal segno di `r` e del lag;
+- diagnostica obbligatoria: lag nominali, lag sulla griglia, lag senza coppie, lag accettati, minima sovrapposizione, coppie ai lag estremi;
+- limiti dichiarati: stazionarietà dei residui, struttura lineare di second'ordine, nullo sharp, assenza di intervento e di ID predatore/preda.

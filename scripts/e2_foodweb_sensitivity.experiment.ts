@@ -19,6 +19,7 @@ interface BlockPayload {
   protocol: FoodWebProtocol;
   scientificReport: { byScenario: FoodWebScenarioReport[] };
   results: RunResult[];
+  review?: { sourceBlockSha256: string; originalLabel: string };
 }
 
 const readBlock = (value: string | undefined, name: string): { payload: BlockPayload; sha256: string } => {
@@ -42,7 +43,12 @@ interface MetricRow {
   detrendedPeakLag: number;
   detrendedLagZero: number;
   strongPositiveLagSeeds: number;
+  positiveCorrelationPositiveLagSeeds: number;
+  negativeCorrelationPositiveLagSeeds: number;
+  surrogateCombinedP: number;
   classification: string | null;
+  statisticalClassification: string | null;
+  sequencingDirection: string | null;
 }
 
 const metricRow = (report: FoodWebScenarioReport | undefined): MetricRow => {
@@ -55,11 +61,19 @@ const metricRow = (report: FoodWebScenarioReport | undefined): MetricRow => {
     detrendedPeakLag: pair?.detrendedPeakLag.mean ?? 0,
     detrendedLagZero: pair?.detrendedAtLagZero.mean ?? 0,
     strongPositiveLagSeeds: pair?.strongPositiveLagSeeds ?? 0,
+    positiveCorrelationPositiveLagSeeds: pair?.positiveCorrelationPositiveLagSeeds ?? 0,
+    negativeCorrelationPositiveLagSeeds: pair?.negativeCorrelationPositiveLagSeeds ?? 0,
+    surrogateCombinedP: pair?.surrogate?.fisherP ?? 1,
     classification: report?.dependence?.classification ?? null,
+    statisticalClassification: report?.dependence?.statistical.classification ?? null,
+    sequencingDirection: report?.dependence?.sequencing.direction ?? null,
   };
 };
 
-type NumericMetricKey = Exclude<keyof MetricRow, "classification">;
+type NumericMetricKey = Exclude<
+  keyof MetricRow,
+  "classification" | "statisticalClassification" | "sequencingDirection"
+>;
 
 interface AxisComparison {
   scenario: string;
@@ -105,20 +119,8 @@ const rebuildReport = (block: BlockPayload, results: RunResult[], sampleEvery: n
     maxLag: block.env.MAX_LAG,
     scenarioIds: block.env.SCENARIOS,
     label: `${block.label}-derived`,
+    surrogate: block.protocol.surrogate ?? {},
   }, block.env.MAX_LAG);
-
-const commonGridCount = (
-  block: BlockPayload,
-  results: RunResult[],
-  scenario: string,
-  grid: number,
-  sampleEvery: number,
-): number => {
-  const report = rebuildReport(block, results, sampleEvery, block.env.TICKS)
-    .byScenario.find((entry) => entry.scenario === scenario);
-  const pair = report?.correlations.find((entry) => entry.pairId === "herbivore_carnivore");
-  return pair?.seeds.filter((seed) => seed.detrendedPeakLag !== null && seed.detrendedPeakLag % grid === 0).length ?? 0;
-};
 
 describe("E2.2 sensitivity", () => {
   it(
@@ -140,9 +142,15 @@ describe("E2.2 sensitivity", () => {
       const truncationReport = rebuildReport(main.payload, truncated, main.payload.env.SAMPLE_EVERY, duration.payload.env.TICKS);
       const truncationRow = metricRow(truncationReport.byScenario.find((entry) => entry.scenario === s06));
       const genuineRow = metricRow(scenarioReport(duration.payload, s06));
+      const stringKeys: Array<"classification" | "statisticalClassification" | "sequencingDirection"> = [
+        "classification", "statisticalClassification", "sequencingDirection",
+      ];
       const truncationMatches = Object.keys(truncationRow).every((key) => {
-        if (key === "classification") return truncationRow.classification === genuineRow.classification;
-        const field = key as keyof Omit<MetricRow, "classification">;
+        if ((stringKeys as string[]).includes(key)) {
+          const field = key as (typeof stringKeys)[number];
+          return truncationRow[field] === genuineRow[field];
+        }
+        const field = key as Exclude<keyof MetricRow, (typeof stringKeys)[number]>;
         return truncationRow[field] === genuineRow[field];
       });
 
@@ -155,20 +163,23 @@ describe("E2.2 sensitivity", () => {
         { label: "sample20-derived", sampleEvery: 20, results: s06Coarse },
       ].map((variant) => {
         const report = rebuildReport(main.payload, variant.results, variant.sampleEvery, main.payload.env.TICKS);
-        const row = metricRow(report.byScenario.find((entry) => entry.scenario === s06));
+        const scenario = report.byScenario.find((entry) => entry.scenario === s06);
+        const row = metricRow(scenario);
+        const pair = scenario?.correlations.find((entry) => entry.pairId === "herbivore_carnivore");
         return {
           label: variant.label,
           sampleEvery: variant.sampleEvery,
           runs: variant.results.length,
           metrics: row,
-          peakLagOnTwentyTickGrid: commonGridCount(main.payload, variant.results, s06, 20, variant.sampleEvery),
+          peakLagOnTwentyTickGrid: pair?.seeds.filter((seed) =>
+            seed.detrendedPeakLag !== null && seed.detrendedPeakLag % 20 === 0).length ?? 0,
         };
       });
 
       const output = {
         schema: "evoworld.e2.foodweb-sensitivity.v1",
         phase: "E2.2-foodweb-sensitivity",
-        executedAt: new Date().toISOString(),
+        executedAt: process.env.E2_FOODWEB_SENS_EXECUTED_AT ?? new Date().toISOString(),
         runtime: { node: process.version, v8: process.versions.v8 },
         inputs: {
           main: { label: main.payload.label, sha256: main.sha256, seeds: main.payload.env.SEEDS, ticks: main.payload.env.TICKS, sampleEvery: main.payload.env.SAMPLE_EVERY },
@@ -188,6 +199,17 @@ describe("E2.2 sensitivity", () => {
         samplingComparison: samplingVariants,
         compositionCoupling: scenarios.map((scenario) =>
           analyzeCompositionCoupling(main.payload.results.filter((result) => result.scenario === scenario), scenario)),
+        review: {
+          schema: "evoworld.e2.foodweb-sensitivity-review.v1",
+          surrogateConfig: main.payload.protocol.surrogate ?? null,
+          sourceBlockSha256: {
+            main: main.payload.review?.sourceBlockSha256 ?? null,
+            seed: seed.payload.review?.sourceBlockSha256 ?? null,
+            duration: duration.payload.review?.sourceBlockSha256 ?? null,
+            sampling: sampling.payload.review?.sourceBlockSha256 ?? null,
+          },
+          note: "Le righe comparative usano i report rigenerati con null IAAFT; le varianti derivate vengono rielaborate con la stessa configurazione surrogate dichiarata.",
+        },
         note: "Sensibilità descrittiva: nessun confronto tra seed è randomizzato. I lag sono in tick; con sampleEvery=20 solo multipli di 20 sono stimabili. L'accoppiamento di composizione separa la covarianza demografica condivisa dalla covarianza delle frazioni.",
       };
       const outputPath = resolveOutputPath(process.env.E2_FOODWEB_SENS_OUT);

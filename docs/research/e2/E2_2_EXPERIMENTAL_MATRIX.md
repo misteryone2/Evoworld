@@ -14,7 +14,7 @@
 
 | Ipotesi | Operazionalizzazione | Criterio di classificazione |
 |---|---|---|
-| H1 — sequenzialità | In S06, lag del picco di cross-correlazione detrendizzata erbivori→carnivori > 0 | ≥10/12 seed con lag > 0 e `|r| >= 0.5` ⇒ EVIDENZA di sequenzialità aggregata; altrimenti INDICATIVO/NON DIMOSTRATO |
+| H1 — sequenzialità | In S06, lag del picco di cross-correlazione detrendizzata erbivori→carnivori > 0 | EVIDENZA solo se direzione descrittiva consistente **e** Fisher p<0,05 dei test IAAFT con massimo su tutti i lag; altrimenti INDICATIVO_POSITIVO/NON_DIMOSTRATO. `|r|` e conteggio seed non sono significatività |
 | H2 — collasso preda→predatore | In S06, il tratto carnivoro scompare dopo il tratto erbivoro nello stesso seed | conteggio di seed con `extinctionTick(carnivoro) > extinctionTick(erbivoro)`; descrittivo |
 | H3 — kills basse in S05 | `cumulativePredationKills` in S05 ≈ 0 | coerente con A04 (nessuna preda a carnivoria inferiore); **non** prova assenza di dipendenza trofica |
 | H4 — persistenza | S06 mantiene coesistenza dei due tratti per una frazione sostanziale dell'orizzonte | frazione di seed con coesistenza >50% dei campioni |
@@ -36,8 +36,8 @@
 | Lag massimo | `E2_FOODWEB_MAX_LAG=200` tick (=20 campioni a `sampleEvery=10`); **intero obbligatorio**, i lag sono in tick |
 | Runtime | Node `v22.14.0`, V8 `12.4.254.21-node.22` |
 | Output grezzo | JSON con `schema`, `env`, `protocol`, `scientificReport`, `results`, `runtime` |
-| Classificazione | VERIFICATO / EVIDENZA / INDICATIVO / NON DIMOSTRATO / ANOMALIA |
-| Inferenza | massimo EVIDENZA; causalità non identificabile senza intervento sulle popolazioni |
+| Classificazione | `EVIDENZA_SEQUENZIALITA_POSITIVA/NEGATIVA` / `INDICATIVO_POSITIVO/NEGATIVO/MISTO` / `NON_DIMOSTRATO`; la causalità resta `NON_IDENTIFICABILE` |
+| Inferenza | EVIDENZA solo con test surrogato IAAFT significante e direzione descrittiva consistente; tick non sono repliche; `|r|` e concordanza di seed non bastano |
 
 ---
 
@@ -98,6 +98,38 @@ npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.e
 
 Solo i file `scripts/e2*.ts` vengono invocati: nessuna modifica a E1 o al motore.
 
+### 4.2 Rigenerazione review (senza rieseguire il motore)
+
+```bash
+# Analisi corrette dai quattro blocchi grezzi originali
+E2_FOODWEB_REANALYSIS_MAIN=<A> E2_FOODWEB_REANALYSIS_SEED=<B> \
+E2_FOODWEB_REANALYSIS_DURATION=<C> E2_FOODWEB_REANALYSIS_SAMPLING=<D> \
+E2_FOODWEB_REANALYSIS_{MAIN,SEED,DURATION,SAMPLING}_OUT=<review>/... \
+E2_FOODWEB_REANALYSIS_EXECUTED_AT=2026-11-18T13:00:00.000Z \
+npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_reanalysis.experiment.ts
+
+# Aggregazione della sensibilità dai report corretti
+E2_FOODWEB_SENS_MAIN=<review>/main E2_FOODWEB_SENS_SEED=<review>/seed \
+E2_FOODWEB_SENS_DURATION=<review>/duration E2_FOODWEB_SENS_SAMPLING=<review>/sampling \
+E2_FOODWEB_SENS_OUT=<review>/sensitivity.json \
+E2_FOODWEB_SENS_EXECUTED_AT=2026-11-18T13:10:00.000Z \
+npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts
+
+# Validazione review e dataset corretto
+E2_FOODWEB_VALIDATION_RAW_{MAIN,SEED,DURATION,SAMPLING}=<raw>/... \
+E2_FOODWEB_VALIDATION_REVIEW_{MAIN,SEED,DURATION,SAMPLING}=<review>/... \
+E2_FOODWEB_VALIDATION_ORIGINAL_MANIFEST=docs/research/e2/datasets/e2.2-foodweb.manifest.json \
+E2_FOODWEB_VALIDATION_ORIGINAL_ARCHIVE=docs/research/e2/datasets/e2.2-foodweb.json.gz \
+E2_FOODWEB_VALIDATION_OUT=<review>/validation.json \
+E2_FOODWEB_VALIDATION_EXECUTED_AT=2026-11-18T13:20:00.000Z \
+npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_review_validation.experiment.ts
+
+E2_FOODWEB_DATASET_* E2_FOODWEB_DATASET_LABEL=e2.2-foodweb-review \
+E2_FOODWEB_DATASET_CODE_COMMIT=<code-commit> E2_FOODWEB_DATASET_WORKING_TREE_DIRTY=0 \
+E2_FOODWEB_DATASET_EXECUTED_AT=2026-11-18T13:30:00.000Z \
+npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.experiment.ts
+```
+
 ---
 
 ## 5. Variabili dipendenti e metriche
@@ -108,7 +140,7 @@ Solo i file `scripts/e2*.ts` vengono invocati: nessuna modifica a E1 o al motore
 | Predazione | `cumulativePredationKills`, tasso intervallare, `predationPressure` snapshot | `tools/e2/trophic.ts` |
 | Risorsa | `occupiedVegetation`, `occupiedLandFraction` | `tools/e2/trophic.ts` |
 | Stabilità | trend (slope, R²), lag-1, CV, oscillazioni per serie | `tools/e2/timeseries.ts` via `tools/e2/trophic.ts` |
-| Correlazione | lag-0 originale/detrendizzata, picco, ampiezza lag, rischio trend spurious | `tools/e2/timeseries.ts`, `tools/e2/foodWebReport.ts` |
+| Correlazione | lag-0 originale/detrendizzata, picco, segno(r)×segno(lag), diagnostica lag, rischio trend spurious, null IAAFT | `tools/e2/timeseries.ts`, `tools/e2/fourier.ts`, `tools/e2/surrogateInference.ts`, `tools/e2/foodWebReport.ts` |
 | Coppie | erbivori↔carnivori, erbivori↔kills, carnivori↔kills, vegetazione↔erbivori, vegetazione↔carnivori | `tools/e2/foodWebReport.ts` |
 | Persistenza | presenza, prima/ultimo tick, extinctionTick, frazione coesistenza | `tools/e2/trophic.ts` |
 | Confronto | S06−S05 e S06−S04 appaiati su kills, tratti, coesistenza, correlazione | `tools/e2/foodWebReport.ts` |
@@ -117,11 +149,11 @@ Solo i file `scripts/e2*.ts` vengono invocati: nessuna modifica a E1 o al motore
 
 `crossCorrelation(a,b,lag)` accoppia `a[t]` con `b[t+lag]`. Pertanto:
 
-- `a=erbivori, b=carnivori, lag>0` ⇒ carnivori osservati **dopo** erbivori (sequenzialità predatore→preda nel tempo, coerente con H1).
+- `a=erbivori, b=carnivori, lag>0` ⇒ carnivori osservati **dopo** erbivori (sequenzialità preda→predatore nel tempo, coerente con H1).
 - `a=erbivori, b=kills, lag>0` ⇒ kills osservate **dopo** l'abbondanza erbivora.
 - `a=vegetazione, b=erbivori, lag>0` ⇒ tratto erbivoro osservato **dopo** il proxy di risorsa.
 
-Con `sampleEvery=10`, solo lag multipli di 10 tick sono stimabili; il picco va letto con risoluzione di 10 tick. Il confronto tra blocchi a cadenza diversa usa la griglia di lag comune (multipli di 20 tick).
+Con `sampleEvery=10`, solo lag multipli di 10 tick sono stimabili; il picco va letto con risoluzione di 10 tick. Il confronto tra blocchi a cadenza diversa usa la griglia di lag comune (multipli di 20 tick). La diagnostica obbligatoria distingue lag nominali (`2*maxLag+1`), lag sulla griglia, lag senza coppie, lag accettati, minima sovrapposizione e perdita di coppie ai lag estremi. Con `maxLag=200` e 271 punti: 401 nominali, 41 sulla griglia, 360 senza coppie, 41 accettati, 251 coppie minime, perdita estrema ≈7,38%.
 
 ---
 
@@ -133,7 +165,7 @@ Con `sampleEvery=10`, solo lag multipli di 10 tick sono stimabili; il picco va l
 | Durata | A (2700) vs C (900), più troncamento A→900 | persistenza, correlazioni: un pattern solo a 2700 è "dipendente dall'orizzonte" |
 | Campionamento | A (10) vs D (5) e A→20 | risoluzione del lag, ampiezza del picco, stabilità |
 
-**Regola di robustness:** una conclusione è *stabile* se mantiene la stessa classe in A e B, in A e C, e sulla griglia di lag comune A/D/A→20. Altrimenti è classificata **INDICATIVO** con esplicita dipendenza dal disegno.
+**Regola di robustness:** una conclusione è *stabile* se mantiene la stessa classe (direzione inclusa) in A e B, in A e C, e sulla griglia di lag comune A/D/A→20. Altrimenti è classificata **INDICATIVO** con esplicita dipendenza dal disegno. La significatività non è dedotta dalla stabilità descrittiva: richiede il test surrogato e la correzione del massimo sui lag.
 
 **Gate E2.2 → E2.3:** se non emerge lag preda-predatore, non inferire assenza di dipendenza; verificare A04 (immunità apicale) e A01 (bucket non toroidali) prima di qualsiasi affermazione trofica.
 
@@ -143,9 +175,9 @@ Con `sampleEvery=10`, solo lag multipli di 10 tick sono stimabili; il picco va l
 
 - Audit trofico: [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md)
 - Matrice: questo documento
-- Strumenti: `tools/e2/trophic.ts`, `tools/e2/foodWebReport.ts` (+ estensione additiva di `tools/e2/scenarios.ts`)
-- Test: `tests/e2/trophic.test.ts`, `tests/e2/foodWebReport.test.ts`
-- Script: `scripts/e2_foodweb.experiment.ts`, `scripts/e2_foodweb_sensitivity.experiment.ts`, `scripts/e2_foodweb_dataset.experiment.ts`
-- Output: 5 payload JSON + archivio `e2.2-foodweb.json.gz` e manifest
+- Strumenti: `tools/e2/trophic.ts`, `tools/e2/timeseries.ts`, `tools/e2/fourier.ts`, `tools/e2/surrogateInference.ts`, `tools/e2/foodWebReport.ts` (+ estensione additiva di `tools/e2/scenarios.ts`)
+- Test: `tests/e2/trophic.test.ts`, `tests/e2/timeseries.test.ts`, `tests/e2/foodWebReport.test.ts`
+- Script: `scripts/e2_foodweb.experiment.ts`, `scripts/e2_foodweb_reanalysis.experiment.ts`, `scripts/e2_foodweb_sensitivity.experiment.ts`, `scripts/e2_foodweb_review_validation.experiment.ts`, `scripts/e2_foodweb_dataset.experiment.ts`
+- Output: 4 payload grezzi + 4 report review + sensibilità + validazione + archivi `e2.2-foodweb.json.gz` (immutato) e `e2.2-foodweb-review.json.gz`
 - Report finale: `docs/research/e2/E2_2_FOOD_WEB_REPORT.md`
 - Verifiche: `npx tsc --noEmit --incremental false`, `npm run build`, suite E2 e E1, diff file vietati vuoto

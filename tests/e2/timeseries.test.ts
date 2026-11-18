@@ -55,15 +55,52 @@ describe("E2 timeseries", () => {
   });
 
   it("finds a positive lag when b follows a", () => {
-    const a: Point[] = Array.from({ length: 8 }, (_, i) => ({ tick: i * 10, value: i + 1 }));
-    const b: Point[] = Array.from({ length: 8 }, (_, i) => ({
-      tick: i * 10,
-      value: i === 0 ? 0 : i === 1 ? 5 : i - 1,
+    const pulse = [10, 20, 30, 40, 50, 40, 30, 20, 10, 5, 3, 2];
+    const a: Point[] = pulse.map((value, index) => ({ tick: index * 10, value }));
+    const b: Point[] = pulse.map((value, index) => ({
+      tick: index * 10,
+      value: index === 0 ? 2 : pulse[index - 1],
     }));
-    const entries = crossCorrelation(a, b, 20);
+    const entries = crossCorrelation(a, b, 40, 8);
     const best = bestCrossCorrelation(entries);
-    expect(best?.lag).toBe(20);
-    expect(best?.correlation).toBeCloseTo(1, 6);
+    expect(best?.lag).toBe(10);
+    expect(best?.pairs).toBe(11);
+    expect(best?.correlation as number).toBeGreaterThan(0.7);
+  });
+
+  it("matches a naive cross-correlation on a regular grid", () => {
+    const a: Point[] = Array.from({ length: 32 }, (_, index) => ({
+      tick: index * 10,
+      value: 20 + 7 * Math.sin(index * 0.41) + index * 0.05,
+    }));
+    const b: Point[] = Array.from({ length: 32 }, (_, index) => ({
+      tick: index * 10,
+      value: 12 + 5 * Math.cos((index - 2) * 0.41) - index * 0.03,
+    }));
+    const byTick = new Map(b.map((point) => [point.tick, point.value]));
+    const fast = crossCorrelation(a, b, 60, 5);
+    for (const entry of fast) {
+      const pairs = a.flatMap((point) => {
+        const other = byTick.get(point.tick + entry.lag);
+        return other === undefined ? [] : [[point.value, other] as [number, number]];
+      });
+      expect(entry.pairs).toBe(pairs.length);
+      if (pairs.length < 5) {
+        expect(entry.correlation).toBeNull();
+        continue;
+      }
+      const meanX = pairs.reduce((sum, pair) => sum + pair[0], 0) / pairs.length;
+      const meanY = pairs.reduce((sum, pair) => sum + pair[1], 0) / pairs.length;
+      let sxx = 0;
+      let syy = 0;
+      let sxy = 0;
+      for (const [x, y] of pairs) {
+        sxx += (x - meanX) ** 2;
+        syy += (y - meanY) ** 2;
+        sxy += (x - meanX) * (y - meanY);
+      }
+      expect(entry.correlation).toBeCloseTo(sxy / Math.sqrt(sxx * syy), 5);
+    }
   });
 
   it("computes baseline, recovery time and AUC", () => {

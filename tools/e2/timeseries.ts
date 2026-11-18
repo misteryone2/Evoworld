@@ -8,6 +8,7 @@
 import type { E1Sample } from "../e1/metrics";
 import type { RunResult } from "../e1/runner";
 import { mean, sampleSd } from "../e1/statistics";
+import { fft, ifftReal, nextPowerOfTwo } from "./fourier";
 
 /** Campi numerici di un campione E1 utilizzabili come serie. */
 export type NumericSampleField = {
@@ -46,6 +47,40 @@ export interface CrossCorrelationEntry {
   correlation: number | null;
 }
 
+/**
+ * Soglia minima storica di coppie sovrapposte. I report E2.2 usano una soglia
+ * più severa (almeno 30 campioni e almeno il 25% della serie più corta), ma le
+ * primitive restano compatibili con le serie sintetiche brevi.
+ */
+export const MIN_OVERLAPPING_OBSERVATIONS = 3;
+
+/** Diagnostica esplicita della ricerca del massimo sui lag. */
+export interface LagSearchDiagnostics {
+  maxLagTicks: number;
+  /** Passo della griglia di campionamento; 0 se la griglia non è regolare. */
+  tickStep: number;
+  /** Tutti i lag nominali `-maxLag..+maxLag`, inclusi quelli senza coppie. */
+  lagsAttempted: number;
+  /** Lag cadenti sulla griglia di campionamento (unici con coppie potenziali). */
+  lagsOnGrid: number;
+  /** Lag sulla griglia con zero coppie osservative. */
+  lagsWithoutPairs: number;
+  /** Lag con coppie ma sotto la soglia minima dichiarata. */
+  lagsBelowMinimumOverlap: number;
+  /** Lag con correlazione stimabile e accettata. */
+  lagsAccepted: number;
+  minimumOverlappingObservations: number;
+  /** Minimo di coppie tra i lag con almeno una coppia. */
+  minimumPairsOnGrid: number;
+  maximumPairsObserved: number;
+  /** Coppie ai lag estremi e frazione di coppie persa rispetto al picco. */
+  extremeLagPairs: {
+    negative: number;
+    positive: number;
+    lossFraction: number;
+  };
+}
+
 export interface DetrendedSeries {
   original: Point[];
   trend: Trend;
@@ -66,6 +101,7 @@ export interface CorrelationComparison {
   originalPeak: CrossCorrelationEntry | null;
   detrendedPeak: CrossCorrelationEntry | null;
   lagSensitivity: LagSensitivityEntry[];
+  lagSearch: LagSearchDiagnostics;
   commonTrendDetected: boolean;
   spuriousTrendRisk: boolean;
 }
@@ -205,8 +241,9 @@ export function detrendedCrossCorrelation(
   a: Point[],
   b: Point[],
   maxLag: number,
+  minOverlappingObservations = MIN_OVERLAPPING_OBSERVATIONS,
 ): CrossCorrelationEntry[] {
-  return crossCorrelation(detrendLinear(a).residuals, detrendLinear(b).residuals, maxLag);
+  return crossCorrelation(detrendLinear(a).residuals, detrendLinear(b).residuals, maxLag, minOverlappingObservations);
 }
 
 const isNonZeroFinite = (value: number): boolean => Number.isFinite(value) && value !== 0;
@@ -222,9 +259,10 @@ export function compareCrossCorrelations(
   a: Point[],
   b: Point[],
   maxLag: number,
+  minOverlappingObservations = MIN_OVERLAPPING_OBSERVATIONS,
 ): CorrelationComparison {
-  const original = crossCorrelation(a, b, maxLag);
-  const detrended = detrendedCrossCorrelation(a, b, maxLag);
+  const original = crossCorrelation(a, b, maxLag, minOverlappingObservations);
+  const detrended = detrendedCrossCorrelation(a, b, maxLag, minOverlappingObservations);
   const detrendedByLag = new Map(detrended.map((entry) => [entry.lag, entry.correlation]));
 
   const lagSensitivity = original.map((entry) => {
@@ -265,6 +303,7 @@ export function compareCrossCorrelations(
     originalPeak: bestCrossCorrelation(original),
     detrendedPeak: bestCrossCorrelation(detrended),
     lagSensitivity,
+    lagSearch: original.lagSearch,
     commonTrendDetected,
     spuriousTrendRisk,
   };
@@ -326,6 +365,80 @@ export function oscillationMetrics(
   };
 }
 
+/** Passo della griglia solo se tutti i tick di una serie sono regolari. */
+const regularStep = (points: Point[]): number | null => {
+  if (points.length < 2) return null;
+  const step = points[1].tick - points[0].tick;
+  if (!Number.isInteger(step) || step <= 0) return null;
+  for (let i = 2; i < points.length; i++) {
+    if (points[i].tick - points[i - 1].tick !== step) return null;
+  }
+  return step;
+};
+
+const cumulative = (values: Float64Array): Float64Array => {
+  const result = new Float64Array(values.length + 1);
+  for (let i = 0; i < values.length; i++) result[i + 1] = result[i] + values[i];
+  return result;
+};
+
+const segmentSum = (prefix: Float64Array, from: number, to: number): number =>
+  prefix[to] - prefix[from];
+
+const correlationFromSums = (
+  pairs: number,
+  sumX: number,
+  sumY: number,
+  sumXX: number,
+  sumYY: number,
+  sumXY: number,
+): number | null => {
+  if (pairs < MIN_OVERLAPPING_OBSERVATIONS) return null;
+  const centeredXX = sumXX - (sumX * sumX) / pairs;
+  const centeredYY = sumYY - (sumY * sumY) / pairs;
+  if (centeredXX <= 0 || centeredYY <= 0) return null;
+  const centeredXY = sumXY - (sumX * sumY) / pairs;
+  const raw = centeredXY / Math.sqrt(centeredXX * centeredYY);
+  return round(Math.max(-1, Math.min(1, raw)));
+};
+
+const lagSearchFromEntries = (
+  entries: CrossCorrelationEntry[],
+  maxLagTicks: number,
+  tickStep: number,
+  minimumOverlappingObservations: number,
+): LagSearchDiagnostics => {
+  const withPairs = entries.filter((entry) => entry.pairs > 0);
+  const onGrid = tickStep > 0 ? entries.filter((entry) => entry.lag % tickStep === 0) : [];
+  const onGridWithPairs = onGrid.filter((entry) => entry.pairs > 0);
+  const pairCounts = withPairs.map((entry) => entry.pairs);
+  const maximumPairsObserved = pairCounts.length ? Math.max(...pairCounts) : 0;
+  const extremeLag = tickStep > 0 ? Math.floor(maxLagTicks / tickStep) * tickStep : maxLagTicks;
+  const negative = entries.find((entry) => entry.lag === -extremeLag)?.pairs ?? 0;
+  const positive = entries.find((entry) => entry.lag === extremeLag)?.pairs ?? 0;
+  const lossFraction = maximumPairsObserved > 0
+    ? Math.max(0, Math.min(1, 1 - Math.min(negative, positive) / maximumPairsObserved))
+    : 0;
+  return {
+    maxLagTicks,
+    tickStep,
+    lagsAttempted: entries.length,
+    lagsOnGrid: tickStep > 0 ? onGrid.length : 0,
+    lagsWithoutPairs: entries.length - withPairs.length,
+    lagsBelowMinimumOverlap: (tickStep > 0 ? onGridWithPairs : withPairs)
+      .filter((entry) => entry.pairs < minimumOverlappingObservations).length,
+    lagsAccepted: entries.filter((entry) => entry.correlation !== null).length,
+    minimumOverlappingObservations,
+    minimumPairsOnGrid: pairCounts.length ? Math.min(...pairCounts) : 0,
+    maximumPairsObserved,
+    extremeLagPairs: {
+      negative,
+      positive,
+      lossFraction: round(lossFraction),
+    },
+  };
+};
+
 /**
  * Correlazione incrociata per lag interi sui tick. Un lag positivo significa
  * che `b` e' osservato `lag` tick DOPO `a`; cioe' `corr(a[t], b[t+lag])`.
@@ -334,38 +447,165 @@ export function crossCorrelation(
   a: Point[],
   b: Point[],
   maxLag: number,
-): CrossCorrelationEntry[] {
+  minOverlappingObservations = MIN_OVERLAPPING_OBSERVATIONS,
+): CrossCorrelationEntry[] & { lagSearch: LagSearchDiagnostics } {
   const limit = Math.max(0, Math.floor(maxLag));
-  const bByTick = new Map(b.map((p) => [p.tick, p.value]));
-  const result: CrossCorrelationEntry[] = [];
-  for (let lag = -limit; lag <= limit; lag++) {
-    const pairs: Array<[number, number]> = [];
-    for (const point of a) {
-      const other = bByTick.get(point.tick + lag);
-      if (other !== undefined && Number.isFinite(other)) pairs.push([point.value, other]);
+  const minimum = Math.max(MIN_OVERLAPPING_OBSERVATIONS, Math.floor(minOverlappingObservations));
+  const sortedA = [...a].sort((x, y) => x.tick - y.tick);
+  const sortedB = [...b].sort((x, y) => x.tick - y.tick);
+  const stepA = regularStep(sortedA);
+  const stepB = regularStep(sortedB);
+  const tickStep = stepA !== null && stepA === stepB ? stepA : 0;
+
+  const withDiagnostics = (entries: CrossCorrelationEntry[]): CrossCorrelationEntry[] & { lagSearch: LagSearchDiagnostics } =>
+    Object.assign(entries, { lagSearch: lagSearchFromEntries(entries, limit, tickStep, minimum) });
+
+  const emptyResult = (): CrossCorrelationEntry[] & { lagSearch: LagSearchDiagnostics } => {
+    const entries: CrossCorrelationEntry[] = [];
+    for (let lag = -limit; lag <= limit; lag++) entries.push({ lag, pairs: 0, correlation: null });
+    return withDiagnostics(entries);
+  };
+  if (sortedA.length === 0 || sortedB.length === 0) return emptyResult();
+
+  const canUseGrid = tickStep > 0
+    && limit / tickStep <= Math.min(sortedA.length, sortedB.length) - 1;
+  if (!canUseGrid) {
+    const bByTick = new Map(sortedB.map((p) => [p.tick, p.value]));
+    const entries: CrossCorrelationEntry[] = [];
+    for (let lag = -limit; lag <= limit; lag++) {
+      const pairs: Array<[number, number]> = [];
+      for (const point of sortedA) {
+        const other = bByTick.get(point.tick + lag);
+        if (other !== undefined && Number.isFinite(other)) pairs.push([point.value, other]);
+      }
+      if (pairs.length < minimum) {
+        entries.push({ lag, pairs: pairs.length, correlation: null });
+        continue;
+      }
+      const xs = pairs.map((p) => p[0]);
+      const ys = pairs.map((p) => p[1]);
+      const mx = mean(xs);
+      const my = mean(ys);
+      let sxy = 0;
+      let sxx = 0;
+      let syy = 0;
+      for (let i = 0; i < pairs.length; i++) {
+        const dx = xs[i] - mx;
+        const dy = ys[i] - my;
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+      }
+      const sumX = mx * pairs.length;
+      const sumY = my * pairs.length;
+      entries.push({
+        lag,
+        pairs: pairs.length,
+        correlation: correlationFromSums(
+          pairs.length,
+          sumX,
+          sumY,
+          sxx + sumX * mx,
+          syy + sumY * my,
+          sxy + sumX * my,
+        ),
+      });
     }
-    if (pairs.length < 3) {
-      result.push({ lag, pairs: pairs.length, correlation: null });
+    return withDiagnostics(entries);
+  }
+
+  const origin = Math.min(sortedA[0].tick, sortedB[0].tick);
+  const positionsRegular = [...sortedA, ...sortedB].every((point) =>
+    Number.isInteger((point.tick - origin) / tickStep));
+  if (!positionsRegular) {
+    const bByTick = new Map(sortedB.map((p) => [p.tick, p.value]));
+    const entries: CrossCorrelationEntry[] = [];
+    for (let lag = -limit; lag <= limit; lag++) {
+      const pairs: Array<[number, number]> = [];
+      for (const point of sortedA) {
+        const other = bByTick.get(point.tick + lag);
+        if (other !== undefined && Number.isFinite(other)) pairs.push([point.value, other]);
+      }
+      const xs = pairs.map((p) => p[0]);
+      const ys = pairs.map((p) => p[1]);
+      const mx = xs.length ? mean(xs) : 0;
+      const my = ys.length ? mean(ys) : 0;
+      let sxy = 0;
+      let sxx = 0;
+      let syy = 0;
+      for (let i = 0; i < pairs.length; i++) {
+        const dx = xs[i] - mx;
+        const dy = ys[i] - my;
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+      }
+      const sumX = mx * pairs.length;
+      const sumY = my * pairs.length;
+      entries.push({
+        lag,
+        pairs: pairs.length,
+        correlation: pairs.length < minimum
+          ? null
+          : correlationFromSums(pairs.length, sumX, sumY, sxx + sumX * mx, syy + sumY * my, sxy + sumX * my),
+      });
+    }
+    return withDiagnostics(entries);
+  }
+
+  const span = Math.floor((Math.max(sortedA.at(-1)!.tick, sortedB.at(-1)!.tick) - origin) / tickStep) + 1;
+  const va = new Float64Array(span);
+  const vb = new Float64Array(span);
+  for (const point of sortedA) va[(point.tick - origin) / tickStep] = point.value;
+  for (const point of sortedB) vb[(point.tick - origin) / tickStep] = point.value;
+  const prefixA = cumulative(va);
+  const prefixAA = cumulative(va.map((value) => value * value));
+  const prefixB = cumulative(vb);
+  const prefixBB = cumulative(vb.map((value) => value * value));
+
+  const nfft = nextPowerOfTwo(2 * span + 2);
+  const paddedA = Array.from({ length: nfft }, (_, index) => (index < span ? va[index] : 0));
+  const reversedB = Array.from({ length: nfft }, (_, index) =>
+    index < span ? vb[span - 1 - index] : 0);
+  const spectrumA = fft(paddedA);
+  const spectrumB = fft(reversedB);
+  const product = spectrumA.map((value, index) => {
+    const other = spectrumB[index];
+    return {
+      re: value.re * other.re - value.im * other.im,
+      im: value.re * other.im + value.im * other.re,
+    };
+  });
+  const convolution = ifftReal(product);
+
+  const startA = (sortedA[0].tick - origin) / tickStep;
+  const startB = (sortedB[0].tick - origin) / tickStep;
+  const entries: CrossCorrelationEntry[] = [];
+  for (let lag = -limit; lag <= limit; lag++) {
+    if (lag % tickStep !== 0) {
+      entries.push({ lag, pairs: 0, correlation: null });
       continue;
     }
-    const xs = pairs.map((p) => p[0]);
-    const ys = pairs.map((p) => p[1]);
-    const mx = mean(xs);
-    const my = mean(ys);
-    let sxy = 0;
-    let sxx = 0;
-    let syy = 0;
-    for (let i = 0; i < pairs.length; i++) {
-      const dx = xs[i] - mx;
-      const dy = ys[i] - my;
-      sxy += dx * dy;
-      sxx += dx * dx;
-      syy += dy * dy;
+    const shift = lag / tickStep;
+    const from = Math.max(startA, startB - shift);
+    const to = Math.min(startA + sortedA.length - 1, startB - shift + sortedB.length - 1);
+    const pairs = Math.max(0, to - from + 1);
+    if (pairs < minimum) {
+      entries.push({ lag, pairs, correlation: null });
+      continue;
     }
-    const correlation = sxx > 0 && syy > 0 ? round(sxy / Math.sqrt(sxx * syy)) : null;
-    result.push({ lag, pairs: pairs.length, correlation });
+    const sumX = segmentSum(prefixA, from, to + 1);
+    const sumY = segmentSum(prefixB, from + shift, to + shift + 1);
+    const sumXX = segmentSum(prefixAA, from, to + 1);
+    const sumYY = segmentSum(prefixBB, from + shift, to + shift + 1);
+    const sumXY = convolution[span - 1 - shift];
+    entries.push({
+      lag,
+      pairs,
+      correlation: correlationFromSums(pairs, sumX, sumY, sumXX, sumYY, sumXY),
+    });
   }
-  return result;
+  return withDiagnostics(entries);
 }
 
 /** Lag con correlazione assoluta massima; esclude lag con correlazione null. */
@@ -374,6 +614,24 @@ export function bestCrossCorrelation(entries: CrossCorrelationEntry[]): CrossCor
   if (valid.length === 0) return null;
   return valid.reduce((best, current) =>
     Math.abs(current.correlation as number) > Math.abs(best.correlation as number) ? current : best,
+  );
+}
+
+/** Picco con correlazione positiva massima (separato dal segno del lag). */
+export function bestPositiveCrossCorrelation(entries: CrossCorrelationEntry[]): CrossCorrelationEntry | null {
+  const positive = entries.filter((entry) => entry.correlation !== null && (entry.correlation as number) > 0);
+  if (positive.length === 0) return null;
+  return positive.reduce((best, current) =>
+    (current.correlation as number) > (best.correlation as number) ? current : best,
+  );
+}
+
+/** Picco con correlazione negativa più intensa (separato dal segno del lag). */
+export function bestNegativeCrossCorrelation(entries: CrossCorrelationEntry[]): CrossCorrelationEntry | null {
+  const negative = entries.filter((entry) => entry.correlation !== null && (entry.correlation as number) < 0);
+  if (negative.length === 0) return null;
+  return negative.reduce((best, current) =>
+    (current.correlation as number) < (best.correlation as number) ? current : best,
   );
 }
 
