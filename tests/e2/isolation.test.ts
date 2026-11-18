@@ -51,9 +51,12 @@ describe("buildVariableIsolationScenarios", () => {
 
 describe("ISOLATION_CONTRASTS", () => {
   it("declares one independent variable per paired comparison", () => {
-    expect(ISOLATION_CONTRASTS).toHaveLength(7);
+    expect(ISOLATION_CONTRASTS).toHaveLength(10);
     expect(new Set(ISOLATION_CONTRASTS.map((c) => c.variable))).toEqual(
       new Set(["geometry", "density", "combined", "resource", "position"]),
+    );
+    expect(new Set(ISOLATION_CONTRASTS.map((c) => c.metric))).toEqual(
+      new Set(["finalPopulation", "survivalFraction"]),
     );
     expect(ISOLATION_CONTRASTS.every((c) => c.causal === false)).toBe(true);
   });

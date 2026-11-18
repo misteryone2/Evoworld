@@ -17,7 +17,8 @@ describe("E2.1 correlation review", () => {
     () => {
       const inputPath = resolveOutputPath(process.env.E2_CORRELATION_INPUT);
       const outputPath = resolveOutputPath(process.env.E2_CORRELATION_OUT);
-      const maxLag = Number(process.env.E2_CORRELATION_MAX_LAG ?? "5");
+      // 5 campioni × sampleEvery=10 tick = 50 tick; i lag in tick con sampleEvery=10 non sono interpretabili.
+      const maxLag = Number(process.env.E2_CORRELATION_MAX_LAG ?? "50");
       if (!Number.isInteger(maxLag) || maxLag < 0) throw new Error("E2_CORRELATION_MAX_LAG must be non-negative");
 
       const raw = readFileSync(inputPath, "utf8");

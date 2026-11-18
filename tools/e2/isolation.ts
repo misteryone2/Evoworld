@@ -39,13 +39,23 @@ export interface IsolationOptions {
   sampleEvery: number;
 }
 
+export type IsolationMetric = "finalPopulation" | "survivalFraction";
+
 export interface IsolationContrast {
   id: string;
   variable: "geometry" | "density" | "combined" | "resource" | "position";
   a: string;
   b: string;
   description: string;
+  metric: IsolationMetric;
   causal: false;
+}
+
+/** Popolazione finale / popolazione iniziale: confrontabile tra bracci con fondatori diversi. */
+export function survivalFractionOf(result: RunResult): number {
+  return result.initialPopulation > 0
+    ? analyzeRun(result).finalPopulation / result.initialPopulation
+    : Number.NaN;
 }
 
 /** Confronti in cui A−B differisce solo per la variabile dichiarata. */
@@ -56,6 +66,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: ISOLATION_GEOMETRY_ID,
     b: ISOLATION_CONTROL_ID,
     description: "Geometria 64x64 con densita' di fondatori quasi invariata (38 vs 150); non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
   {
@@ -64,6 +75,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: ISOLATION_DENSITY_ID,
     b: ISOLATION_CONTROL_ID,
     description: "Fondatori 220 vs 150 a geometria 128x128 invariata; non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
   {
@@ -72,6 +84,34 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: ISOLATION_COMBINED_ID,
     b: ISOLATION_CONTROL_ID,
     description: "S02 ricostruito: geometria e densita' cambiano insieme; confronte solo di riferimento.",
+    metric: "finalPopulation",
+    causal: false,
+  },
+  {
+    id: "geometry_only_minus_control_survival_fraction",
+    variable: "geometry",
+    a: ISOLATION_GEOMETRY_ID,
+    b: ISOLATION_CONTROL_ID,
+    description: "Metrica primaria: sopravvivenza relativa ai fondatori, confrontabile tra bracci con popolazioni iniziali diverse.",
+    metric: "survivalFraction",
+    causal: false,
+  },
+  {
+    id: "density_only_minus_control_survival_fraction",
+    variable: "density",
+    a: ISOLATION_DENSITY_ID,
+    b: ISOLATION_CONTROL_ID,
+    description: "Metrica primaria: sopravvivenza relativa a 220 vs 150 fondatori a geometria invariata.",
+    metric: "survivalFraction",
+    causal: false,
+  },
+  {
+    id: "combined_minus_control_survival_fraction",
+    variable: "combined",
+    a: ISOLATION_COMBINED_ID,
+    b: ISOLATION_CONTROL_ID,
+    description: "Metrica primaria: sopravvivenza relativa nel braccio S02 ricostruito.",
+    metric: "survivalFraction",
     causal: false,
   },
   {
@@ -80,6 +120,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: "S13_poor_position_rich_resources",
     b: "S09_poor_habitat",
     description: "Risorse ricche vs povere con posizioni povere invariate; non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
   {
@@ -88,6 +129,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: "S10_rich_habitat",
     b: "S14_rich_position_poor_resources",
     description: "Risorse ricche vs povere con posizioni ricche invariate; non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
   {
@@ -96,6 +138,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: "S14_rich_position_poor_resources",
     b: "S09_poor_habitat",
     description: "Posizioni ricche vs povere con risorse povere invariate; non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
   {
@@ -104,6 +147,7 @@ export const ISOLATION_CONTRASTS: IsolationContrast[] = [
     a: "S10_rich_habitat",
     b: "S13_poor_position_rich_resources",
     description: "Posizioni ricche vs povere con risorse ricche invariate; non causale.",
+    metric: "finalPopulation",
     causal: false,
   },
 ];
@@ -210,13 +254,16 @@ export function buildIsolationComparisons(groups: Record<string, RunResult[]>): 
     const a = groups[contrast.a];
     const b = groups[contrast.b];
     if (!a || !b) continue;
+    const extract = contrast.metric === "survivalFraction"
+      ? survivalFractionOf
+      : (result: RunResult) => analyzeRun(result).finalPopulation;
     comparisons.push(
-      pairedMetric(a, b, (result) => analyzeRun(result).finalPopulation, {
+      pairedMetric(a, b, extract, {
         label: contrast.id,
         description: contrast.description,
         scenarioA: contrast.a,
         scenarioB: contrast.b,
-        metric: "finalPopulation",
+        metric: contrast.metric,
       }),
     );
   }
