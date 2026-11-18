@@ -3,7 +3,7 @@ import type { RenderFrame } from "../../../types";
 import { speciesHue } from "../../../lib/speciesColor";
 import { hueShiftFromVariation, stableVariation01 } from "../../../lib/visual/creatureVisualDescriptor";
 import {
-  GENERIC_RENDER_SLOTS, isUsableAnatomyRenderPlan,
+  GENERIC_RENDER_SLOTS, RENDER_POOL_LIMITS, isUsableAnatomyRenderPlan,
   type AnatomyRenderPlan, type CreatureAnatomyRenderSource, type CreaturePartInstance, type CreatureRenderPartKey,
 } from "../../../lib/visual/anatomyRenderPlan";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../../lib/creatureAnatomy";
@@ -115,6 +115,57 @@ function genericSlots(refs: SceneRefs, key: CreatureRenderPartKey): number {
   return typeof configured === "number" && Number.isInteger(configured) && configured > 0 ? configured : GENERIC_RENDER_SLOTS[key];
 }
 
+/**
+ * G3 — crescita controllata: il mesh viene sostituito solo quando la domanda
+ * supera la capacità, con headroom del 25% arrotondato a 64 istanze. Geometria
+ * e materiale sono riutilizzati; `dispose()` libera solo i buffer di istanza.
+ */
+function ensureGenericPool(refs: SceneRefs, key: CreatureRenderPartKey, slots: number, stats?: SceneRefs["creatureRenderStats"]): void {
+  const mesh = refs.genericMeshes?.[key];
+  if (!mesh) return;
+  const needed = Math.max(1, refs.capacity * slots);
+  if (mesh.instanceMatrix.count >= needed) return;
+  const ceiling = Math.max(needed, RENDER_POOL_LIMITS[key] * refs.capacity);
+  const headroom = Math.ceil((needed * 1.25) / 64) * 64;
+  const capacity = Math.min(ceiling, Math.max(needed, headroom));
+  const next = new THREE.InstancedMesh(mesh.geometry, mesh.material, capacity);
+  next.name = mesh.name;
+  next.renderOrder = mesh.renderOrder;
+  next.castShadow = mesh.castShadow;
+  next.receiveShadow = mesh.receiveShadow;
+  next.visible = false;
+  next.count = 0;
+  configureInstancedMesh(next);
+  if (mesh.instanceColor) {
+    next.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    next.instanceColor.setUsage(mesh.instanceColor.usage);
+  }
+  const parent = mesh.parent;
+  if (parent) {
+    parent.add(next);
+    parent.remove(mesh);
+  }
+  mesh.dispose();
+  refs.genericMeshes![key] = next;
+  if (stats?.poolGrowth && stats.poolGrowth.length < 8) {
+    stats.poolGrowth.push(`${key}:${mesh.instanceMatrix.count}->${capacity}`);
+  }
+}
+
+/** Dimensiona i pool prima del loop, usando i massimi dichiarati dalla sorgente. */
+function configureGenericPools(refs: SceneRefs, source: CreatureAnatomyRenderSource, stats?: SceneRefs["creatureRenderStats"]): void {
+  if (!refs.genericMeshes) return;
+  const requested = source.maxSlots?.() ?? null;
+  if (!refs.genericSlotsPerCreature) refs.genericSlotsPerCreature = {};
+  for (const key of GENERIC_KEYS) {
+    const wanted = requested?.[key] ?? GENERIC_RENDER_SLOTS[key];
+    const slots = Math.max(GENERIC_RENDER_SLOTS[key], Math.min(RENDER_POOL_LIMITS[key], Math.max(0, Math.floor(wanted))));
+    refs.genericSlotsPerCreature[key] = slots;
+    if (stats?.poolCapacity) stats.poolCapacity[key] = slots;
+    ensureGenericPool(refs, key, slots, stats);
+  }
+}
+
 function clearGenericParts(refs: SceneRefs, creatureIndex: number): void {
   if (!refs.genericMeshes) return;
   for (const key of GENERIC_KEYS) {
@@ -133,6 +184,7 @@ function writeGenericParts(
   lift: number,
   color: THREE.Color,
   active: boolean,
+  stats?: SceneRefs["creatureRenderStats"],
 ): void {
   if (!refs.genericMeshes || !active) return;
   clearGenericParts(refs, creatureIndex);
@@ -142,7 +194,10 @@ function writeGenericParts(
     const mesh = refs.genericMeshes[part.key];
     if (!mesh) continue;
     const slots = genericSlots(refs, part.key);
-    if (part.slot < 0 || part.slot >= slots) continue;
+    if (part.slot < 0 || part.slot >= slots) {
+      if (stats) stats.droppedParts = (stats.droppedParts ?? 0) + 1;
+      continue;
+    }
     const slot = creatureIndex * slots + part.slot;
     tmpLocalPos.set(part.position[0], part.position[1] + lift, part.position[2]);
     tmpLocalScale.set(part.scale[0], part.scale[1], part.scale[2]);
@@ -221,7 +276,14 @@ export function updateCreatureInstances(
     stats.fallback = 0;
     stats.unsupported = 0;
     stats.fallbackReasons.length = 0;
+    stats.droppedParts = 0;
+    stats.sourceReason = null;
+    if (!stats.poolCapacity) stats.poolCapacity = {};
+    else for (const key of GENERIC_KEYS) delete stats.poolCapacity[key];
+    if (!stats.poolGrowth) stats.poolGrowth = [];
+    else stats.poolGrowth.length = 0;
   }
+  if (renderSource) configureGenericPools(refs, renderSource, stats);
   const {
     organismsX,
     organismsY,
@@ -380,7 +442,7 @@ export function updateCreatureInstances(
       } else if (stats) {
         stats.fallback++;
         if (!candidate || !candidate.support.supported) stats.unsupported++;
-        const reason = candidate?.fallbackReason ?? (candidate ? "invalid-render-plan" : "no-render-plan");
+        const reason = candidate?.fallbackReason ?? (candidate ? "invalid-render-plan" : renderSource.fallbackReason?.() ?? "no-render-plan");
         if (stats.fallbackReasons.length < 8 && !stats.fallbackReasons.includes(reason)) stats.fallbackReasons.push(reason);
       }
     }
@@ -498,7 +560,7 @@ export function updateCreatureInstances(
     // G-REV-02 — i pool generici G2 ricevono la stessa posa e lo stesso colore,
     // ma restano vuoti (e invisibili) finché non viene fornita una sorgente.
     if (plan?.parts && plan.parts.length > 0) genericPartsUsed = true;
-    writeGenericParts(refs, plan?.parts ?? null, writeIndex, tmpCreatureMatrix, lift, tmpColor, genericActive);
+    writeGenericParts(refs, plan?.parts ?? null, writeIndex, tmpCreatureMatrix, lift, tmpColor, genericActive, stats);
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
     refs.headMesh.setColorAt(writeIndex, tmpColor);
     if (refs.detail >= 2) {
@@ -562,7 +624,10 @@ export function updateCreatureInstances(
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
-  if (stats) stats.drawn = writeIndex;
+  if (stats) {
+    stats.drawn = writeIndex;
+    stats.sourceReason = renderSource?.fallbackReason?.() ?? null;
+  }
   // v1.10.5 (consolidamento) — quante creature sono state disegnate: chi chiama sa se c'è una posa viva da far proseguire (pausa).
   return writeIndex;
 }

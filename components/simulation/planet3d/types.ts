@@ -104,4 +104,12 @@ export interface CreatureRendererStats {
   unsupported: number;
   /** Motivi di fallback del frame corrente (al massimo 8 voci). */
   fallbackReasons: string[];
+  /** G3 — ultimo motivo dichiarato dalla sorgente quando non restituisce un piano. */
+  sourceReason?: string | null;
+  /** G3 — slot per creatura effettivamente usati dai pool generici in questo frame. */
+  poolCapacity?: Partial<Record<CreatureRenderPartKey, number>>;
+  /** G3 — eventi di crescita dei pool (al massimo 8 voci). */
+  poolGrowth?: string[];
+  /** G3 — parti che non hanno trovato slot: deve restare 0 per anatomie supportate. */
+  droppedParts?: number;
 }

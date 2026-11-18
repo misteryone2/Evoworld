@@ -6,6 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { MAX_SPIKES } from "../../lib/creatureAnatomy";
 import { GENERIC_RENDER_SLOTS, type CreatureAnatomyRenderSource, type CreatureRenderPartKey } from "../../lib/visual/anatomyRenderPlan";
+import { createRuntimeAnatomyRenderSource, type RuntimeAnatomyRenderSource } from "../../lib/visual/runtimeAnatomyRenderSource";
 import { wrappedDelta } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
 import { shouldDrawCreatures } from "../../lib/animationScheduler";
@@ -107,7 +108,10 @@ interface Props {
   onSlow?: () => void;
   /** v1.7.0 — vista dall'alto (default) o terza persona sull'animale selezionato. */
   cameraMode?: CameraMode;
-  /** G-REV-02 — sorgente G2 opzionale dei piani di rendering. Senza, il renderer resta identico a G1. */
+  /**
+   * G-REV-02 — sorgente G2 opzionale. G3 la crea automaticamente dal frame:
+   * questo prop resta solo per test/override espliciti e non è più necessario.
+   */
   anatomyRenderSource?: CreatureAnatomyRenderSource | null;
 }
 
@@ -179,7 +183,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
-  const anatomyRenderSourceRef = useRef<CreatureAnatomyRenderSource | null>(anatomyRenderSource);
+  // G3 — sorgente automatica: nessuna prop manuale è più necessaria per
+  // collegare il descriptor G2 al renderer. Il prop resta un override opzionale.
+  const runtimeAnatomySourceRef = useRef<RuntimeAnatomyRenderSource>(createRuntimeAnatomyRenderSource());
+  const anatomyRenderSourceRef = useRef<CreatureAnatomyRenderSource | null>(anatomyRenderSource ?? runtimeAnatomySourceRef.current);
   // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
   const globalTerrainBuiltRef = useRef(false);
   const globalPlanetKeyRef = useRef("");
@@ -205,8 +212,9 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     onRequestViewportRef.current = onRequestViewport;
   }, [onRequestViewport]);
   useEffect(() => {
-    anatomyRenderSourceRef.current = anatomyRenderSource;
-    if (sceneRef.current) sceneRef.current.renderSource = anatomyRenderSource;
+    const active = anatomyRenderSource ?? runtimeAnatomySourceRef.current;
+    anatomyRenderSourceRef.current = active;
+    if (sceneRef.current) sceneRef.current.renderSource = active;
   }, [anatomyRenderSource]);
 
   // Mount-only: build the renderer, scene, camera, controls, and the
@@ -559,6 +567,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         motionAlpha = interpolated.alpha;
       }
 
+      // G3 — il descriptor dipende dal frame reale, non dall'interpolazione
+      // visiva: sincronizzare qui evita di rigenerare piani a ogni sub-frame.
+      const activeSource = anatomyRenderSourceRef.current;
+      if (activeSource && typeof (activeSource as RuntimeAnatomyRenderSource).syncFrame === "function") {
+        (activeSource as RuntimeAnatomyRenderSource).syncFrame(realFrame);
+      }
+
       if (followActive) {
         const refs = sceneRefs;
         const f = view;
@@ -745,6 +760,25 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       creatureRenderStats: { drawn: 0, mapped: 0, legacy: 0, fallback: 0, unsupported: 0, fallbackReasons: [] },
     };
 
+    // G3 — snapshot di QA in development: espose solo statistiche, non muta la scena.
+    if (process.env.NODE_ENV !== "production") {
+      const debugWindow = window as Window & {
+        __EVOWORLD_G3__?: { snapshot: () => Record<string, unknown> };
+      };
+      debugWindow.__EVOWORLD_G3__ = {
+        snapshot: () => ({
+          quality: quality.level,
+          rendererInfo: {
+            calls: renderer.info.render.calls,
+            geometries: renderer.info.memory.geometries,
+            textures: renderer.info.memory.textures,
+          },
+          renderStats: { ...sceneRef.current?.creatureRenderStats },
+          anatomySource: runtimeAnatomySourceRef.current.stats(),
+        }),
+      };
+    }
+
     // v1.0.4 — tap/click selection. A pointerdown/pointerup pair is only
     // treated as a tap (not a drag-to-rotate) if the pointer barely moved.
     let pointerDownPos: { x: number; y: number } | null = null;
@@ -826,6 +860,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     renderer.domElement.addEventListener("pointercancel", handlePointerEnd);
 
     return () => {
+      if (process.env.NODE_ENV !== "production") {
+        const debugWindow = window as Window & { __EVOWORLD_G3__?: unknown };
+        delete debugWindow.__EVOWORLD_G3__;
+      }
       cancelAnimationFrame(animationFrameId);
       clearInterval(lodCheckHandle);
       clearInterval(localCheckHandle);
@@ -835,6 +873,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("pointercancel", handlePointerEnd);
       controls.dispose();
+      // G3 — i buffer di istanza non sono liberati da geometry.dispose():
+      // vanno rilasciati esplicitamente, inclusi i pool cresciuti a runtime.
+      const refsForCleanup = sceneRef.current;
+      for (const mesh of [
+        refsForCleanup?.bodyMesh, refsForCleanup?.headMesh, refsForCleanup?.eyeMesh,
+        refsForCleanup?.tailMesh, refsForCleanup?.jawMesh, refsForCleanup?.spikeMesh,
+        refsForCleanup?.legMesh, refsForCleanup?.earMesh, refsForCleanup?.shadowMesh,
+      ]) mesh?.dispose();
       sceneRef.current?.planetMesh.geometry.dispose();
       planetMaterial.dispose();
       sceneRef.current?.planetTexture.dispose();
@@ -861,8 +907,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       shadowGeometry.dispose();
       shadowMaterial.dispose();
       for (const key of Object.keys(genericMeshes) as CreatureRenderPartKey[]) {
-        const mesh = genericMeshes[key];
-        if (mesh) scene.remove(mesh);
+        const mesh = refsForCleanup?.genericMeshes?.[key] ?? genericMeshes[key];
+        if (mesh) {
+          scene.remove(mesh);
+          mesh.dispose();
+        }
         genericGeometries[key]?.dispose();
         genericMaterials[key]?.dispose();
       }

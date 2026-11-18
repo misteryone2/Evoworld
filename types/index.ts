@@ -413,6 +413,16 @@ export interface RenderFrame {
   organismsY: Float32Array;
   organismsSpecies: Uint16Array;
   organismsSize: Float32Array;
+  /**
+   * G3 — canale morfologico di sola lettura per l'integrazione G2: valori grezzi dei tre geni MOR registrati,
+   * uno per organismo. I campi sono opzionali: un frame privo di questi array usa il fallback legacy e dichiara
+   * il motivo. La simulazione resta proprietaria dei geni; qui viaggiano solo copie per il renderer.
+   */
+  organismsBodyStature?: Float32Array;
+  organismsFurDensity?: Float32Array;
+  organismsDermalArmor?: Float32Array;
+  /** Bit 1 = bodyStature, 2 = furDensity, 4 = dermalArmor presenti e finiti. */
+  organismsMorphologyPresence?: Uint8Array;
   // Additional per-organism traits (v0.6), sent alongside size so the
   // renderer can draw a genuinely procedural creature per individual
   // instead of a plain colored circle — see lib/creatureShape.ts.

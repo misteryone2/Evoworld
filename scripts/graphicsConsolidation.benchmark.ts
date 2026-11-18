@@ -6,18 +6,24 @@ import { QUALITY_PROFILES } from "../lib/qualityProfile";
 import { buildCreatureVisualDescriptor } from "../lib/visual/creatureVisualDescriptor";
 import { projectAnatomyToVisual } from "../lib/visual/anatomyVisualBridge";
 import { GENERIC_RENDER_SLOTS, planFromAnatomyDescriptor, type CreatureAnatomyRenderSource, type CreatureRenderPartKey } from "../lib/visual/anatomyRenderPlan";
+import { createRuntimeAnatomyRenderSource } from "../lib/visual/runtimeAnatomyRenderSource";
 import { TRAIT_RANGES } from "../simulation/biology/genome";
 import type { RenderFrame } from "../types";
 
 /**
- * G-consolidamento — benchmark CPU ripetibile (Node, nessuna GPU).
+ * G3 — benchmark CPU ripetibile (Node, nessuna GPU).
  *
  * Esegui: npx vitest run --config vitest.bench.config.ts scripts/graphicsConsolidation.benchmark.ts
  *
- * NON misura FPS, upload GPU, draw call o fill-rate. Misura solo il costo
- * main-thread delle funzioni pure/CPU, su questa macchina, con warmup e
- * campioni multipli. Nessun miglioramento prestazionale viene dichiarato
- * senza confrontare i numeri prodotti qui.
+ * Tre modalità confrontabili sulle stesse popolazioni:
+ *  - `legacy`: percorso G1 senza sorgente G2 (baseline G_FINAL);
+ *  - `g2-current`: piani G2 precalcolati con il mapping strict G-REV-02;
+ *  - `g2-optimized`: sorgente runtime G3 con canale MOR, cache e pool dinamici.
+ *
+ * NON misura FPS reali, upload GPU, draw call GPU o fill-rate. `drawCalls`
+ * è il conteggio delle mesh instanziate attive (proxy main-thread), `gpuBytes`
+ * e `fps` sono null dove il contesto Node non può misurarli: il QA browser
+ * li acquisisce da `renderer.info` tramite `window.__EVOWORLD_G3__.snapshot()`.
  */
 
 const POPULATIONS = [100, 500, 1500, 3000];
@@ -30,6 +36,7 @@ const CAP = Math.max(...POPULATIONS);
 function mesh(capacity: number, colored = false): THREE.InstancedMesh {
   const m = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 4, 3), new THREE.MeshBasicMaterial(), capacity);
   if (colored) m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+  m.count = 0;
   return m;
 }
 
@@ -66,7 +73,7 @@ function makeRefs(detail: 1 | 2 | 3 = 3, withGeneric = false): SceneRefs {
 
 const mid = (k: keyof typeof TRAIT_RANGES) => (TRAIT_RANGES[k].min + TRAIT_RANGES[k].max) / 2;
 
-function makeFrame(n: number): RenderFrame {
+function makeFrame(n: number, withMorphology = false): RenderFrame {
   const x = new Float32Array(n);
   const y = new Float32Array(n);
   const species = new Uint16Array(n);
@@ -77,6 +84,10 @@ function makeFrame(n: number): RenderFrame {
   const evasion = new Float32Array(n);
   const hunting = new Float32Array(n);
   const ids = new Uint32Array(n);
+  const stature = withMorphology ? new Float32Array(n) : null;
+  const fur = withMorphology ? new Float32Array(n) : null;
+  const armor = withMorphology ? new Float32Array(n) : null;
+  const presence = withMorphology ? new Uint8Array(n) : null;
   for (let i = 0; i < n; i++) {
     x[i] = 80 + (i % 128) * 2;
     y[i] = 80 + Math.floor(i / 128) * 2;
@@ -88,14 +99,39 @@ function makeFrame(n: number): RenderFrame {
     evasion[i] = mid("evasion");
     hunting[i] = mid("huntingSkill");
     ids[i] = i + 1;
+    if (stature && fur && armor && presence) {
+      stature[i] = 0.2 + (i % 7) * 0.1;
+      fur[i] = 0.3 + (i % 5) * 0.1;
+      armor[i] = 0.1 + (i % 9) * 0.05;
+      presence[i] = 7;
+    }
   }
   return {
+    tick: 1,
     planetWidth: 512,
     planetHeight: 512,
     organismsX: x, organismsY: y, organismsSpecies: species, organismsSize: size,
     organismsSpeed: speed, organismsCarnivory: carnivory, organismsVision: vision,
     organismsEvasion: evasion, organismsHuntingSkill: hunting, organismsId: ids,
+    ...(stature && fur && armor && presence ? {
+      organismsBodyStature: stature,
+      organismsFurDensity: fur,
+      organismsDermalArmor: armor,
+      organismsMorphologyPresence: presence,
+    } : {}),
   } as unknown as RenderFrame;
+}
+
+/** Copia con nuovi array MOR: forza il percorso di rigenerazione della cache. */
+function regenerateFrame(frame: RenderFrame, jitter: number): RenderFrame {
+  const n = frame.organismsId.length;
+  const stature = new Float32Array(n);
+  for (let i = 0; i < n; i++) stature[i] = frame.organismsBodyStature![i] + jitter * 0.001;
+  return {
+    ...frame,
+    tick: frame.tick + 1,
+    organismsBodyStature: stature,
+  } as RenderFrame;
 }
 
 /** Piani G2 precalcolati: il loop misurato non genera descriptor, consuma solo planFor. */
@@ -134,23 +170,81 @@ function sample(label: string, fn: () => void, warmup: number, samples: number):
   };
 }
 
-describe("G-consolidamento — benchmark CPU (senza GPU)", () => {
+/** Metriche statiche della scena dopo un aggiornamento: proxy main-thread dei costi GPU. */
+function sceneMetrics(refs: SceneRefs, frame: RenderFrame): Record<string, number | null> {
+  const meshes = [
+    refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh,
+    refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh,
+    ...Object.values(refs.genericMeshes ?? {}),
+  ].filter((m): m is THREE.InstancedMesh => !!m && m.count > 0);
+  const geometries = new Set<string>();
+  const materials = new Set<string>();
+  let cpuBytes = 0;
+  for (const m of meshes) {
+    geometries.add(m.geometry.uuid);
+    materials.add((Array.isArray(m.material) ? m.material[0] : m.material).uuid);
+    cpuBytes += (m.instanceMatrix.array as Float32Array).byteLength;
+    if (m.instanceColor) cpuBytes += (m.instanceColor.array as Float32Array).byteLength;
+  }
+  for (const key of ["organismsX", "organismsY", "organismsSpecies", "organismsSize", "organismsSpeed",
+    "organismsCarnivory", "organismsVision", "organismsEvasion", "organismsHuntingSkill", "organismsId",
+    "organismsBodyStature", "organismsFurDensity", "organismsDermalArmor", "organismsMorphologyPresence"] as const) {
+    const array = frame[key];
+    if (array) cpuBytes += (array as ArrayLike<number> & { byteLength?: number }).byteLength ?? 0;
+  }
+  return {
+    drawCalls: meshes.length,
+    geometries: geometries.size,
+    materials: materials.size,
+    cpuKB: Number((cpuBytes / 1024).toFixed(1)),
+    // Node non ha un WebGLRenderer: questi valori sono acquisiti nel QA browser.
+    gpuBytes: null,
+    fps: null,
+  };
+}
+
+describe("G3 — benchmark CPU (senza GPU)", () => {
   it(
-    "misura updateCreatureInstances, descriptor G1 e ponte G2→G1",
+    "confronta legacy, G2 attuale e G2 ottimizzato su 100/500/1500/3000 organismi",
     () => {
       const rows: Sample[] = [];
+      const metrics: Record<string, Record<string, number | null>> = {};
       for (const n of POPULATIONS) {
-        const refs = makeRefs();
-        const frame = makeFrame(n);
-        rows.push(sample(`updateCreatureInstances/${n}`, () => {
-          updateCreatureInstances(refs, frame, null, null, 16);
+        // legacy — nessuna sorgente G2
+        const legacyRefs = makeRefs();
+        const legacyFrame = makeFrame(n);
+        rows.push(sample(`updateCreatureInstances/legacy/${n}`, () => {
+          updateCreatureInstances(legacyRefs, legacyFrame, null, null, 16);
         }, WARMUP, SAMPLES));
+        metrics[`legacy/${n}`] = sceneMetrics(legacyRefs, legacyFrame);
 
+        // G2 attuale — mapping strict G-REV-02, piani precalcolati
         const g2Refs = makeRefs(3, true);
-        const g2Source = makeG2Source(frame);
-        rows.push(sample(`updateCreatureInstances+g2/${n}`, () => {
-          updateCreatureInstances(g2Refs, frame, null, null, 16, null, g2Source);
+        const g2Frame = makeFrame(n);
+        const g2Source = makeG2Source(g2Frame);
+        rows.push(sample(`updateCreatureInstances/g2-current/${n}`, () => {
+          updateCreatureInstances(g2Refs, g2Frame, null, null, 16, null, g2Source);
         }, WARMUP, SAMPLES));
+        metrics[`g2-current/${n}`] = sceneMetrics(g2Refs, g2Frame);
+
+        // G2 ottimizzato — sorgente runtime G3, cache e pool dinamici
+        const optRefs = makeRefs(3, true);
+        const optFrame = makeFrame(n, true);
+        const optSource = createRuntimeAnatomyRenderSource("bench-g3-source");
+        optSource.syncFrame(optFrame);
+        rows.push(sample(`updateCreatureInstances/g2-optimized/${n}`, () => {
+          updateCreatureInstances(optRefs, optFrame, null, null, 16, null, optSource);
+        }, WARMUP, SAMPLES));
+        metrics[`g2-optimized/${n}`] = sceneMetrics(optRefs, optFrame);
+
+        // syncFrame separato: percorso caldo (stessi array) e rigenerazione (array MOR nuovi)
+        rows.push(sample(`syncFrame/warm/${n}`, () => {
+          optSource.syncFrame({ ...optFrame });
+        }, 10, 30));
+        let jitter = 0;
+        rows.push(sample(`syncFrame/regenerate/${n}`, () => {
+          optSource.syncFrame(regenerateFrame(optFrame, ++jitter));
+        }, 2, 6));
       }
 
       const frame3000 = makeFrame(3000);
@@ -179,19 +273,25 @@ describe("G-consolidamento — benchmark CPU (senza GPU)", () => {
         p95_ms: r.p95Ms.toFixed(3),
         media_ms: r.meanMs.toFixed(3),
       })));
-      // Riga machine-readable per il report: console.table non sempre sopravvive ai reporter Vitest.
-      console.log("G_BENCHMARK_JSON=" + JSON.stringify(rows.map((r) => ({
-        label: r.label,
-        medianMs: Number(r.medianMs.toFixed(3)),
-        p95Ms: Number(r.p95Ms.toFixed(3)),
-        meanMs: Number(r.meanMs.toFixed(3)),
-      }))));
+      console.table(Object.entries(metrics).map(([scenario, m]) => ({
+        scenario, ...m,
+      })));
+      // Righe machine-readable per il report: console.table non sempre sopravvive ai reporter Vitest.
+      console.log("G3_BENCHMARK_JSON=" + JSON.stringify({
+        samples: rows.map((r) => ({
+          label: r.label,
+          medianMs: Number(r.medianMs.toFixed(3)),
+          p95Ms: Number(r.p95Ms.toFixed(3)),
+          meanMs: Number(r.meanMs.toFixed(3)),
+        })),
+        metrics,
+      }));
 
       for (const row of rows) {
         expect(Number.isFinite(row.medianMs)).toBe(true);
         expect(row.medianMs).toBeGreaterThan(0);
       }
     },
-    400_000,
+    600_000,
   );
 });
