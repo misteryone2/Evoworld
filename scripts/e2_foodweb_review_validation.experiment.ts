@@ -245,7 +245,7 @@ describe("E2.2 review validation", () => {
       const synchronous = analyzePairCorrelation(synchronousRuns, FOOD_WEB_PAIRS[0], 20, noSurrogate);
       const synchronousAssessment = assessCarnivoreDependence(synchronous, "S06_predator_prey_mixed");
       expect(synchronous.zeroLagSeeds).toBe(12);
-      expect(synchronousAssessment.sequencing.verdict).toBe("NON_DIMOSTRATO");
+      expect(synchronousAssessment.sequencing.verdict).toBe("NON_VALUTABILE");
       expect(synchronousAssessment.statistical.classification).toBe("NON_VALUTABILE");
 
       // 6. Diagnostica esplicita della ricerca del massimo sui lag.

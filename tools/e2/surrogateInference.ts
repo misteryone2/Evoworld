@@ -65,6 +65,61 @@ export const DISABLED_SURROGATE_CONFIG: SurrogateConfig = {
  */
 export const IAAFT_AMPLITUDE_TOLERANCE = 1e-3;
 
+/** Lag minimi richiesti per la QA, più un lag lungo proporzionale a N. */
+export const QA_BASE_AUTOCORRELATION_LAGS = [1, 2, 3, 5, 10, 20] as const;
+
+export function qaAutocorrelationLags(length: number): number[] {
+  return QA_BASE_AUTOCORRELATION_LAGS.filter((lag) => lag < length - 1) as number[];
+}
+
+/** Autocorrelazione normalizzata con lo stesso denominatore simmetrico del lag-1. */
+export function autocorrelationAtLag(values: number[], lag: number): number | null {
+  if (!Number.isInteger(lag) || lag < 1 || lag >= values.length) return null;
+  if (!values.every(Number.isFinite)) return null;
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  let numerator = 0;
+  let currentSquares = 0;
+  let laggedSquares = 0;
+  for (let index = lag; index < values.length; index++) {
+    const current = values[index] - average;
+    const lagged = values[index - lag] - average;
+    numerator += current * lagged;
+    currentSquares += current * current;
+    laggedSquares += lagged * lagged;
+  }
+  const denominator = Math.sqrt(currentSquares * laggedSquares);
+  if (!Number.isFinite(denominator) || denominator === 0) return null;
+  return Math.max(-1, Math.min(1, numerator / denominator));
+}
+
+export interface IAAFTSurrogateQaRecord {
+  index: number;
+  n: number;
+  iterations: number;
+  converged: boolean;
+  finalSpectralError: number;
+  bestSpectralError: number;
+  finite: boolean;
+  exactLength: boolean;
+  empiricalDistributionPreserved: boolean;
+  maximumSortedDeviation: number;
+  numericValid: boolean;
+  invalidationReasons: string[];
+  autocorrelations: Array<{
+    lag: number;
+    observed: number | null;
+    surrogate: number | null;
+    absoluteError: number | null;
+  }>;
+}
+
+export interface IAAFTQaOptions {
+  autocorrelationLags?: number[];
+  distributionTolerance?: number;
+  /** false mantiene il comportamento storico (throw); true registra il surrogato come invalido. */
+  allowInvalidSurrogates?: boolean;
+}
+
 export interface IAAFTConvergenceSummary {
   criterion: string;
   tolerance: number;
@@ -79,6 +134,8 @@ export interface IAAFTConvergenceSummary {
 export interface IAAFTSurrogateResult {
   surrogates: number[][];
   convergence: IAAFTConvergenceSummary;
+  /** Metadati QA per singolo surrogato; nessun surrogato viene scartato qui. */
+  qa: IAAFTSurrogateQaRecord[];
 }
 
 export interface SurrogateNullTest {
@@ -196,9 +253,13 @@ export function iaaftSurrogatesDetailed(
   count: number,
   rng: () => number,
   iterations = DEFAULT_SURROGATE_CONFIG.iterations,
+  qaOptions: IAAFTQaOptions = {},
 ): IAAFTSurrogateResult {
   const n = values.length;
   const maxIterations = Math.max(1, Math.floor(iterations));
+  const qaLags = qaOptions.autocorrelationLags ?? qaAutocorrelationLags(n);
+  const distributionTolerance = qaOptions.distributionTolerance ?? 1e-9;
+  const allowInvalid = qaOptions.allowInvalidSurrogates ?? false;
   const emptyConvergence = (): IAAFTConvergenceSummary => ({
     criterion: "relative amplitude-spectrum error after rank remapping",
     tolerance: IAAFT_AMPLITUDE_TOLERANCE,
@@ -209,15 +270,41 @@ export function iaaftSurrogatesDetailed(
     convergedSurrogates: 0,
     totalSurrogates: 0,
   });
-  if (count <= 0 || n < 4) return { surrogates: [], convergence: emptyConvergence() };
+  const invalidAutocorrelations = qaLags.map((lag) => ({
+    lag, observed: null, surrogate: null, absoluteError: null,
+  }));
+  const invalidRecords = (reason: string): IAAFTSurrogateQaRecord[] =>
+    Array.from({ length: Math.max(0, Math.floor(count)) }, (_, index) => ({
+      index,
+      n,
+      iterations: 0,
+      converged: false,
+      finalSpectralError: Number.POSITIVE_INFINITY,
+      bestSpectralError: Number.POSITIVE_INFINITY,
+      finite: false,
+      exactLength: false,
+      empiricalDistributionPreserved: false,
+      maximumSortedDeviation: Number.POSITIVE_INFINITY,
+      numericValid: false,
+      invalidationReasons: [reason],
+      autocorrelations: invalidAutocorrelations,
+    }));
+  if (count <= 0 || n < 4) return { surrogates: [], convergence: emptyConvergence(), qa: [] };
   if (!values.every((value) => Number.isFinite(value))) {
-    throw new Error("IAAFT requires finite input values");
+    if (!allowInvalid) throw new Error("IAAFT requires finite input values");
+    return { surrogates: [], convergence: emptyConvergence(), qa: invalidRecords("non-finite input") };
   }
 
   const targetAmplitude = exactAmplitudeSpectrum(values);
   const targetEnergy = targetAmplitude.reduce((sum, value) => sum + value * value, 0);
   const sorted = [...values].sort((a, b) => a - b);
   const allEqual = sorted.every((value) => value === sorted[0]);
+  const observedAutocorrelation = new Map(qaLags.map((lag) => [lag, autocorrelationAtLag(values, lag)]));
+  const sortedDeviationForQa = (candidate: number[]): number => {
+    const candidateSorted = [...candidate].sort((a, b) => a - b);
+    return sorted.reduce((maximum, value, index) =>
+      Math.max(maximum, Math.abs(value - candidateSorted[index])), 0);
+  };
 
   /** Errore calcolato dallo spettro già disponibile, senza una seconda DFT. */
   const relativeSpectralError = (spectrum: Complex[]): number => {
@@ -239,10 +326,52 @@ export function iaaftSurrogatesDetailed(
   };
 
   const surrogates: number[][] = [];
+  const qa: IAAFTSurrogateQaRecord[] = [];
   const usedIterations: number[] = [];
   const finalErrors: number[] = [];
   const bestErrors: number[] = [];
   let convergedSurrogates = 0;
+
+  const recordQa = (
+    surrogate: number[],
+    used: number,
+    finalError: number,
+    bestError: number,
+    converged: boolean,
+    extraReasons: string[] = [],
+  ): void => {
+    const exactLength = surrogate.length === n;
+    const finite = exactLength && surrogate.every((value) => Number.isFinite(value));
+    const maximumSortedDeviation = finite ? sortedDeviationForQa(surrogate) : Number.POSITIVE_INFINITY;
+    const empiricalDistributionPreserved = finite && maximumSortedDeviation <= distributionTolerance;
+    const reasons = [...extraReasons];
+    if (!finite) reasons.push(exactLength ? "non-finite surrogate" : "length mismatch");
+    if (!empiricalDistributionPreserved) reasons.push("empirical distribution not preserved");
+    qa.push({
+      index: surrogates.length,
+      n,
+      iterations: used,
+      converged,
+      finalSpectralError: finalError,
+      bestSpectralError: bestError,
+      finite,
+      exactLength,
+      empiricalDistributionPreserved,
+      maximumSortedDeviation,
+      numericValid: finite && empiricalDistributionPreserved,
+      invalidationReasons: reasons,
+      autocorrelations: qaLags.map((lag) => {
+        const observed = observedAutocorrelation.get(lag) ?? null;
+        const candidate = finite ? autocorrelationAtLag(surrogate, lag) : null;
+        return {
+          lag,
+          observed,
+          surrogate: candidate,
+          absoluteError: observed === null || candidate === null ? null : Math.abs(observed - candidate),
+        };
+      }),
+    });
+  };
 
   for (let replicate = 0; replicate < count; replicate++) {
     const shuffled = [...values];
@@ -252,6 +381,7 @@ export function iaaftSurrogatesDetailed(
     }
     if (allEqual) {
       surrogates.push(shuffled);
+      recordQa(shuffled, 0, 0, 0, true);
       usedIterations.push(0);
       finalErrors.push(0);
       bestErrors.push(0);
@@ -283,10 +413,11 @@ export function iaaftSurrogatesDetailed(
         break;
       }
     }
-    if (!current.every((value) => Number.isFinite(value))) {
-      throw new Error("IAAFT produced a non-finite surrogate");
-    }
+    const nonFinite = !current.every((value) => Number.isFinite(value));
+    if (nonFinite && !allowInvalid) throw new Error("IAAFT produced a non-finite surrogate");
     surrogates.push(current);
+    recordQa(current, used, finalError, bestError, finalError <= IAAFT_AMPLITUDE_TOLERANCE,
+      nonFinite ? ["non-finite surrogate"] : []);
     usedIterations.push(used);
     finalErrors.push(finalError);
     bestErrors.push(bestError);
@@ -316,6 +447,7 @@ export function iaaftSurrogatesDetailed(
       convergedSurrogates,
       totalSurrogates: surrogates.length,
     },
+    qa,
   };
 }
 

@@ -276,7 +276,8 @@ export type SequencingVerdict =
   | "INDICATIVO_POSITIVO"
   | "INDICATIVO_NEGATIVO"
   | "INDICATIVO_MISTO"
-  | "NON_DIMOSTRATO";
+  | "NON_DIMOSTRATO"
+  | "NON_VALUTABILE";
 
 export interface DependenceAssessment {
   scenario: string;
@@ -350,6 +351,37 @@ export function assessPairSequencing(
   const statisticalClassification: StatisticalClass = !evidence || evidence.tests === 0
     ? "NON_VALUTABILE"
     : evidence.significant ? "SIGNIFICATIVO" : "NON_SIGNIFICATIVO";
+
+  if (statisticalClassification === "NON_VALUTABILE") {
+    const notEvaluableRationale = `${descriptiveClassification}: ${dominant}/${pair.runs} seed con lag positivo e segno r prevalente ${direction}; test surrogato non disponibile o con surrogati validi insufficienti: NON_VALUTABILE. Nessuna sequenzialità può essere dichiarata e la causalità resta NON_IDENTIFICABILE.`;
+    return {
+      scenario,
+      pairId: pair.pairId,
+      runs: pair.runs,
+      strongPositiveLagSeeds: pair.strongPositiveLagSeeds,
+      positiveLagSeeds: pair.positiveLagSeeds,
+      negativeLagSeeds: pair.negativeLagSeeds,
+      zeroLagSeeds: pair.zeroLagSeeds,
+      spuriousTrendRiskSeeds: pair.spuriousTrendRiskSeeds,
+      descriptive: {
+        classification: descriptiveClassification,
+        positiveCorrelationPositiveLagSeeds: positiveLagWithPositiveR,
+        negativeCorrelationPositiveLagSeeds: positiveLagWithNegativeR,
+        dominantDirectionSeeds: dominant,
+      },
+      statistical: {
+        classification: statisticalClassification,
+        method: evidence?.method ?? null,
+        combinedP: evidence?.fisherP ?? null,
+        tests: evidence?.tests ?? 0,
+        alpha: evidence?.alpha ?? null,
+      },
+      sequencing: { direction, verdict: "NON_VALUTABILE", classification: "NON_DIMOSTRATO" },
+      causality: { classification: "NON_IDENTIFICABILE" },
+      classification: "NON_DIMOSTRATO",
+      rationale: notEvaluableRationale,
+    };
+  }
 
   let classification: DependenceClass = "NON_DIMOSTRATO";
   let verdict: SequencingVerdict = "NON_DIMOSTRATO";

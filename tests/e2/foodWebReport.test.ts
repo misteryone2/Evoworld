@@ -131,10 +131,10 @@ describe("E2.2 food-web report", () => {
     expect(summary.positiveCorrelationPositiveLagSeeds).toBe(12);
     expect(assessment.statistical.classification).toBe("NON_VALUTABILE");
     expect(assessment.sequencing.direction).toBe("POSITIVA");
-    expect(assessment.sequencing.verdict).toBe("INDICATIVO_POSITIVO");
-    expect(assessment.classification).toBe("INDICATIVO");
-    expect(assessment.rationale).toContain("non causalità");
-    expect(assessment.rationale).toContain("ID predatore/preda");
+    expect(assessment.sequencing.verdict).toBe("NON_VALUTABILE");
+    expect(assessment.classification).toBe("NON_DIMOSTRATO");
+    expect(assessment.rationale).toContain("NON_VALUTABILE");
+    expect(assessment.rationale).toContain("NON_IDENTIFICABILE");
   });
 
   it("allows statistical sequencing only when the surrogate max-statistic test is significant", () => {
