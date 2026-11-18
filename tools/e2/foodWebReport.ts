@@ -8,7 +8,7 @@
 import type { RunResult } from "../e1/runner";
 import { summarize, type NumericSummary, type PairedComparison } from "../e1/statistics";
 import { byScenario, pairedMetric } from "./statistics";
-import { compareCrossCorrelations, seriesMean, type Point } from "./timeseries";
+import { compareCrossCorrelations, pearsonCorrelation, seriesMean, type Point } from "./timeseries";
 import {
   trophicPersistence,
   trophicSeriesSet,
@@ -182,6 +182,63 @@ export function assessCarnivoreDependence(
     spuriousTrendRiskSeeds: pair.spuriousTrendRiskSeeds,
     classification,
     rationale: `${rationale} Mancano ID predatore/preda: non è ricostruibile la rete individuale.`,
+  };
+}
+
+export interface SeedCompositionCoupling {
+  seed: number;
+  /** Correlazione lag-0 tra i conteggi di tratto (condividono il fattore population). */
+  countCorrelation: number | null;
+  /** Correlazione lag-0 tra le frazioni di tratto (senza il fattore population). */
+  fractionCorrelation: number | null;
+  populationHerbivoreCorrelation: number | null;
+  populationCarnivoreCorrelation: number | null;
+}
+
+export interface CompositionCoupling {
+  scenario: string;
+  runs: number;
+  seeds: SeedCompositionCoupling[];
+  countCorrelation: NumericSummary;
+  fractionCorrelation: NumericSummary;
+  populationHerbivoreCorrelation: NumericSummary;
+  populationCarnivoreCorrelation: NumericSummary;
+  note: string;
+}
+
+/**
+ * Verifica strutturale: i conteggi di tratto sono entrambi proporzionali a
+ * `population`, quindi una correlazione alta tra conteggi può essere solo
+ * accoppiamento demografico. Il confronto con le frazioni lo rende visibile.
+ * Non dimostra né esclude alcuna interazione trofica.
+ */
+export function analyzeCompositionCoupling(results: RunResult[], scenario: string): CompositionCoupling {
+  const sorted = [...results].sort((a, b) => a.seed - b.seed);
+  const seeds: SeedCompositionCoupling[] = sorted.map((result) => {
+    const series = trophicSeriesSet(result);
+    const fractions = result.samples
+      .filter((sample) => Number.isFinite(sample.herbivoreFraction) && Number.isFinite(sample.carnivoreFraction))
+      .map((sample) => ({ tick: sample.tick, value: sample.herbivoreFraction }));
+    const carnivoreFractions = result.samples
+      .filter((sample) => Number.isFinite(sample.herbivoreFraction) && Number.isFinite(sample.carnivoreFraction))
+      .map((sample) => ({ tick: sample.tick, value: sample.carnivoreFraction }));
+    return {
+      seed: result.seed,
+      countCorrelation: pearsonCorrelation(series.herbivore, series.carnivore),
+      fractionCorrelation: pearsonCorrelation(fractions, carnivoreFractions),
+      populationHerbivoreCorrelation: pearsonCorrelation(series.total, series.herbivore),
+      populationCarnivoreCorrelation: pearsonCorrelation(series.total, series.carnivore),
+    };
+  });
+  return {
+    scenario,
+    runs: seeds.length,
+    seeds,
+    countCorrelation: summarize(finite(seeds.map((seed) => seed.countCorrelation))),
+    fractionCorrelation: summarize(finite(seeds.map((seed) => seed.fractionCorrelation))),
+    populationHerbivoreCorrelation: summarize(finite(seeds.map((seed) => seed.populationHerbivoreCorrelation))),
+    populationCarnivoreCorrelation: summarize(finite(seeds.map((seed) => seed.populationCarnivoreCorrelation))),
+    note: "I conteggi di tratto condividono il fattore population: correlazioni alte possono essere demografiche. Le frazioni rimuovono quel fattore. Nessuna delle due misure identifica un ruolo trofico individuale.",
   };
 }
 

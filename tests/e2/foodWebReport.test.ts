@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunResult } from "../../tools/e1/runner";
 import {
+  analyzeCompositionCoupling,
   analyzePairCorrelation,
   assessCarnivoreDependence,
   buildFoodWebReport,
@@ -92,6 +93,26 @@ describe("E2.2 food-web report", () => {
     expect(mixed?.dependence?.pairId).toBe("herbivore_carnivore");
     expect(report.pairedComparisons.length).toBeGreaterThan(0);
     expect(report.note).toContain("tratti ≠ ruoli");
+  });
+
+  it("separates shared-population coupling from fraction coupling", () => {
+    const runs = Array.from({ length: 3 }, (_, index) =>
+      laggedRun(index + 1, "S06_predator_prey_mixed", 1));
+    const coupling = analyzeCompositionCoupling(runs, "S06_predator_prey_mixed");
+    expect(coupling.runs).toBe(3);
+    expect(coupling.countCorrelation.n).toBe(3);
+    expect(coupling.fractionCorrelation.n).toBe(3);
+    expect(coupling.populationHerbivoreCorrelation.n).toBe(3);
+    expect(coupling.note).toContain("population");
+
+    const constantFractions = Array.from({ length: 3 }, (_, index) =>
+      makeRun("S04_herbivore_monoculture", index + 1, [
+        makeSample({ tick: 0, population: 100, carnivoreFraction: 0, herbivoreFraction: 1 }),
+        makeSample({ tick: 10, population: 80, carnivoreFraction: 0, herbivoreFraction: 1 }),
+        makeSample({ tick: 20, population: 60, carnivoreFraction: 0, herbivoreFraction: 1 }),
+      ]));
+    const degenerate = analyzeCompositionCoupling(constantFractions, "S04_herbivore_monoculture");
+    expect(degenerate.fractionCorrelation.n).toBe(0);
   });
 
   it("rejects non-integer lag grids", () => {

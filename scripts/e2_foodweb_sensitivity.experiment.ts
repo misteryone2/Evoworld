@@ -4,7 +4,12 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 import { resolveOutputPath, writeExperimentOutput } from "../tools/e1/experiment";
 import type { RunResult } from "../tools/e1/runner";
-import { buildFoodWebReport, type FoodWebProtocol, type FoodWebScenarioReport } from "../tools/e2/foodWebReport";
+import {
+  analyzeCompositionCoupling,
+  buildFoodWebReport,
+  type FoodWebProtocol,
+  type FoodWebScenarioReport,
+} from "../tools/e2/foodWebReport";
 import { resampleResult, truncateResult } from "../tools/e2/trophic";
 
 interface BlockPayload {
@@ -181,7 +186,9 @@ describe("E2.2 sensitivity", () => {
           note: "Con seed identici e motore deterministico, troncare A a 900 tick deve riprodurre C esattamente.",
         },
         samplingComparison: samplingVariants,
-        note: "Sensibilità descrittiva: nessun confronto tra seed è randomizzato. I lag sono in tick; con sampleEvery=20 solo multipli di 20 sono stimabili.",
+        compositionCoupling: scenarios.map((scenario) =>
+          analyzeCompositionCoupling(main.payload.results.filter((result) => result.scenario === scenario), scenario)),
+        note: "Sensibilità descrittiva: nessun confronto tra seed è randomizzato. I lag sono in tick; con sampleEvery=20 solo multipli di 20 sono stimabili. L'accoppiamento di composizione separa la covarianza demografica condivisa dalla covarianza delle frazioni.",
       };
       const outputPath = resolveOutputPath(process.env.E2_FOODWEB_SENS_OUT);
       writeExperimentOutput(outputPath, output);
