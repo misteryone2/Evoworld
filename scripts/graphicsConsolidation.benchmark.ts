@@ -5,6 +5,7 @@ import { descriptorFromLegacyTraits } from "../lib/anatomy";
 import { QUALITY_PROFILES } from "../lib/qualityProfile";
 import { buildCreatureVisualDescriptor } from "../lib/visual/creatureVisualDescriptor";
 import { projectAnatomyToVisual } from "../lib/visual/anatomyVisualBridge";
+import { GENERIC_RENDER_SLOTS, planFromAnatomyDescriptor, type CreatureAnatomyRenderSource, type CreatureRenderPartKey } from "../lib/visual/anatomyRenderPlan";
 import { TRAIT_RANGES } from "../simulation/biology/genome";
 import type { RenderFrame } from "../types";
 
@@ -26,12 +27,14 @@ const MAX_SPIKES = 3;
 const LEGS = 4;
 const CAP = Math.max(...POPULATIONS);
 
-function mesh(capacity: number): THREE.InstancedMesh {
-  return new THREE.InstancedMesh(new THREE.SphereGeometry(1, 4, 3), new THREE.MeshBasicMaterial(), capacity);
+function mesh(capacity: number, colored = false): THREE.InstancedMesh {
+  const m = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 4, 3), new THREE.MeshBasicMaterial(), capacity);
+  if (colored) m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+  return m;
 }
 
-function makeRefs(detail: 1 | 2 | 3 = 3): SceneRefs {
-  return {
+function makeRefs(detail: 1 | 2 | 3 = 3, withGeneric = false): SceneRefs {
+  const refs = {
     bodyMesh: mesh(CAP),
     headMesh: mesh(CAP),
     eyeMesh: mesh(CAP * 2),
@@ -47,7 +50,18 @@ function makeRefs(detail: 1 | 2 | 3 = 3): SceneRefs {
     capacity: CAP,
     maxCreatures: 100_000,
     detail,
+    creatureRenderStats: { drawn: 0, mapped: 0, legacy: 0, fallback: 0, unsupported: 0, fallbackReasons: [] },
   } as unknown as SceneRefs;
+  if (withGeneric) {
+    refs.genericMeshes = {};
+    refs.genericSlotsPerCreature = {};
+    for (const key of Object.keys(GENERIC_RENDER_SLOTS) as CreatureRenderPartKey[]) {
+      const slots = GENERIC_RENDER_SLOTS[key];
+      refs.genericSlotsPerCreature[key] = slots;
+      refs.genericMeshes[key] = mesh(CAP * slots, key !== "eye");
+    }
+  }
+  return refs;
 }
 
 const mid = (k: keyof typeof TRAIT_RANGES) => (TRAIT_RANGES[k].min + TRAIT_RANGES[k].max) / 2;
@@ -84,6 +98,23 @@ function makeFrame(n: number): RenderFrame {
   } as unknown as RenderFrame;
 }
 
+/** Piani G2 precalcolati: il loop misurato non genera descriptor, consuma solo planFor. */
+function makeG2Source(frame: RenderFrame): CreatureAnatomyRenderSource {
+  const plans = new Map<number, ReturnType<typeof planFromAnatomyDescriptor>>();
+  const n = frame.organismsId.length;
+  for (let i = 0; i < n; i++) {
+    const descriptor = descriptorFromLegacyTraits({
+      speed: frame.organismsSpeed[i],
+      carnivory: frame.organismsCarnivory[i],
+      vision: frame.organismsVision[i],
+      evasion: frame.organismsEvasion[i],
+      huntingSkill: frame.organismsHuntingSkill[i],
+    }, { seed: frame.organismsId[i] });
+    plans.set(frame.organismsId[i], planFromAnatomyDescriptor(descriptor, frame.organismsCarnivory[i]));
+  }
+  return Object.freeze({ id: "bench-g2-source", planFor: (organismId: number) => plans.get(organismId) ?? null });
+}
+
 interface Sample { label: string; medianMs: number; p95Ms: number; meanMs: number }
 
 function sample(label: string, fn: () => void, warmup: number, samples: number): Sample {
@@ -114,6 +145,12 @@ describe("G-consolidamento — benchmark CPU (senza GPU)", () => {
         rows.push(sample(`updateCreatureInstances/${n}`, () => {
           updateCreatureInstances(refs, frame, null, null, 16);
         }, WARMUP, SAMPLES));
+
+        const g2Refs = makeRefs(3, true);
+        const g2Source = makeG2Source(frame);
+        rows.push(sample(`updateCreatureInstances+g2/${n}`, () => {
+          updateCreatureInstances(g2Refs, frame, null, null, 16, null, g2Source);
+        }, WARMUP, SAMPLES));
       }
 
       const frame3000 = makeFrame(3000);
@@ -142,6 +179,13 @@ describe("G-consolidamento — benchmark CPU (senza GPU)", () => {
         p95_ms: r.p95Ms.toFixed(3),
         media_ms: r.meanMs.toFixed(3),
       })));
+      // Riga machine-readable per il report: console.table non sempre sopravvive ai reporter Vitest.
+      console.log("G_BENCHMARK_JSON=" + JSON.stringify(rows.map((r) => ({
+        label: r.label,
+        medianMs: Number(r.medianMs.toFixed(3)),
+        p95Ms: Number(r.p95Ms.toFixed(3)),
+        meanMs: Number(r.meanMs.toFixed(3)),
+      }))));
 
       for (const row of rows) {
         expect(Number.isFinite(row.medianMs)).toBe(true);

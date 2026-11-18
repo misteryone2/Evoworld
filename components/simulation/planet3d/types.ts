@@ -5,6 +5,7 @@ import type { MutableHeading } from "../../../lib/creatureHeading";
 import type { VisualMotion } from "../../../lib/naturalMotion";
 import type { LivingState } from "../../../lib/livingBehavior";
 import type { CreatureAnatomy } from "../../../lib/creatureAnatomy";
+import type { CreatureAnatomyRenderSource, CreatureRenderPartKey } from "../../../lib/visual/anatomyRenderPlan";
 
 export interface HeightmapSample {
   elevation: Float32Array;
@@ -83,4 +84,24 @@ export interface SceneRefs {
   selectionRing: THREE.Mesh;
   /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
   instanceOrganismId: Uint32Array;
+
+  // ---- G-REV-02: sorgente di rendering G2, opzionale e mai scritta dalla simulazione ----
+  /** Provider lato renderer dei piani G2. Se assente, il comportamento resta legacy. */
+  renderSource?: CreatureAnatomyRenderSource | null;
+  /** Pool instanziati generici (segmenti, appendici, occhi). Chiavi come in GENERIC_RENDER_SLOTS. */
+  genericMeshes?: Partial<Record<CreatureRenderPartKey, THREE.InstancedMesh>>;
+  /** Slot per creatura effettivamente allocati per ciascun pool. */
+  genericSlotsPerCreature?: Partial<Record<CreatureRenderPartKey, number>>;
+  /** Statistiche di rendering del frame, mutate in posto per evitare allocazioni. */
+  creatureRenderStats?: CreatureRendererStats;
+}
+
+export interface CreatureRendererStats {
+  drawn: number;
+  mapped: number;
+  legacy: number;
+  fallback: number;
+  unsupported: number;
+  /** Motivi di fallback del frame corrente (al massimo 8 voci). */
+  fallbackReasons: string[];
 }

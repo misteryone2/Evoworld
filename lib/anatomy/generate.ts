@@ -126,12 +126,17 @@ function slotsFor(g: AppendageGroupSpec, n: number, segs: readonly Segment[], ri
       }
     } else {
       // Distribuzione alternata: nessuna appendice mediana, nessuna coda artificiale.
+      // G-REV-04: le coppie sfalsate condividono lo stesso bucket di jitter; solo l'ultimo
+      // elemento (quello spaiato) ha un bucket proprio. Senza questo, ogni "coppia" aveva
+      // lunghezze diverse e l'intero gruppo doveva essere escluso dal controllo.
+      const pairs = Math.floor(n / 2);
       const fr = fractions(n, 1);
       for (let k = 0; k < n; k++) {
         const host = hostFor(hosts, zmid + fr[k] * zr);
         const sx = k % 2 === 0 ? -1 : 1;
+        const bucket = k < n - 1 ? Math.floor(k / 2) : pairs;
         push(mirrorX(sx, host.halfExtents.x * 0.9), yOf(host), clampZ(host, zmid + fr[k] * zr),
-             sx > 0 ? "left" : "right", null, host, direction(g.orientation, sx), k);
+             sx > 0 ? "left" : "right", null, host, direction(g.orientation, sx), bucket);
       }
     }
   } else if (g.placement === "dorsal" || g.placement === "ventral") {

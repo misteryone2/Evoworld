@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
 import { MAX_SPIKES } from "../../lib/creatureAnatomy";
+import { GENERIC_RENDER_SLOTS, type CreatureAnatomyRenderSource, type CreatureRenderPartKey } from "../../lib/visual/anatomyRenderPlan";
 import { wrappedDelta } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
 import { shouldDrawCreatures } from "../../lib/animationScheduler";
@@ -106,6 +107,8 @@ interface Props {
   onSlow?: () => void;
   /** v1.7.0 — vista dall'alto (default) o terza persona sull'animale selezionato. */
   cameraMode?: CameraMode;
+  /** G-REV-02 — sorgente G2 opzionale dei piani di rendering. Senza, il renderer resta identico a G1. */
+  anatomyRenderSource?: CreatureAnatomyRenderSource | null;
 }
 
 
@@ -166,7 +169,7 @@ interface Props {
  * sampled client-side from the on-demand viewport heightmap — never from
  * a per-tick simulation query, so RenderFrame's payload is unchanged.
  */
-export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow, cameraMode = "orbit" }: Props) {
+export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow, cameraMode = "orbit", anatomyRenderSource = null }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
   const lastTextureSize = useRef<{ width: number; height: number } | null>(null);
@@ -176,6 +179,7 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
+  const anatomyRenderSourceRef = useRef<CreatureAnatomyRenderSource | null>(anatomyRenderSource);
   // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
   const globalTerrainBuiltRef = useRef(false);
   const globalPlanetKeyRef = useRef("");
@@ -200,6 +204,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   useEffect(() => {
     onRequestViewportRef.current = onRequestViewport;
   }, [onRequestViewport]);
+  useEffect(() => {
+    anatomyRenderSourceRef.current = anatomyRenderSource;
+    if (sceneRef.current) sceneRef.current.renderSource = anatomyRenderSource;
+  }, [anatomyRenderSource]);
 
   // Mount-only: build the renderer, scene, camera, controls, and the
   // pre-allocated meshes once. Per-frame updates (below) only ever mutate
@@ -398,6 +406,31 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     });
     const shadowMesh = makeMesh(shadowGeometry, shadowMaterial, detail >= 2 ? capacity : 1, false);
     shadowMesh.castShadow = false; // è già un'ombra disegnata: non ne proietta una seconda
+
+    // G-REV-02 — pool generici per le parti G2 non rappresentabili dai nove mesh
+    // fissi. I slots sono costanti e limitati; i mesh restano invisibili finché
+    // non viene fornita una sorgente, quindi il percorso legacy non cambia.
+    const genericMeshes: Partial<Record<CreatureRenderPartKey, THREE.InstancedMesh>> = {};
+    const genericGeometries: Partial<Record<CreatureRenderPartKey, THREE.BufferGeometry>> = {};
+    const genericMaterials: Partial<Record<CreatureRenderPartKey, THREE.Material>> = {};
+    const genericSlotsPerCreature: Partial<Record<CreatureRenderPartKey, number>> = {};
+    for (const key of Object.keys(GENERIC_RENDER_SLOTS) as CreatureRenderPartKey[]) {
+      const slots = GENERIC_RENDER_SLOTS[key];
+      const geometry = key === "segment"
+        ? new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2))
+        : key === "appendage"
+          ? new THREE.CylinderGeometry(0.8, 1, 1, 5)
+          : new THREE.SphereGeometry(1, 6, 4);
+      const material = key === "eye"
+        ? makeMaterial({ color: 0x0b0f14, roughness: 0.16, metalness: 0 })
+        : makeMaterial({ roughness: 0.58, metalness: 0.03 });
+      genericGeometries[key] = geometry;
+      genericMaterials[key] = material;
+      genericSlotsPerCreature[key] = slots;
+      const mesh = makeMesh(geometry, material, capacity * slots, key !== "eye");
+      mesh.visible = false;
+      genericMeshes[key] = mesh;
+    }
 
     // v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito.
     const local = quality.localTerrainSegments > 0 ? createLocalScene(quality, PLANET_RADIUS) : null;
@@ -706,6 +739,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       creatureTrack: new Map(),
       selectionRing,
       instanceOrganismId: new Uint32Array(capacity),
+      renderSource: anatomyRenderSourceRef.current,
+      genericMeshes,
+      genericSlotsPerCreature,
+      creatureRenderStats: { drawn: 0, mapped: 0, legacy: 0, fallback: 0, unsupported: 0, fallbackReasons: [] },
     };
 
     // v1.0.4 — tap/click selection. A pointerdown/pointerup pair is only
@@ -823,6 +860,12 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       earMaterial.dispose();
       shadowGeometry.dispose();
       shadowMaterial.dispose();
+      for (const key of Object.keys(genericMeshes) as CreatureRenderPartKey[]) {
+        const mesh = genericMeshes[key];
+        if (mesh) scene.remove(mesh);
+        genericGeometries[key]?.dispose();
+        genericMaterials[key]?.dispose();
+      }
       local?.dispose();
       ringGeometry.dispose();
       ringMaterial.dispose();

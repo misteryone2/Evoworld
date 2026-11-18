@@ -1,5 +1,5 @@
 import { computeExtents, withFingerprint } from "./assemble";
-import { validateAnatomy } from "./validate";
+import { checkAnatomyEnvelope, validateAnatomy } from "./validate";
 import { ANATOMY_SCHEMA_VERSION, type AnatomyDescriptor, type Appendage, type Segment } from "./types";
 import { canonicalJson, deepFreeze } from "./util";
 
@@ -20,6 +20,10 @@ function migrateLegacy(value: unknown): unknown {
   const p = d.proportions as Record<string, unknown>;
   if (p.bodyExtents !== undefined && p.anatomicalExtents !== undefined && d.declaredAnomalies !== undefined) return value;
   const scale = typeof p.sizeScale === "number" && Number.isFinite(p.sizeScale) ? p.sizeScale : 1;
+  // G-REV-01: nessun calcolo geometrico prima del gate strutturale. Il gate "envelope"
+  // ammette proporzioni incomplete (legacy), ma rifiuta vettori/array corrotti.
+  const envelope = checkAnatomyEnvelope(value, false);
+  if (!envelope.ok) return value;
   const derived = computeExtents(d.segments as Segment[], d.appendages as Appendage[], scale);
   const migrated = {
     ...d,
@@ -43,10 +47,17 @@ export function deserializeAnatomy(text: string): DeserializeResult {
   } catch {
     return { ok: false, value: null, errors: ["invalid-json"] };
   }
-  const migrated = migrateLegacy(parsed);
-  const check = validateAnatomy(migrated);
-  if (!check.ok) return { ok: false, value: null, errors: check.errors };
-  return { ok: true, value: deepFreeze(migrated as AnatomyDescriptor), errors: [] };
+  try {
+    // Prima di ANY migrazione: struttura geometrica finita e collezioni utilizzabili.
+    const envelope = checkAnatomyEnvelope(parsed, false);
+    if (!envelope.ok) return { ok: false, value: null, errors: envelope.errors };
+    const migrated = migrateLegacy(parsed);
+    const check = validateAnatomy(migrated);
+    if (!check.ok) return { ok: false, value: null, errors: check.errors };
+    return { ok: true, value: deepFreeze(migrated as AnatomyDescriptor), errors: [] };
+  } catch (error) {
+    return { ok: false, value: null, errors: [`deserialization-error:${String(error)}`] };
+  }
 }
 
 export { ANATOMY_SCHEMA_VERSION };

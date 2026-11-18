@@ -2,6 +2,10 @@ import * as THREE from "three";
 import type { RenderFrame } from "../../../types";
 import { speciesHue } from "../../../lib/speciesColor";
 import { hueShiftFromVariation, stableVariation01 } from "../../../lib/visual/creatureVisualDescriptor";
+import {
+  GENERIC_RENDER_SLOTS, isUsableAnatomyRenderPlan,
+  type AnatomyRenderPlan, type CreatureAnatomyRenderSource, type CreaturePartInstance, type CreatureRenderPartKey,
+} from "../../../lib/visual/anatomyRenderPlan";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../../lib/creatureAnatomy";
 import type { Heading } from "../../../lib/creatureHeading";
 import { createVisualMotion, stepVisualMotion } from "../../../lib/naturalMotion";
@@ -66,6 +70,8 @@ const tmpLocalPos = new THREE.Vector3();
 const tmpLocalScale = new THREE.Vector3();
 const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 const Q_IDENTITY = new THREE.Quaternion();
+const tmpGenericQuat = new THREE.Quaternion();
+const GENERIC_KEYS = Object.keys(GENERIC_RENDER_SLOTS) as CreatureRenderPartKey[];
 /** Rotates a cone (tip along +Y) so its tip points backward (-Z): the tail. */
 const Q_TIP_BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 /** Rotates a cone so its tip points forward (+Z): the jaw. */
@@ -101,6 +107,49 @@ function commitPart(mesh: THREE.InstancedMesh, index: number, parent: THREE.Matr
   tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
   tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
   mesh.setMatrixAt(index, tmpPartMatrix);
+}
+
+// ---- G-REV-02: pool generici G2. Nessuna allocazione per parte/frame. ----
+function genericSlots(refs: SceneRefs, key: CreatureRenderPartKey): number {
+  const configured = refs.genericSlotsPerCreature?.[key];
+  return typeof configured === "number" && Number.isInteger(configured) && configured > 0 ? configured : GENERIC_RENDER_SLOTS[key];
+}
+
+function clearGenericParts(refs: SceneRefs, creatureIndex: number): void {
+  if (!refs.genericMeshes) return;
+  for (const key of GENERIC_KEYS) {
+    const mesh = refs.genericMeshes[key];
+    if (!mesh) continue;
+    const slots = genericSlots(refs, key);
+    for (let s = 0; s < slots; s++) mesh.setMatrixAt(creatureIndex * slots + s, ZERO_MATRIX);
+  }
+}
+
+function writeGenericParts(
+  refs: SceneRefs,
+  parts: readonly CreaturePartInstance[] | null,
+  creatureIndex: number,
+  parent: THREE.Matrix4,
+  lift: number,
+  color: THREE.Color,
+  active: boolean,
+): void {
+  if (!refs.genericMeshes || !active) return;
+  clearGenericParts(refs, creatureIndex);
+  if (!parts) return;
+  for (const part of parts) {
+    if (!part.visible) continue;
+    const mesh = refs.genericMeshes[part.key];
+    if (!mesh) continue;
+    const slots = genericSlots(refs, part.key);
+    if (part.slot < 0 || part.slot >= slots) continue;
+    const slot = creatureIndex * slots + part.slot;
+    tmpLocalPos.set(part.position[0], part.position[1] + lift, part.position[2]);
+    tmpLocalScale.set(part.scale[0], part.scale[1], part.scale[2]);
+    tmpGenericQuat.set(part.rotation[0], part.rotation[1], part.rotation[2], part.rotation[3]);
+    commitPart(mesh, slot, parent, tmpGenericQuat);
+    if (mesh.instanceColor) mesh.setColorAt(slot, color);
+  }
 }
 
 /**
@@ -158,7 +207,21 @@ export function updateCreatureInstances(
   dtMs = 100,
   /** v1.10.5 — posizione della camera nel mondo 3D: la distanza decide il dettaglio dell'animazione (LOD). Senza, tutto è al massimo dettaglio. */
   cameraPosition: THREE.Vector3 | null = null,
+  /** G-REV-02 — sorgente G2 opzionale. Senza, il percorso legacy resta identico a prima. */
+  sourceOverride: CreatureAnatomyRenderSource | null = null,
 ): number {
+  const renderSource = sourceOverride ?? refs.renderSource ?? null;
+  const genericActive = renderSource !== null && !!refs.genericMeshes;
+  let genericPartsUsed = false;
+  const stats = refs.creatureRenderStats;
+  if (stats) {
+    stats.drawn = 0;
+    stats.mapped = 0;
+    stats.legacy = 0;
+    stats.fallback = 0;
+    stats.unsupported = 0;
+    stats.fallbackReasons.length = 0;
+  }
   const {
     organismsX,
     organismsY,
@@ -300,24 +363,50 @@ export function updateCreatureInstances(
       tmpQuaternion.multiply(tmpLeanQuat);
     }
 
-    // v1.9.0 — l'anatomia dipende solo dai geni: si ricalcola solo se sono cambiati.
+    // G-REV-02 — un piano G2 utilizzabile vince; tutto il resto resta sulla via legacy.
+    // La sorgente è lato renderer: nessun dato anatomico entra in RenderFrame o nei salvataggi.
     const gSpeed = organismsSpeed[i];
     const gCarnivory = organismsCarnivory[i];
     const gVision = organismsVision[i];
     const gEvasion = organismsEvasion[i];
     const gHunting = organismsHuntingSkill[i];
-    let anatomy = track.anatomy;
-    if (!anatomy || track.aSpeed !== gSpeed || track.aCarnivory !== gCarnivory || track.aVision !== gVision || track.aEvasion !== gEvasion || track.aHunting !== gHunting) {
-      anatomy = computeCreatureAnatomy({ speed: gSpeed, carnivory: gCarnivory, vision: gVision, evasion: gEvasion, huntingSkill: gHunting });
-      track.anatomy = anatomy;
-      track.aSpeed = gSpeed;
-      track.aCarnivory = gCarnivory;
-      track.aVision = gVision;
-      track.aEvasion = gEvasion;
-      track.aHunting = gHunting;
+    let plan: AnatomyRenderPlan | null = null;
+    if (renderSource) {
+      const candidate: AnatomyRenderPlan | null = renderSource.planFor(id, frame.tick);
+      const usable = isUsableAnatomyRenderPlan(candidate);
+      if (candidate && usable) {
+        plan = candidate;
+        if (stats) stats.mapped++;
+      } else if (stats) {
+        stats.fallback++;
+        if (!candidate || !candidate.support.supported) stats.unsupported++;
+        const reason = candidate?.fallbackReason ?? (candidate ? "invalid-render-plan" : "no-render-plan");
+        if (stats.fallbackReasons.length < 8 && !stats.fallbackReasons.includes(reason)) stats.fallbackReasons.push(reason);
+      }
     }
 
-    const baseScale = scaleI;
+    let anatomy: CreatureAnatomy;
+    if (plan?.geometry) {
+      anatomy = plan.geometry;
+    } else {
+      // v1.9.0 — l'anatomia dipende solo dai geni: si ricalcola solo se sono cambiati.
+      let legacy = track.anatomy;
+      if (!legacy || track.aSpeed !== gSpeed || track.aCarnivory !== gCarnivory || track.aVision !== gVision || track.aEvasion !== gEvasion || track.aHunting !== gHunting) {
+        legacy = computeCreatureAnatomy({ speed: gSpeed, carnivory: gCarnivory, vision: gVision, evasion: gEvasion, huntingSkill: gHunting });
+        track.anatomy = legacy;
+        track.aSpeed = gSpeed;
+        track.aCarnivory = gCarnivory;
+        track.aVision = gVision;
+        track.aEvasion = gEvasion;
+        track.aHunting = gHunting;
+      }
+      anatomy = legacy;
+      if (stats) stats.legacy++;
+    }
+
+    // sizeScale di G2 è una scala di rappresentazione: si applica una volta sola,
+    // moltiplicando la scala mondiale già usata dal renderer legacy.
+    const baseScale = scaleI * (plan?.geometry?.sizeScale ?? 1);
     tmpScale.set(baseScale, baseScale, baseScale);
     tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
 
@@ -406,6 +495,10 @@ export function updateCreatureInstances(
     if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
       tmpColor.lerp(AGGRO_TINT, anatomy.aggression * 0.35);
     }
+    // G-REV-02 — i pool generici G2 ricevono la stessa posa e lo stesso colore,
+    // ma restano vuoti (e invisibili) finché non viene fornita una sorgente.
+    if (plan?.parts && plan.parts.length > 0) genericPartsUsed = true;
+    writeGenericParts(refs, plan?.parts ?? null, writeIndex, tmpCreatureMatrix, lift, tmpColor, genericActive);
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
     refs.headMesh.setColorAt(writeIndex, tmpColor);
     if (refs.detail >= 2) {
@@ -451,10 +544,25 @@ export function updateCreatureInstances(
   refs.earMesh.count = refs.detail >= 3 ? writeIndex * 2 : 0;
   refs.shadowMesh.count = refs.detail >= 2 ? writeIndex : 0;
 
+  if (refs.genericMeshes) {
+    for (const key of GENERIC_KEYS) {
+      const mesh = refs.genericMeshes[key];
+      if (!mesh) continue;
+      const slots = genericSlots(refs, key);
+      mesh.count = genericActive && genericPartsUsed ? writeIndex * slots : 0;
+      mesh.visible = mesh.count > 0;
+      if (mesh.count > 0) {
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      }
+    }
+  }
+
   for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh]) {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+  if (stats) stats.drawn = writeIndex;
   // v1.10.5 (consolidamento) — quante creature sono state disegnate: chi chiama sa se c'è una posa viva da far proseguire (pausa).
   return writeIndex;
 }

@@ -24,10 +24,80 @@ const PROV_KINDS = new Set(["gene-direct", "gene-derived", "undetermined", "aest
 /** Kind per cui una singola appendice mediana in un piano bilaterale è plausibile (es. mascella legacy). */
 const MIDLINE_OK = new Set(["jaw", "sensory", "spine", "plate", "tail", "flagellum", "pseudopod"]);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-const isVec = (v: unknown): v is Vec3 => !!v && typeof v === "object" && isNum((v as Vec3).x) && isNum((v as Vec3).y) && isNum((v as Vec3).z);
+const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isVec = (v: unknown): v is Vec3 => isRec(v) && isNum(v.x) && isNum(v.y) && isNum(v.z);
 const isArr = (v: unknown): v is unknown[] => Array.isArray(v);
 const near = (a: number, b: number, tol = 1e-4): boolean => Math.abs(a - b) <= tol * Math.max(1, Math.abs(a), Math.abs(b));
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const wrapAngle = (a: number): number => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+
+/**
+ * G-REV-01 — gate strutturale: viaggia PRIMA di ogni calcolo geometrico, migrazione o fingerprint.
+ * `complete=false` è la forma "envelope" usata dal deserializer: ammette proporzioni parziali
+ * (formati legacy) ma richiede comunque geometria finita, altrimenti `computeExtents` potrebbe lanciare.
+ */
+export interface AnatomyStructuralCheck {
+  readonly ok: boolean;
+  readonly errors: readonly string[];
+  readonly diagnostics: readonly AnatomyDiagnostic[];
+}
+
+export function checkAnatomyEnvelope(input: unknown, complete = true): AnatomyStructuralCheck {
+  const diagnostics: AnatomyDiagnostic[] = [];
+  const err = (code: string, message: string, target?: string): void => {
+    diagnostics.push({ code, status: "INVALID", message, ...(target ? { target } : {}) });
+  };
+  if (!isRec(input)) {
+    err("not-an-object", "il descriptor non è un oggetto");
+    return finishStructural(diagnostics);
+  }
+  const d = input;
+  if (d.schemaVersion !== ANATOMY_SCHEMA_VERSION) {
+    err(`unsupported-schema-version:${String(d.schemaVersion)}`, "versione dello schema non supportata");
+    return finishStructural(diagnostics);
+  }
+  for (const key of ["segments", "appendages", "joints"] as const) {
+    if (!isArr(d[key])) err("missing-collections", `collezione ${key} mancante o non array`);
+  }
+  if (!isArr(d.segments) || !isArr(d.appendages) || !isArr(d.joints)) return finishStructural(diagnostics);
+
+  // Il gate blocca SOLO ciò che può interrompere i calcoli successivi: elementi non oggetto e
+  // geometria non finita. Duplicati, riferimenti, enumerazioni e coerenze restano alla validazione
+  // semantica, così i codici diagnostici existing non vengono anticipati da errori generici.
+  d.segments.forEach((raw, i) => {
+    const target = isRec(raw) && typeof raw.id === "string" && raw.id ? raw.id : `segment[${i}]`;
+    if (!isRec(raw)) { err(`bad-segment:${target}`, "segmento non oggetto", target); return; }
+    if (!isVec(raw.center)) err(`bad-center:${target}`, "centro non valido o non finito", target);
+    if (!isVec(raw.halfExtents)) err(`bad-extents:${target}`, "semi-estensioni non valide o non finite", target);
+  });
+  d.appendages.forEach((raw, i) => {
+    const target = isRec(raw) && typeof raw.id === "string" && raw.id ? raw.id : `appendage[${i}]`;
+    if (!isRec(raw)) { err(`bad-appendage:${target}`, "appendice non oggetto", target); return; }
+    if (!isVec(raw.position) || !isVec(raw.direction)) err(`bad-vector:${target}`, "vettore non valido o non finito", target);
+    if (!isNum(raw.length) || !isNum(raw.radius)) err(`bad-dimensions:${target}`, "dimensioni non valide o non finite", target);
+  });
+  d.joints.forEach((raw, i) => {
+    const target = isRec(raw) && typeof raw.id === "string" && raw.id ? raw.id : `joint[${i}]`;
+    if (!isRec(raw)) err(`bad-joint:${target}`, "articolazione non oggetto", target);
+  });
+  // In forma envelope le AABB possono mancare: sono proprio ciò che la migrazione ricostruisce.
+  if (complete) {
+    const extentsOk = (e: unknown): boolean => isRec(e) && [bodyExtentsOf(e)].flat().every(isVec);
+    if (isRec(d.proportions) && (!extentsOk(d.proportions.bodyExtents) || !extentsOk(d.proportions.anatomicalExtents))) {
+      err("bad-extents", "AABB anatomici non validi o non finiti");
+    }
+  }
+  return finishStructural(diagnostics);
+}
+
+function bodyExtentsOf(e: Record<string, unknown>): readonly unknown[] {
+  return [e.min, e.max, e.center, e.size, e.scaledSize];
+}
+
+function finishStructural(diagnostics: readonly AnatomyDiagnostic[]): AnatomyStructuralCheck {
+  const errors = diagnostics.filter((x) => x.status === "INVALID").map((x) => x.code);
+  return { ok: errors.length === 0, errors, diagnostics };
+}
 
 interface Box { min: Vec3; max: Vec3 }
 function segmentBox(s: { center: Vec3; halfExtents: Vec3 }): Box {
@@ -54,6 +124,22 @@ function overlapVolume(a: Box, b: Box): number {
  * Restituisce VALID / WARNING / INVALID con diagnostici identificativi e motivati. Non lancia mai.
  */
 export function inspectAnatomy(input: unknown): AnatomyInspection {
+  try {
+    return inspectAnatomyUnsafe(input);
+  } catch (error) {
+    // Ultima rete di sicurezza: anche un input ostile con getter/perfidi non può interrompere il caricamento.
+    return {
+      status: "INVALID", ok: false, errors: ["internal-validation-error"], warnings: [],
+      diagnostics: [{ code: "internal-validation-error", status: "INVALID", message: `validazione interrotta: ${String(error)}` }],
+    };
+  }
+}
+
+function inspectAnatomyUnsafe(input: unknown): AnatomyInspection {
+  const structural = checkAnatomyEnvelope(input, true);
+  if (!structural.ok) {
+    return { status: "INVALID", ok: false, errors: structural.errors, warnings: [], diagnostics: structural.diagnostics };
+  }
   const diagnostics: AnatomyDiagnostic[] = [];
   const err = (code: string, message: string, target?: string): void => { diagnostics.push({ code, status: "INVALID", message, ...(target ? { target } : {}) }); };
   const warn = (code: string, message: string, target?: string): void => { diagnostics.push({ code, status: "WARNING", message, ...(target ? { target } : {}) }); };
@@ -189,24 +275,80 @@ export function inspectAnatomy(input: unknown): AnatomyInspection {
   else if (d.symmetry.type === "bilateral") {
     if (d.symmetry.order !== 2) err("bilateral-order", "l'ordine bilaterale deve essere 2");
     for (const s of d.segments) if (isVec(s.center) && Math.abs(s.center.x) > 1e-6) err(`bilateral-segment-off-axis:${s.id}`, "segmento fuori dall'asse di simmetria", s.id);
-    const sig = (a: (typeof d.appendages)[number]) => [
+    type App = (typeof d.appendages)[number];
+    const sig = (a: App): string => [
       a.groupId, a.kind, a.variant ?? "", a.segmentId, rd(a.position.y), rd(a.position.z), rd(Math.abs(a.position.x)),
       rd(Math.abs(a.direction.x)), rd(a.direction.y), rd(a.direction.z), a.angle === null ? "" : rd(a.angle), rd(a.length), rd(a.radius),
     ].join("|");
-    const bal = new Map<string, number>();
+    const balanceExact = (items: readonly App[]): void => {
+      const bal = new Map<string, number>();
+      for (const a of items) {
+        const k = sig(a);
+        if (a.side === "left") bal.set(k, (bal.get(k) ?? 0) + 1);
+        else if (a.side === "right") bal.set(k, (bal.get(k) ?? 0) - 1);
+      }
+      for (const [k, v] of bal) if (v !== 0) err(`asymmetric-pair:${k}`, "coppia bilaterale non speculare (posizione, direzione o dimensioni)");
+    };
+    const byGroup = new Map<string, App[]>();
     for (const a of d.appendages) {
-      if (declaredOddGroups.has(a.groupId)) continue; // anomalia dichiarata: non viene nascosta, ma non è un errore
-      if (a.side === "left") bal.set(sig(a), (bal.get(sig(a)) ?? 0) + 1);
-      else if (a.side === "right") bal.set(sig(a), (bal.get(sig(a)) ?? 0) - 1);
-      else if (a.side === "mid" && !MIDLINE_OK.has(a.kind)) warn(`unpaired-mid-appendage:${a.id}`, "appendice mediana di tipo normalmente accoppiato", a.id);
+      const arr = byGroup.get(a.groupId) ?? [];
+      arr.push(a);
+      byGroup.set(a.groupId, arr);
     }
-    for (const [k, v] of bal) if (v !== 0) err(`asymmetric-pair:${k}`, "coppia bilaterale non speculare (posizione, direzione o dimensioni)");
+    for (const [gid, arr] of byGroup) {
+      const left = arr.filter((a) => a.side === "left");
+      const right = arr.filter((a) => a.side === "right");
+      const mid = arr.filter((a) => a.side === "mid");
+      for (const a of mid) if (!MIDLINE_OK.has(a.kind)) warn(`unpaired-mid-appendage:${a.id}`, "appendice mediana di tipo normalmente accoppiato", a.id);
+
+      if (!declaredOddGroups.has(gid)) {
+        balanceExact([...left, ...right]); // gruppo pari o non dichiarato: tutti gli elementi devono essere speculari
+        continue;
+      }
+      // G-REV-04: l'anomalia dichiarata autorizza UN solo elemento spaiato, non l'intero gruppo.
+      if (mid.length > 0) {
+        // center-line: l'elemento spaiato è la appendice mediana; tutte le coppie restano obbligatorie.
+        if (mid.length !== 1) err(`odd-unpaired-count:${gid}`, "più di una appendice mediana in un gruppo dispari", gid);
+        balanceExact([...left, ...right]);
+        continue;
+      }
+      if (left.length === right.length) {
+        balanceExact([...left, ...right]); // policy "omit": il numero emesso è pari e resta validabile
+        continue;
+      }
+      // G-REV-04 — policy "staggered": l'elemento spaiato è l'ultimo per indice; le altre
+      // coppie adiacenti (0,1), (2,3), … devono restare speculari a meno dello sfalsamento
+      // longitudinale di un passo. Un'anomalia dichiarata NON esonera quindi le altre coppie.
+      if (Math.abs(left.length - right.length) !== 1) {
+        err(`odd-unpaired-count:${gid}`, "il gruppo dispari dichiarato non ha esattamente un elemento spaiato", gid);
+        continue;
+      }
+      const ordered = arr.slice().sort((a, b) => a.index - b.index);
+      const zs = ordered.map((a) => a.position.z).sort((a, b) => a - b);
+      const step = (zs[zs.length - 1] - zs[0]) / Math.max(1, zs.length - 1);
+      const maxAbsX = Math.max(...arr.map((a) => Math.abs(a.position.x)), 1e-6);
+      const maxAbsY = Math.max(...arr.map((a) => Math.abs(a.position.y)), 1e-6);
+      const xyTolerance = (m: number): number => 0.01 + 0.05 * m;
+      for (let k = 0; k + 1 < ordered.length; k += 2) {
+        const a = ordered[k], b = ordered[k + 1];
+        const mirroredSides = (a.side === "left" && b.side === "right") || (a.side === "right" && b.side === "left");
+        const dz = Math.abs(a.position.z - b.position.z);
+        const mirrored = mirroredSides
+          && a.groupId === b.groupId && a.kind === b.kind && (a.variant ?? "") === (b.variant ?? "")
+          && Math.abs(a.position.x + b.position.x) <= xyTolerance(maxAbsX)
+          && Math.abs(a.position.y - b.position.y) <= xyTolerance(maxAbsY)
+          && Math.abs(dz - step) <= Math.max(0.05, 0.25 * step)
+          && near(a.direction.x, -b.direction.x) && near(a.direction.y, b.direction.y) && near(a.direction.z, b.direction.z)
+          && near(a.length, b.length) && near(a.radius, b.radius) && a.angle === b.angle;
+        if (!mirrored) err(`asymmetric-pair:${gid}:${a.id}:${b.id}`, "coppia sfalsata non speculare (solo l'ultimo elemento del gruppo dispari è escluso)");
+      }
+    }
   } else if (d.symmetry.type === "spherical") {
     if (d.symmetry.order !== 0) err("spherical-order", "l'ordine sferico deve essere 0");
   } else if (d.symmetry.type === "none") {
     if (d.symmetry.order !== 1) err("none-order", "l'ordine di assenza di simmetria deve essere 1");
   } else {
-    // Radiale: gruppi con angolo devono avere spaziatura uniforme e membri coerenti.
+    // Radiale: G-REV-03 verifica metadati E geometria effettiva (posizioni, direzioni, asse).
     const byGroup = new Map<string, (typeof d.appendages)[number][]>();
     for (const a of d.appendages) if (typeof a.angle === "number" && a.groupId) {
       const arr = byGroup.get(a.groupId) ?? [];
@@ -229,6 +371,40 @@ export function inspectAnatomy(input: unknown): AnatomyInspection {
       }
       const first = arr[0];
       for (const a of arr) if (!near(a.length, first.length) || !near(a.radius, first.radius)) err(`radial-inconsistent:${gid}`, "appendici radiali con dimensioni disomogenee", a.id);
+
+      // Un gruppo è "nel piano radiale" quando le sue direzioni giacciono prevalentemente su XZ.
+      // I gruppi dorsali con angoli (steli sensoriali) sono ammessi: lì si controlla solo la disposizione angolare.
+      const inPlane = arr.filter((a) => Math.abs(a.direction.y) <= 0.5).length * 2 >= arr.length;
+      const geometricAngles: number[] = [];
+      for (const a of arr) {
+        const host = d.segments.find((s) => s.id === a.segmentId);
+        const declared = a.angle as number;
+        const axisX = root?.center.x ?? 0;
+        const axisZ = root?.center.z ?? 0;
+        const hx = Math.max(1e-6, host?.halfExtents.x ?? 1);
+        const hz = Math.max(1e-6, host?.halfExtents.z ?? 1);
+        geometricAngles.push(wrapAngle(Math.atan2((a.position.z - axisZ) / hz, (a.position.x - axisX) / hx)));
+        if (!host) continue; // l'attacco sconosciuto è già un errore nella sezione appendici
+        if (inPlane) {
+          // Posizione attesa sul raggio effettivo dell'ospite: rileva appendici tutte concentrate
+          // nella stessa direzione nonostante angoli dichiarati regolari.
+          const expectedX = host.center.x + Math.cos(declared) * host.halfExtents.x * 0.95;
+          const expectedZ = host.center.z + Math.sin(declared) * host.halfExtents.z * 0.95;
+          const tolerance = 0.08 + 0.12 * Math.max(hx, hz);
+          if (Math.hypot(a.position.x - expectedX, a.position.z - expectedZ) > tolerance) {
+            err(`radial-position:${a.id}`, "posizione geometrica non coerente con l'angolo radiale dichiarato", a.id);
+          }
+          const hlen = Math.hypot(a.direction.x, a.direction.z) || 1;
+          const dot = (a.direction.x / hlen) * Math.cos(declared) + (a.direction.z / hlen) * Math.sin(declared);
+          if (dot < Math.cos(0.2)) err(`radial-direction:${a.id}`, "direzione geometrica non coerente con l'angolo radiale dichiarato", a.id);
+        }
+      }
+      const measured = geometricAngles.slice().sort((a, b) => a - b);
+      for (let k = 1; k < measured.length; k++) {
+        if (measured[k] - measured[k - 1] < step * 0.85) err(`radial-spacing-geometric:${gid}`, "appendici radiali concentrate nella stessa direzione nonostante metadati regolari", gid);
+      }
+      const wrapGap = measured[0] + 2 * Math.PI - measured[measured.length - 1];
+      if (wrapGap < step * 0.85) err(`radial-spacing-geometric:${gid}`, "disposizione radiale geometrica non equamente spaziata", gid);
     }
   }
 
