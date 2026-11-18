@@ -1,0 +1,1564 @@
+From 78f34ef2874339f28548bc38523a7fbb0d79b35c Mon Sep 17 00:00:00 2001
+From: Claude <claude@example.invalid>
+Date: Wed, 18 Nov 2026 10:00:24 +0000
+Subject: [PATCH] =?UTF-8?q?fix(anatomy):=20G2=20review=20&=20hardening=20?=
+ =?UTF-8?q?=E2=80=94=20geometry=20on=20host=20surface,=20true=20extents=20?=
+ =?UTF-8?q?and=20ground,=20symmetry,=20cap=20allocation,=20cache=20keys,?=
+ =?UTF-8?q?=20schema=20v2?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ docs/graphics/G2_ARCHITECTURE.md         |   9 +-
+ docs/graphics/G2_FINAL_REPORT.md         |   2 +
+ docs/graphics/G2_GEOMETRY_CONVENTIONS.md |  32 ++
+ docs/graphics/G2_MISSING_GENETIC_DATA.md |  29 ++
+ docs/graphics/G2_REVIEW_REPORT.md        |  68 +++
+ lib/anatomy/assemble.ts                  |  47 +-
+ lib/anatomy/bodyPlan.ts                  |  44 +-
+ lib/anatomy/generate.ts                  | 206 +++++---
+ lib/anatomy/geometry.ts                  |  50 ++
+ lib/anatomy/types.ts                     |  33 +-
+ lib/anatomy/validate.ts                  |  45 +-
+ tests/anatomyG2.test.ts                  |  10 +-
+ tests/anatomyG2Review.test.ts            | 594 +++++++++++++++++++++++
+ 13 files changed, 1072 insertions(+), 97 deletions(-)
+ create mode 100644 docs/graphics/G2_GEOMETRY_CONVENTIONS.md
+ create mode 100644 docs/graphics/G2_REVIEW_REPORT.md
+ create mode 100644 lib/anatomy/geometry.ts
+ create mode 100644 tests/anatomyG2Review.test.ts
+
+diff --git a/docs/graphics/G2_ARCHITECTURE.md b/docs/graphics/G2_ARCHITECTURE.md
+index 4242253..2e7caf7 100644
+--- a/docs/graphics/G2_ARCHITECTURE.md
++++ b/docs/graphics/G2_ARCHITECTURE.md
+@@ -13,6 +13,7 @@
+ | `lib/phenotype/types.ts` | `DataSource`, `PhenotypeTrait`, `PhenotypeProfile` |
+ | `lib/phenotype/derive.ts` | `derivePhenotype(genome)`: legge `size`, MOR-01/02/03, normalizza sul registro, gestisce mancanti/non validi/fuori intervallo |
+ | `lib/anatomy/types.ts` | `AnatomyDescriptor` e sotto-contratti, `MAX_APPENDAGES = 64` |
++| `lib/anatomy/geometry.ts` | profilo e superficie dei segmenti (posizionamento delle radici) |
+ | `lib/anatomy/bodyPlan.ts` | `BodyPlanSpec`, catalogo, `validateBodyPlanSpec`, `speculativeBodyPlanId` |
+ | `lib/anatomy/generate.ts` | `generateAnatomy`, `generateAnatomyCached`, `anatomyFromPhenotype` |
+ | `lib/anatomy/assemble.ts` | proporzioni, complessità, fingerprint, freeze |
+@@ -21,9 +22,9 @@
+ | `lib/anatomy/lod.ts` | `reduceAnatomyDetail` (livelli 3→0) |
+ | `lib/anatomy/legacyAdapter.ts` | legacy → descriptor, `compareLegacyAnatomy` |
+ 
+-## AnatomyDescriptor (schemaVersion 1)
+-`fingerprint`, `lod`, `bodyPlan {id, family, origin}`, `symmetry {type, order}`, `segments[]`, `appendages[]`, `joints[]`, `proportions`, `surface {covering, furCoverage, armorCoverage}`, `locomotion {mode, supportingLimbs, groundClearance}`, `complexity`, `aesthetic {seed, jitter}`, `provenance` (14 chiavi obbligatorie), `phenotypeIssues`.
+-Coordinate come l'anatomia legacy: +Z avanti, +Y su, +X sinistra; creatura di taglia unitaria, il renderer applica `sizeScale`.
++## AnatomyDescriptor (schemaVersion 2)
++`fingerprint`, `lod`, `bodyPlan {id, family, origin}`, `symmetry {type, order}`, `segments[]`, `appendages[]`, `joints[]`, `proportions` (estensioni del corpo, estensioni complessive, `bounds`, `groundY`, `groundClearance`, `heightAboveGround`: terreno `null` se non determinabile), `surface {covering, furCoverage, armorCoverage}`, `locomotion {mode, supportingLimbs}`, `complexity`, `aesthetic {seed, jitter}`, `provenance` (14 chiavi obbligatorie), `phenotypeIssues`.
++Convenzioni geometriche complete: `G2_GEOMETRY_CONVENTIONS.md` (+Z avanti, +Y su, +X sinistra; il terreno NON è y = 0).
+ Articolazioni: `axial` (segmento↔segmento), `root` (segmento→appendice), `internal` (tra sezioni). Riferimenti validati.
+ 
+ ## Body plan: famiglie rappresentabili
+@@ -40,7 +41,7 @@ A semplici (sfera, allungato, asimmetrico), B multicellulari (verme segmentato,
+ `reduceAnatomyDetail`: 3 completo; 2 senza articolazioni interne; 1 solo appendici essenziali (zampe, braccia, tentacoli, pinne, code, flagelli, pseudopodi); 0 solo segmenti. Ogni livello è un descriptor valido; la locomozione resta quella dell'organismo intero; `complexity` descrive la rappresentazione presente.
+ 
+ ## Performance (misurata, Node, non GPU/browser)
+-3000 organismi, body plan misti: 874 ms a freddo (~291 µs/organismo); 9 ms con cache calda; `derivePhenotype` 3000 volte: 6 ms. Nessuna ottimizzazione applicata: il costo è accettabile se i descriptor si calcolano alla nascita/cambio genoma e non a ogni frame. Il costo maggiore è probabilmente il fingerprint canonico e il deep-freeze (ipotesi, non profilata).
++3000 organismi, body plan misti, dopo riscaldamento (Node, CPU): 1090 ms a freddo (~363 µs/organismo, dopo la revisione); con cache calda 27 ms (~9 µs/organismo, dominati dalla costruzione della chiave). Nessuna ottimizzazione applicata: il costo è accettabile se i descriptor si calcolano alla nascita/cambio genoma e non a ogni frame. Il costo maggiore è probabilmente il fingerprint canonico e il deep-freeze (ipotesi, non profilata).
+ 
+ ## Compatibilità
+ `descriptorFromLegacyAnatomy` / `descriptorFromLegacyTraits` convertono l'anatomia legacy (tutta `aesthetic`, nessun dato genetico). `compareLegacyAnatomy` confronta struttura e proporzioni. Il sistema NON è collegato al renderer.
+diff --git a/docs/graphics/G2_FINAL_REPORT.md b/docs/graphics/G2_FINAL_REPORT.md
+index 8e4ba27..a7b835b 100644
+--- a/docs/graphics/G2_FINAL_REPORT.md
++++ b/docs/graphics/G2_FINAL_REPORT.md
+@@ -1,5 +1,7 @@
+ # G2 — Report finale
+ 
++> Nota: questo documento descrive la prima fase. Il report aggiornato dopo la revisione è `G2_REVIEW_REPORT.md` (schema v2, 117 test).
++
+ Branch: `graphics/g2-anatomy-phenotype` (locale, da `efcf7b1`). Nessun merge in `main`. Nessun file esistente modificato.
+ 
+ ## File aggiunti (tutti nuovi)
+diff --git a/docs/graphics/G2_GEOMETRY_CONVENTIONS.md b/docs/graphics/G2_GEOMETRY_CONVENTIONS.md
+new file mode 100644
+index 0000000..b573a12
+--- /dev/null
++++ b/docs/graphics/G2_GEOMETRY_CONVENTIONS.md
+@@ -0,0 +1,32 @@
++# G2 — Sistema di coordinate e convenzioni geometriche (schema v2)
++
++## Assi e unità
++- Sistema destrorso. **+Z = avanti (muso)**, **+Y = su**, **+X = lato sinistro** della creatura (guardando verso +Z).
++- Creatura di taglia unitaria. Il renderer moltiplica per `proportions.sizeScale`. Tutte le lunghezze sono relative.
++- Origine: `x = 0` sull'asse di simmetria; `z` centrato sull'estensione dei segmenti (layout assiale); `y` relativo all'asse del corpo. **Il terreno non è y = 0**.
++- Arrotondamento: ogni coordinata è arrotondata a 1e-6 (stabilità di serializzazione e fingerprint).
++
++## Segmenti
++`center` + `halfExtents` (semiassi su X, Y, Z). Forme: `sphere` e `ellipsoid` (ellissoide); `capsule` (cilindro lungo Z con calotte di raggio ≈ max(semiasse X, Y)); `cone` (asse lungo Z, **base a +Z, apice a −Z**). Layout assiale: i segmenti sono disposti dal muso alla coda con una sovrapposizione di 0,15 della lunghezza del precedente.
++Il valore `halfExtents` x/y è modulato dalla sola corporatura (MOR-03).
++
++## Appendici
++- `position`: radice sul segmento ospite, **incassata del 3 %** nella sua superficie.
++- `direction`: versore unitario (il validatore lo verifica). `length`: lungo `direction`. `radius`: raggio dell'appendice.
++- Punta = `position + direction × length` (**stima rettilinea**: gli angoli di piegatura delle sezioni non sono modellati).
++- Laterali: `x = ±` semilarghezza della superficie del segmento alla quota e alla `z` dell'attacco (non `halfExtents.x`). Dorsali/ventrali: `y` sulla superficie. Terminali: `z` sulla punta del segmento. Radiali: sul bordo (0,95 dei semiassi). Con segmenti in posizione esplicita `x` è relativo al centro del segmento ospite.
++- Un'appendice dispari su una disposizione laterale va sulla linea mediana, all'estremità posteriore della zona; mantiene l'orientamento del gruppo (una zampa punta in basso; "verso l'esterno" sulla linea mediana diventa "in alto").
++- Le placche dermiche sono distribuite lungo **tutti i segmenti del corpo** (ruoli core, trunk, thorax, abdomen, lobe), mai su testa e coda.
++
++## Simmetria
++`bilateral`: ordine 2, segmenti con `x = 0`, coppie left/right speculari (stesso `y`, `z`, `|x|`, lunghezza, raggio). `radial`: ordine = **massimo comun divisore** dei conteggi dei gruppi disposti ad anello (angoli uniformi); 0 = rotazione continua (nessun anello). `spherical`: ordine 0, solo senza appendici (con appendici diventa `radial`). `none`: ordine 1.
++
++## Estensioni e terreno (`proportions`)
++- `bodyLength/Width/Height`: AABB dei soli segmenti.
++- `extentLength/Width/Height` e `bounds`: AABB di segmenti + appendici (punta stimata, raggio incluso).
++- **Terreno**: determinabile solo se esiste almeno una zampa d'appoggio (`kind = "leg"`, `direction.y ≤ −0,5`). `groundY` = punto più basso di quelle zampe (punta − raggio). `groundClearance` = `max(0, fondo dei segmenti − groundY)`. `heightAboveGround` = `bounds.max.y − groundY`. Altrimenti i tre valori sono `null`: non si inventa un appoggio.
++- La lunghezza di una zampa **non** è usata come distanza dal terreno.
++- Il LOD non cambia le proporzioni: descrivono sempre l'organismo intero.
++
++## Limiti dichiarati
++La punta è lineare; capsule e coni sono trattati con profilo semplificato; le sovrapposizioni tra appendici non sono risolte; non c'è collisione né fisica.
+diff --git a/docs/graphics/G2_MISSING_GENETIC_DATA.md b/docs/graphics/G2_MISSING_GENETIC_DATA.md
+index a6212c3..3e9abd1 100644
+--- a/docs/graphics/G2_MISSING_GENETIC_DATA.md
++++ b/docs/graphics/G2_MISSING_GENETIC_DATA.md
+@@ -21,3 +21,32 @@ organismsMorphology?: Float32Array; // 3 valori per organismo, normalizzati 0..1
+ 
+ ## Proposta separata per geni anatomici (solo se Matty decide di renderli evolvibili)
+ Un eventuale gene di "plan" o di numero di segmenti/appendici richiede: motivazione biologica, effetto sulla simulazione (costo/beneficio, altrimenti sarebbe deriva neutra), migrazione dei salvataggi e test di non regressione. Non è in questo lavoro e non è stato implementato.
++
++---
++
++# Limiti evolutivi (revisione G2): cosa NON può evolvere oggi e cosa servirebbe
++
++Nessuna evoluzione del body plan è implementata. Con il patrimonio genetico attuale (13 geni storici + 20 estesi) evolvono solo quattro grandezze morfologiche: `size`, MOR-01 `furDensity`, MOR-02 `dermalArmor`, MOR-03 `bodyStature`. Tutto il resto dell'anatomia è fissato dal body plan scelto dall'esterno.
++
++| Caratteristica anatomica | Evolve oggi? | Perché | Dato necessario per renderla evolvibile |
++|---|---|---|---|
++| Body plan (famiglia, schema generale) | No | nessun gene lo codifica | un gene (o un insieme) che selezioni/componga il piano, con regole di ereditarietà e di mutazione discreta |
++| Simmetria (bilaterale, radiale, assente) | No | derivata dal body plan | un tratto discreto di simmetria e il suo ordine radiale |
++| Numero e tipo di segmenti | No | dal body plan | gene del numero di segmenti, con intervallo e costo |
++| Numero di zampe, braccia, tentacoli, pinne | No | dal body plan (`appendageCounts` è un input esterno) | geni di conteggio per tipo di appendice, con vincoli di parità per la simmetria |
++| Lunghezza e raggio delle appendici | No (solo il raggio segue MOR-03) | dal body plan | geni di proporzione per tipo di appendice |
++| Articolazioni (tipo, numero di sezioni) | No | dal body plan | geni di sezioni e tipo di giunto |
++| Appendici sensoriali (numero/posizione degli occhi, antenne) | No | `vision` è una portata percettiva, non un organo | un gene morfologico distinto dalla portata; nessuna deduzione da `vision` |
++| Strutture di sostegno e protettive diverse dalle placche | No | dal body plan | geni specifici, se si vogliono evolvere |
++| Placche dermiche: numero | Sì, indirettamente | il numero deriva da MOR-02 (2–8 sopra soglia) | già coperto |
++| Pelo e corazza (copertura), corporatura, taglia | Sì | MOR-01, MOR-02, MOR-03, `size` | già coperti |
++| Locomozione (modalità) | No | conseguenza della struttura, non un gene | segue i conteggi di arti: nessun gene dedicato |
++| Organi interni | No | non rappresentati | fuori ambito |
++
++## Requisiti per qualunque futura evoluzione anatomica (non implementata)
++1. Contratto fenotipico additivo che porti i dati al descriptor (vedi sopra): senza di esso il renderer non li vede.
++2. Un gene anatomico deve avere un effetto sulla simulazione (costo e beneficio, per esempio metabolico), altrimenti è deriva neutra e produce solo variazione cosmetica.
++3. Mutazione discreta con regole di compatibilità: un cambio di body plan non può essere una piccola perturbazione continua; serve un modello di transizione (o di moduli sviluppati) e il controllo della validità dello spec risultante (`validateBodyPlanSpec`).
++4. Migrazione dei salvataggi e dei genomi senza questi geni: assenti = "non determinato", mai un valore predefinito che diventi un'affermazione biologica.
++5. Test di non regressione sulla biologia esistente e sul bilanciamento (richiede una proposta approvata: il motore biologico non viene toccato da G2).
++6. Parità e limiti: il tetto di 64 appendici e la parità delle coppie bilaterali vanno rispettati dall'ereditarietà.
+diff --git a/docs/graphics/G2_REVIEW_REPORT.md b/docs/graphics/G2_REVIEW_REPORT.md
+new file mode 100644
+index 0000000..44becad
+--- /dev/null
++++ b/docs/graphics/G2_REVIEW_REPORT.md
+@@ -0,0 +1,68 @@
++# G2 — Report di revisione e hardening (17 novembre 2026)
++
++Revisione tecnica indipendente del codice G2 già presente. Nessuna riscrittura dell'architettura, nessuna nuova funzione biologica, nessun collegamento al renderer, motore biologico intatto. Branch `graphics/g2-anatomy-phenotype`, creato da `origin/main` (`db86444`, stato corrente).
++
++## 1. Git e isolamento
++**Perché i file G2 sono su `main`.** Non sono stati scritti da me su `main`: dal mio ambiente non posso fare push e il mio commit (`ed424e1`) esisteva solo in locale. I 19 file G2 sono arrivati su `main` con sette commit "Add files via upload" / "Create assemble.ts" / "Create derive.ts" dell'account `misteryone2` del 17/11, 12:42–12:46: l'upload manuale dal telefono, che di default scrive su `main`. I file su `main` sono byte per byte quelli del mio primo pacchetto. Concausa mia: il `LEGGIMI.txt` del pacchetto non spiegava come creare il branch prima del caricamento.
++
++**Danno collaterale da sistemare (decisione tua).** Il commit `83abcc4` ha sovrascritto il `LEGGIMI.txt` alla radice: era il LEGGIMI v1.11.0 (specifica di Vibe, 85 righe) e ora contiene il testo del mio pacchetto G2. Il contenuto originale è nel commit `c35c287` ed è incluso come `LEGGIMI.txt.originale-main` nel pacchetto di consegna. Non l'ho ripristinato sul branch G2 per non toccare un file di Vibe dentro la PR G2: andrebbe ripristinato con un commit separato (o con "Revert" del solo commit `83abcc4`).
++
++**Isolamento.** Nessun commit su `main`. Il branch G2 contiene solo file G2 (nuovi o modificati). Nessun file di Vibe, di G1 o del motore toccato (`git diff --stat origin/main` lo mostra). I due `LEGGIMI` e `package-lock.json` (generato dal mio `npm install`) sono esclusi.
++**Nota sulla PR.** Poiché `main` contiene già la prima versione di G2, la PR `graphics/g2-anatomy-phenotype → main` mostra solo la revisione (il delta), non l'intero G2. Il vecchio branch locale basato su G1 è stato rinominato `backup/g2-first-impl-on-g1` e non viene usato.
++
++## 2. Anomalie individuate (tutte dimostrate con una diagnostica su tutti i 13 body plan)
++| # | Anomalia | Prova | Stato |
++|---|---|---|---|
++| A1 | Radici di appendici fuori dalla superficie del segmento ospite: zampe a r = 1,35–1,39 del semiasse (sospese fuori dal corpo), placche a r = 1,28 | quadruped, hexapod, armored-specialist, tutti con placche | corretta |
++| A2 | Placche concentrate su un solo segmento (root): 8 placche sul 10 % della lunghezza in many-legged e limbless-serpentine | diagnostica D7 | corretta |
++| A3 | Zampa o occhio dispari sulla linea mediana orientato all'indietro (`{0,0,-1}`), con il tipo "leg" non d'appoggio | quadruped, biped, hexapod, many-legged, armored-specialist | corretta |
++| A4 | `computeExtents` ignorava le appendici: multi-braccio 1,2 contro 3,07 reali, radial-sessile 1,2 contro 2,8; larghezza = 2·max|x| (sbagliata per layout asimmetrici) | D10 | corretta |
++| A5 | `groundClearance` = lunghezza massima di una zampa (0,9 dichiarata contro 0,883 reale; hexapod 1 contro 0,799; many-legged 0,6 contro 0,479) | D8 | corretta, con terreno `null` se non determinabile |
++| A6 | Simmetria dichiarata contraddetta dalle appendici: sfera con 8 placche "sferica"; ordine radiale 5 con 8 placche; ordine 6 con 3 stalks | D6 | corretta (ordine = MCD; sfera con appendici = radiale) |
++| A7 | Modalità `appendage-driven`/`radial` senza alcuna appendice locomotoria (fins = 0) | D5b | corretta (→ `limbless`) |
++| A8 | Giunti interni sempre `hinge` anche per gruppi `flexible` (antenne, flagelli, braccia radiali, esapode) | D9 | corretta |
++| A9 | Tetto di 64 appendici: il gruppo in coda veniva azzerato (legs 56, eyes 0 con 5 richiesti) | D11 | corretta (ripartizione proporzionale, coppie preservate) |
++| A10 | Uno spec senza segmenti mandava in crash con `Cannot read properties of undefined` | D12 | corretta (Error descrittivo) |
++| A11 | Rumore in virgola mobile rompeva la simmetria delle appendici terminali (4 elementi: `k/(n-1)−0,5` non dà valori esattamente opposti → arrotondamenti diversi a 1e-6) | trovato dai nuovi test, non dalla diagnostica | corretta (aritmetica intera) |
++| A12 | Cache: chiave incompleta (ignorava valori derivati e `issues` di un profilo costruito a mano), seme/lod/conteggi non normalizzati, cache anche per spec modificabili (rischio risultato stantio) | analisi + test | corretta |
++| A13 | Contratto: `locomotion.groundClearance` duplicava il valore di proporzione | analisi | rimosso (schema v2) |
++
++**Controllato e senza anomalie:** sovrapposizione tra segmenti (adiacenti entro il 15 % previsto, nessuna sovrapposizione tra non adiacenti), giunti assiali e radice (uno per segmento/appendice, riferimenti coerenti), dof coerente con il tipo, coppie bilaterali nei body plan del catalogo, serializzazione, LOD.
++
++## 3. Correzioni effettuate (file)
++- `lib/anatomy/types.ts`: schema **v2** (le versioni 1 vengono rifiutate; nessun descriptor v1 è mai stato salvato), nuove proporzioni (`extent*`, `bounds`, `groundY`, `groundClearance`, `heightAboveGround`), `LOCOMOTOR_KINDS`, convenzioni nel commento.
++- `lib/anatomy/assemble.ts`: `computeExtents` riscritta (corpo, appendici, bounds, terreno dalle punte delle zampe d'appoggio).
++- `lib/anatomy/geometry.ts` (nuovo): profilo e superficie dei segmenti.
++- `lib/anatomy/generate.ts`: posizionamento sulla superficie, appendice dispari, placche sul corpo, giunti interni, simmetria effettiva, locomozione, ripartizione del tetto, aritmetica intera, validazione dello spec, cache e chiave.
++- `lib/anatomy/validate.ts`: direzione unitaria, appendice sull'ospite, simmetria radiale/sferica, locomozione, proporzioni ricalcolate, terreno.
++- `lib/anatomy/bodyPlan.ts`: `validateBodyPlanSpec` più severa (cicli, compatibilità simmetria/posizionamento, numeri finiti).
++- `tests/anatomyG2.test.ts`: tre aspettative aggiornate ai nuovi comportamenti. Nessun test indebolito.
++- Documenti: `G2_GEOMETRY_CONVENTIONS.md` (nuovo), `G2_MISSING_GENETIC_DATA.md` (limiti evolutivi), `G2_ARCHITECTURE.md` aggiornato. `G2_AUDIT_REPORT.md` e `G2_FINAL_REPORT.md` restano come documenti storici della prima fase (i loro numeri sono superati da questo report).
++
++## 4. Suite di test
++Nuovo `tests/anatomyG2Review.test.ts`: **88 test**: tutti i 13 body plan in 6 scenari e per ogni conteggio min/default/dispari/max; posizione delle radici; direzioni; placche; estensioni e terreno; simmetria; articolazioni; locomozione; tetto; spec personalizzati; cache (chiavi, collisioni, valori mancanti, spec modificabili/congelati); determinismo, fingerprint di riferimento e immutabilità; LOD 0–3; serializzazione; adattatore legacy (80 combinazioni di tratti); dati genetici mancanti; indipendenza dal renderer e dal motore.
++Totale G2: 29 originali + 88 = **117 test, tutti passati**.
++Verifica di efficacia: il test di simmetria ha fallito sul difetto A11 prima della correzione (4 elementi terminali), e le asserzioni sul terreno falliscono con la vecchia definizione.
++
++## 5. Risultati reali (esecuzione del 17/11, sandbox Node)
++| Comando | Baseline (`main` con G2 caricato) | Dopo la revisione |
++|---|---|---|
++| `npx tsc --noEmit` | 1 errore: `app/layout.tsx` `LayoutProps` non trovato (tipi Next non ancora generati) | **0 errori** (dopo la build, che genera i tipi) |
++| `npm test` | 709 passati, **5 falliti**, 1 saltato (715) | **797 passati**, **5 falliti**, 1 saltato (803) |
++| `npm run build` | riuscita | **riuscita** (compilazione e TypeScript ok; 2 route statiche) |
++Differenza: +88 test passati, 0 nuovi fallimenti.
++
++**5 fallimenti preesistenti, indipendenti da G2** (identici con e senza i file G2): `fauna180` (sfumatura ventre-dorso), `reproduction` (2: costo energetico e genomi dei figli), `vibeGenomeV1110` (2: nessun gene comportamentale diretto; PER-03). Non li ho toccati: appartengono a Vibe o a sistemi non G2.
++**Limite della build:** i moduli G2 non sono importati dall'app, quindi la build li controlla solo come tipi TypeScript; la loro verifica funzionale è nei test. ESLint non eseguito (nessun `eslint.config.*` nel repo).
++**Prestazioni** (CPU Node, dopo riscaldamento): 3000 organismi in 1090 ms a freddo (~363 µs/organismo; era ~291 prima della revisione, per la geometria in più), 27 ms con cache calda (~9 µs, dominati dalla chiave). Misura non profilata, non su dispositivi.
++
++## 6. Limiti residui
++- Punta delle appendici stimata in linea retta; profili di capsula e cono semplificati; nessuna collisione tra appendici.
++- Il descriptor legacy è estetico (non deriva da geni); il confronto con i nuovi body plan segnala differenze di proporzione, non le elimina.
++- Il body plan non evolve (tabella completa in `G2_MISSING_GENETIC_DATA.md`).
++- Le placche sulla stessa linea dorsale possono toccarsi con 8 placche su segmenti corti.
++- Un `BodyPlanSpec` non congelato non usa la cache (scelta per correttezza).
++- Nessuna verifica su browser o telefono: G2 non è collegato al renderer.
++
++## 7. Priorità 6 — evoluzione del body plan
++Non implementata. Cosa non evolve e quali dati servirebbero: `G2_MISSING_GENETIC_DATA.md`, sezione "Limiti evolutivi".
+diff --git a/lib/anatomy/assemble.ts b/lib/anatomy/assemble.ts
+index 6b01bf7..f737294 100644
+--- a/lib/anatomy/assemble.ts
++++ b/lib/anatomy/assemble.ts
+@@ -18,18 +18,43 @@ export function withFingerprint(d: Omit<AnatomyDescriptor, "fingerprint">): Anat
+   return deepFreeze({ ...d, fingerprint: computeFingerprint(d) } as AnatomyDescriptor);
+ }
+ 
+-export function computeExtents(segments: readonly Segment[], appendages: readonly Appendage[]): Pick<AnatomyProportions, "bodyLength" | "bodyWidth" | "bodyHeight" | "groundClearance"> {
+-  let zmin = Infinity, zmax = -Infinity, ymin = Infinity, ymax = -Infinity, xmax = 0;
++const SUPPORT_DIRECTION_Y = -0.5;
++
++/**
++ * Proporzioni geometriche. Il corpo (segmenti) e l'organismo completo (segmenti + appendici) sono misurati separatamente.
++ * Il terreno si determina SOLO dalle zampe d'appoggio (kind "leg" con direction.y <= -0,5): quota = punto più basso delle loro punte
++ * (raggio incluso). La lunghezza di una gamba non è mai usata come distanza dal terreno. Senza zampe d'appoggio i valori sono null.
++ */
++export function computeExtents(segments: readonly Segment[], appendages: readonly Appendage[]): Omit<AnatomyProportions, "sizeScale" | "robustness"> {
++  const min = { x: Infinity, y: Infinity, z: Infinity };
++  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
++  const bmin = { x: Infinity, y: Infinity, z: Infinity };
++  const bmax = { x: -Infinity, y: -Infinity, z: -Infinity };
+   for (const s of segments) {
+-    zmin = Math.min(zmin, s.center.z - s.halfExtents.z);
+-    zmax = Math.max(zmax, s.center.z + s.halfExtents.z);
+-    ymin = Math.min(ymin, s.center.y - s.halfExtents.y);
+-    ymax = Math.max(ymax, s.center.y + s.halfExtents.y);
+-    xmax = Math.max(xmax, Math.abs(s.center.x) + s.halfExtents.x);
++    for (const ax of ["x", "y", "z"] as const) {
++      min[ax] = Math.min(min[ax], s.center[ax] - s.halfExtents[ax]);
++      max[ax] = Math.max(max[ax], s.center[ax] + s.halfExtents[ax]);
++    }
++  }
++  for (const ax of ["x", "y", "z"] as const) { bmin[ax] = min[ax]; bmax[ax] = max[ax]; }
++  let footY = Infinity;
++  for (const a of appendages) {
++    const tip = { x: a.position.x + a.direction.x * a.length, y: a.position.y + a.direction.y * a.length, z: a.position.z + a.direction.z * a.length };
++    for (const ax of ["x", "y", "z"] as const) {
++      bmin[ax] = Math.min(bmin[ax], a.position[ax] - a.radius, tip[ax] - a.radius);
++      bmax[ax] = Math.max(bmax[ax], a.position[ax] + a.radius, tip[ax] + a.radius);
++    }
++    if (a.kind === "leg" && a.direction.y <= SUPPORT_DIRECTION_Y) footY = Math.min(footY, tip.y - a.radius);
+   }
+-  let clearance = 0;
+-  for (const a of appendages) if (a.kind === "leg") clearance = Math.max(clearance, a.length);
+-  return { bodyLength: rd(zmax - zmin), bodyWidth: rd(2 * xmax), bodyHeight: rd(ymax - ymin), groundClearance: rd(clearance) };
++  const grounded = Number.isFinite(footY);
++  return {
++    bodyLength: rd(max.z - min.z), bodyWidth: rd(max.x - min.x), bodyHeight: rd(max.y - min.y),
++    extentLength: rd(bmax.z - bmin.z), extentWidth: rd(bmax.x - bmin.x), extentHeight: rd(bmax.y - bmin.y),
++    bounds: { min: { x: rd(bmin.x), y: rd(bmin.y), z: rd(bmin.z) }, max: { x: rd(bmax.x), y: rd(bmax.y), z: rd(bmax.z) } },
++    groundY: grounded ? rd(footY) : null,
++    groundClearance: grounded ? rd(Math.max(0, min.y - footY)) : null,
++    heightAboveGround: grounded ? rd(bmax.y - footY) : null,
++  };
+ }
+ 
+ export type AssembleArgs = Omit<AnatomyDescriptor, "fingerprint" | "schemaVersion" | "proportions" | "locomotion" | "complexity"> & {
+@@ -47,7 +72,7 @@ export function assembleDescriptor(a: AssembleArgs): AnatomyDescriptor {
+     schemaVersion: ANATOMY_SCHEMA_VERSION,
+     ...rest,
+     proportions: { sizeScale: rd(sizeScale), robustness: rd(robustness), ...ext },
+-    locomotion: { mode: locomotionMode, supportingLimbs, groundClearance: ext.groundClearance },
++    locomotion: { mode: locomotionMode, supportingLimbs },
+     complexity: computeComplexity(a.segments, a.appendages, a.joints),
+   });
+ }
+diff --git a/lib/anatomy/bodyPlan.ts b/lib/anatomy/bodyPlan.ts
+index 28b8049..d250adc 100644
+--- a/lib/anatomy/bodyPlan.ts
++++ b/lib/anatomy/bodyPlan.ts
+@@ -167,30 +167,58 @@ export function speculativeBodyPlanId(seed: number, ids: readonly string[] = BOD
+   return ids[hashToUint(`speculative-body-plan:${seed >>> 0}`) % ids.length];
+ }
+ 
++const SYMMETRIES = new Set(["spherical", "bilateral", "radial", "none"]);
++const JOINTS = new Set(["fixed", "hinge", "ball", "segmental", "flexible"]);
++const finitePos = (n: unknown): boolean => typeof n === "number" && Number.isFinite(n) && n > 0;
++
+ /** Controlla la coerenza interna di uno spec. Restituisce l'elenco degli errori (vuoto = valido). */
+ export function validateBodyPlanSpec(spec: BodyPlanSpec): string[] {
+   const errs: string[] = [];
++  if (!spec || typeof spec !== "object" || !Array.isArray(spec.segments) || !Array.isArray(spec.groups)) return ["malformed-spec"];
++  if (typeof spec.id !== "string" || !spec.id) errs.push("missing-id");
++  if (!SYMMETRIES.has(spec.symmetry)) errs.push(`bad-symmetry:${String(spec.symmetry)}`);
++  if (spec.layout !== "axial" && spec.layout !== "explicit") errs.push(`bad-layout:${String(spec.layout)}`);
++  if (!JOINTS.has(spec.axialJoint)) errs.push(`bad-axial-joint:${String(spec.axialJoint)}`);
++  if (spec.segments.length === 0) errs.push("no-segments");
+   const ids = new Set<string>();
+   let roots = 0;
+   for (const s of spec.segments) {
++    if (typeof s.id !== "string" || !s.id) errs.push("segment-without-id");
+     if (ids.has(s.id)) errs.push(`duplicate-segment:${s.id}`);
+     ids.add(s.id);
+     if (s.parent === null) roots++;
+-    if (!(s.length > 0 && s.width > 0 && s.height > 0)) errs.push(`bad-dimensions:${s.id}`);
+-    if (spec.layout === "explicit" && !s.at) errs.push(`missing-position:${s.id}`);
++    if (!(finitePos(s.length) && finitePos(s.width) && finitePos(s.height))) errs.push(`bad-dimensions:${s.id}`);
++    if (spec.layout === "explicit" && !(s.at && s.at.length === 3 && s.at.every((v: number) => Number.isFinite(v)))) errs.push(`missing-position:${s.id}`);
+   }
+-  if (roots !== 1) errs.push(`roots:${roots}`);
++  if (spec.segments.length > 0 && roots !== 1) errs.push(`roots:${roots}`);
+   for (const s of spec.segments) if (s.parent !== null && !ids.has(s.parent)) errs.push(`unknown-parent:${s.id}->${s.parent}`);
++  // niente cicli
++  const parentOf = new Map(spec.segments.map((s) => [s.id, s.parent] as const));
++  for (const s of spec.segments) {
++    let cur: string | null = s.id;
++    let steps = 0;
++    while (cur !== null && steps++ <= spec.segments.length) cur = parentOf.get(cur) ?? null;
++    if (cur !== null) errs.push(`parent-cycle:${s.id}`);
++  }
+   const gids = new Set<string>();
+-  let maxTotal = 0;
++  let defaultTotal = 0;
+   for (const g of spec.groups) {
++    if (typeof g.id !== "string" || !g.id) errs.push("group-without-id");
+     if (gids.has(g.id)) errs.push(`duplicate-group:${g.id}`);
+     gids.add(g.id);
+     if (!spec.segments.some((s) => s.id === g.attach || s.role === g.attach)) errs.push(`unknown-attach:${g.id}->${g.attach}`);
+-    if (!(g.minCount >= 0 && g.minCount <= g.count && g.count <= g.maxCount)) errs.push(`bad-count-range:${g.id}`);
+-    if (!(g.length > 0 && g.radius > 0)) errs.push(`bad-appendage-dimensions:${g.id}`);
+-    maxTotal += g.count;
++    if (![g.count, g.minCount, g.maxCount].every((n) => Number.isInteger(n)) || !(g.minCount >= 0 && g.minCount <= g.count && g.count <= g.maxCount)) errs.push(`bad-count-range:${g.id}`);
++    if (!(finitePos(g.length) && finitePos(g.radius))) errs.push(`bad-appendage-dimensions:${g.id}`);
++    if (![1, 2, 3].includes(g.sections)) errs.push(`bad-sections:${g.id}`);
++    if (!JOINTS.has(g.joint)) errs.push(`bad-joint:${g.id}`);
++    if (!(typeof g.span === "number" && g.span > 0 && g.span <= 1)) errs.push(`bad-span:${g.id}`);
++    if (!Number.isFinite(g.yOffset) || Math.abs(g.yOffset) > 1) errs.push(`bad-yoffset:${g.id}`);
++    // compatibilità simmetria/posizionamento: una disposizione radiale non può convivere con simmetria bilaterale e viceversa
++    const ringOnly = spec.symmetry === "radial" || spec.symmetry === "spherical";
++    if (ringOnly && (g.placement === "lateral" || g.placement.startsWith("terminal"))) errs.push(`placement-incompatible-with-symmetry:${g.id}:${g.placement}/${spec.symmetry}`);
++    if (spec.symmetry === "bilateral" && g.placement === "radial") errs.push(`placement-incompatible-with-symmetry:${g.id}:radial/bilateral`);
++    defaultTotal += g.count;
+   }
+-  if (maxTotal > MAX_APPENDAGES) errs.push(`too-many-default-appendages:${maxTotal}`);
++  if (defaultTotal > MAX_APPENDAGES) errs.push(`too-many-default-appendages:${defaultTotal}`);
+   return errs;
+ }
+diff --git a/lib/anatomy/generate.ts b/lib/anatomy/generate.ts
+index b7decc9..9578d6e 100644
+--- a/lib/anatomy/generate.ts
++++ b/lib/anatomy/generate.ts
+@@ -1,19 +1,21 @@
+ import type { DataSource, PhenotypeProfile } from "../phenotype/types";
+ import { SURFACE_COVERING_THRESHOLD } from "../phenotype/derive";
+ import { assembleDescriptor } from "./assemble";
+-import { BODY_PLAN_CATALOG, LEGACY_DEFAULT_BODY_PLAN_ID, speculativeBodyPlanId, type AppendageGroupSpec, type BodyPlanSpec } from "./bodyPlan";
++import { BODY_PLAN_CATALOG, LEGACY_DEFAULT_BODY_PLAN_ID, speculativeBodyPlanId, validateBodyPlanSpec, type AppendageGroupSpec, type BodyPlanSpec } from "./bodyPlan";
++import { BODY_ROLES, profile, surfaceEndZ, surfaceHalfWidth, surfaceY } from "./geometry";
+ import { reduceAnatomyDetail } from "./lod";
+ import {
+-  MAX_APPENDAGES, REQUIRED_PROVENANCE_KEYS,
+-  type Appendage, type AppendageSide, type AnatomyDescriptor, type BodyPlanOrigin, type DetailTier, type Joint, type JointType, type LocomotionMode, type Segment, type Vec3,
++  LOCOMOTOR_KINDS, MAX_APPENDAGES, REQUIRED_PROVENANCE_KEYS,
++  type Appendage, type AppendageSide, type AnatomyDescriptor, type BodyPlanOrigin, type DetailTier, type Joint, type JointType, type LocomotionMode, type Segment, type SymmetryType, type Vec3,
+ } from "./types";
+-import { clamp, hashToUint, mulberry32, rd } from "./util";
++import { canonicalJson, clamp, hashToUint, mulberry32, rd } from "./util";
+ 
+ /**
+  * G2 — Generatore anatomico deterministico: (fenotipo, body plan, seme opzionale) → AnatomyDescriptor.
+  * Funzione pura: nessun Math.random, nessun accesso a React/Three.js/renderer. Senza `seed` la variazione estetica è nulla.
+  * Le caratteristiche biologiche provengono solo da `phenotype` (geni morfologici); la struttura (segmenti, appendici,
+  * articolazioni, simmetria) viene dal body plan ed è dichiarata "undetermined" nella provenienza.
++ * Un `BodyPlanSpec` non valido provoca un Error descrittivo (mai un descriptor parziale).
+  */
+ export interface AnatomyInput {
+   readonly phenotype: PhenotypeProfile;
+@@ -22,7 +24,7 @@ export interface AnatomyInput {
+   readonly seed?: number;
+   readonly origin?: BodyPlanOrigin;
+   readonly lod?: DetailTier;
+-  /** Sovrascrive il numero di appendici per gruppo (limitato a [minCount, maxCount] del gruppo e a MAX_APPENDAGES). */
++  /** Sovrascrive il numero di appendici per gruppo (limitato a [minCount, maxCount] del gruppo e, nel complesso, a MAX_APPENDAGES). */
+   readonly appendageCounts?: Readonly<Record<string, number>>;
+ }
+ 
+@@ -37,10 +39,18 @@ const norm3 = (x: number, y: number, z: number): Vec3 => {
+ };
+ const und = (note: string): DataSource => ({ kind: "undetermined", genes: [], certainty: "speculative", note });
+ const dofOf = (t: JointType): 0 | 1 | 2 | 3 => (t === "fixed" ? 0 : t === "hinge" ? 1 : t === "segmental" ? 2 : 3);
++const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
++const normLod = (l: number | undefined): DetailTier => (l === undefined || !Number.isFinite(l) ? 3 : (clamp(Math.trunc(l), 0, 3) as DetailTier));
++const normSeed = (s: number | undefined): number | undefined => (s === undefined ? undefined : s >>> 0);
++const PLATE_ATTACH = "*body";
+ 
+ interface Slot { x: number; y: number; z: number; side: AppendageSide; angle: number | null; host: Segment; dir: Vec3; bucket: number }
+ 
+ function hostsFor(segs: readonly Segment[], attach: string): Segment[] {
++  if (attach === PLATE_ATTACH) {
++    const body = segs.filter((s) => BODY_ROLES.has(s.role));
++    return body.length ? body : [segs.find((s) => s.parentId === null) ?? segs[0]];
++  }
+   const byId = segs.filter((s) => s.id === attach);
+   if (byId.length) return byId;
+   const byRole = segs.filter((s) => s.role === attach);
+@@ -56,7 +66,7 @@ function nearest(hosts: readonly Segment[], z: number): Segment {
+ function direction(o: AppendageGroupSpec["orientation"], sx: number): Vec3 {
+   switch (o) {
+     case "down": return norm3(sx * 0.3, -1, 0);
+-    case "outward": return v3(sx, 0, 0);
++    case "outward": return sx === 0 ? v3(0, 1, 0) : v3(sx, 0, 0); // un'appendice sulla linea mediana "verso l'esterno" punta in alto
+     case "up": return norm3(sx * 0.2, 1, 0);
+     case "forward": return v3(0, 0, 1);
+     default: return v3(0, 0, -1);
+@@ -64,6 +74,8 @@ function direction(o: AppendageGroupSpec["orientation"], sx: number): Vec3 {
+ }
+ 
+ const mirrorX = (sx: number, ax: number): number => (sx === 0 ? 0 : sx * rd(ax));
++/** Posizione normalizzata in [-0,5; 0,5] del k-esimo di n elementi. Aritmetica intera: f(k) e f(n-1-k) sono esattamente opposti (nessun rumore in virgola mobile che rompa le simmetrie). */
++const frac = (k: number, n: number): number => (n === 1 ? 0 : (2 * k - (n - 1)) / (2 * (n - 1)));
+ 
+ function slotsFor(g: AppendageGroupSpec, n: number, segs: readonly Segment[], ring: boolean): Slot[] {
+   const hosts = hostsFor(segs, g.attach);
+@@ -75,56 +87,113 @@ function slotsFor(g: AppendageGroupSpec, n: number, segs: readonly Segment[], ri
+   if (g.placement === "lateral") {
+     const pairs = Math.floor(n / 2);
+     for (let p = 0; p < pairs; p++) {
+-      const frac = pairs === 1 ? 0 : p / (pairs - 1) - 0.5;
+-      const z = zmid + frac * zr;
++      const z = zmid + frac(p, pairs) * zr;
+       const host = nearest(hosts, z);
+-      for (const sx of [-1, 1]) {
+-        out.push({ x: mirrorX(sx, host.halfExtents.x * 0.9), y: host.center.y + g.yOffset * host.halfExtents.y, z, side: sx > 0 ? "left" : "right", angle: null, host, dir: direction(g.orientation, sx), bucket: p });
+-      }
++      const y = host.center.y + g.yOffset * host.halfExtents.y * profile(host, z);
++      const hw = surfaceHalfWidth(host, y, z);
++      for (const sx of [-1, 1]) out.push({ x: host.center.x + mirrorX(sx, hw), y, z, side: sx > 0 ? "left" : "right", angle: null, host, dir: direction(g.orientation, sx), bucket: p });
+     }
+     if (n % 2 === 1) {
+-      const host = nearest(hosts, zmin);
+-      out.push({ x: 0, y: host.center.y, z: zmin, side: "mid", angle: null, host, dir: direction("back", 0), bucket: pairs });
++      // appendice dispari: sulla linea mediana, all'estremità posteriore della zona, con l'orientamento del gruppo
++      const z = zmid - zr / 2;
++      const host = nearest(hosts, z);
++      const down = g.orientation === "down";
++      const y = surfaceY(host, host.center.x, z, down ? -1 : 1);
++      out.push({ x: host.center.x, y, z, side: "mid", angle: null, host, dir: direction(g.orientation, 0), bucket: pairs });
+     }
+   } else if (g.placement === "dorsal" || g.placement === "ventral") {
+-    const sy = g.placement === "dorsal" ? 1 : -1;
++    const sy: 1 | -1 = g.placement === "dorsal" ? 1 : -1;
+     for (let k = 0; k < n; k++) {
+       if (ring) {
+         const host = hosts[0];
+         const ang = (2 * Math.PI * k) / n;
+         const r = n === 1 ? 0 : host.halfExtents.x * 0.35;
+-        out.push({ x: Math.cos(ang) * r, y: host.center.y + sy * host.halfExtents.y, z: host.center.z + Math.sin(ang) * r, side: "mid", angle: n === 1 ? null : rd(ang), host, dir: direction(g.orientation, 0), bucket: k });
++        const x = host.center.x + Math.cos(ang) * r;
++        const z = host.center.z + Math.sin(ang) * r;
++        out.push({ x, y: surfaceY(host, x, z, sy), z, side: "mid", angle: n === 1 ? null : rd(ang), host, dir: direction(g.orientation, 0), bucket: k });
+       } else {
+-        const frac = n === 1 ? 0 : k / (n - 1) - 0.5;
+-        const z = zmid + frac * zr;
++        const z = zmid + frac(k, n) * zr;
+         const host = nearest(hosts, z);
+-        out.push({ x: 0, y: host.center.y + sy * host.halfExtents.y, z, side: "mid", angle: null, host, dir: direction(g.orientation, 0), bucket: k });
++        out.push({ x: host.center.x, y: surfaceY(host, host.center.x, z, sy), z, side: "mid", angle: null, host, dir: direction(g.orientation, 0), bucket: k });
+       }
+     }
+   } else if (g.placement === "terminal-front" || g.placement === "terminal-rear") {
+     const front = g.placement === "terminal-front";
+     const host = hosts.reduce((a, b) => (front ? (b.center.z + b.halfExtents.z > a.center.z + a.halfExtents.z ? b : a) : (b.center.z - b.halfExtents.z < a.center.z - a.halfExtents.z ? b : a)));
+-    const z = host.center.z + (front ? 1 : -1) * host.halfExtents.z;
+     for (let k = 0; k < n; k++) {
+-      const frac = n === 1 ? 0 : k / (n - 1) - 0.5;
+-      const sx = frac > 0 ? 1 : frac < 0 ? -1 : 0;
+-      out.push({ x: mirrorX(sx, Math.abs(frac) * 2 * host.halfExtents.x * 0.5), y: host.center.y, z, side: sx > 0 ? "left" : sx < 0 ? "right" : "mid", angle: null, host, dir: direction(g.orientation, sx), bucket: Math.min(k, n - 1 - k) });
++      const f = frac(k, n);
++      const sx = f > 0 ? 1 : f < 0 ? -1 : 0;
++      const ax = Math.abs(f) * 2 * host.halfExtents.x * 0.5;
++      const z = surfaceEndZ(host, host.center.x + ax, host.center.y, front);
++      out.push({ x: host.center.x + mirrorX(sx, ax), y: host.center.y, z, side: sx > 0 ? "left" : sx < 0 ? "right" : "mid", angle: null, host, dir: direction(g.orientation, sx), bucket: Math.min(k, n - 1 - k) });
+     }
+   } else {
+     const host = hosts[0];
+     for (let k = 0; k < n; k++) {
+       const ang = (2 * Math.PI * k) / n;
+-      out.push({ x: Math.cos(ang) * host.halfExtents.x * 0.95, y: host.center.y + g.yOffset * host.halfExtents.y, z: host.center.z + Math.sin(ang) * host.halfExtents.z * 0.95, side: "mid", angle: rd(ang), host, dir: norm3(Math.cos(ang), 0, Math.sin(ang)), bucket: k });
++      out.push({ x: host.center.x + Math.cos(ang) * host.halfExtents.x * 0.95, y: host.center.y + g.yOffset * host.halfExtents.y, z: host.center.z + Math.sin(ang) * host.halfExtents.z * 0.95, side: "mid", angle: rd(ang), host, dir: norm3(Math.cos(ang), 0, Math.sin(ang)), bucket: k });
+     }
+   }
+   return out;
+ }
+ 
++const specChecked = new WeakSet<object>();
++const deepFrozenSpecs = new WeakSet<object>();
++
++function assertValidSpec(plan: BodyPlanSpec): void {
++  if (specChecked.has(plan)) return;
++  const errs = validateBodyPlanSpec(plan);
++  if (errs.length) throw new Error(`G2: BodyPlanSpec non valido (${String(plan?.id)}): ${errs.slice(0, 5).join(", ")}`);
++  if (isDeepFrozen(plan)) specChecked.add(plan); // uno spec modificabile viene ricontrollato a ogni chiamata
++}
++
++function isDeepFrozen(plan: BodyPlanSpec): boolean {
++  if (deepFrozenSpecs.has(plan)) return true;
++  const frozen = (o: object) => Object.isFrozen(o);
++  const ok = frozen(plan) && frozen(plan.segments) && frozen(plan.groups) && plan.segments.every((s) => frozen(s) && (!s.at || frozen(s.at))) && plan.groups.every(frozen);
++  if (ok) deepFrozenSpecs.add(plan);
++  return ok;
++}
++
++/** Numero effettivo di appendici richiesto per un gruppo, entro [minCount, maxCount]. Richieste non numeriche → valore di default. */
++function requestedCount(g: AppendageGroupSpec, requested: number | undefined): number {
++  const base = typeof requested === "number" && Number.isFinite(requested) ? Math.round(requested) : g.count;
++  return clamp(base, g.minCount, g.maxCount);
++}
++
++/**
++ * Applica il tetto globale ripartendo il budget tra i gruppi in proporzione alla richiesta (nessun gruppo viene azzerato a vantaggio
++ * di un altro), mantenendo le coppie bilaterali. Deterministico.
++ */
++function allocateCounts(plan: BodyPlanSpec, requests: readonly number[], budget: number): number[] {
++  const total = requests.reduce((a, b) => a + b, 0);
++  if (total <= budget) return [...requests];
++  const paired = plan.groups.map((g) => plan.symmetry === "bilateral" && (g.placement === "lateral" || g.placement.startsWith("terminal")));
++  const s = Math.max(0, budget) / total;
++  const out = requests.map((n, i) => {
++    let v = Math.floor(n * s);
++    if (paired[i]) v -= v % 2;
++    return Math.min(n, Math.max(v, Math.min(n, plan.groups[i].minCount)));
++  });
++  let sum = out.reduce((a, b) => a + b, 0);
++  while (sum > budget) {
++    let idx = 0;
++    for (let i = 1; i < out.length; i++) if (out[i] > out[idx]) idx = i;
++    if (out[idx] === 0) break;
++    const step = paired[idx] && out[idx] >= 2 ? 2 : 1;
++    out[idx] -= step;
++    sum -= step;
++  }
++  return out;
++}
++
+ export function generateAnatomy(input: AnatomyInput): AnatomyDescriptor {
+   const { phenotype: ph, bodyPlan: plan } = input;
++  assertValidSpec(plan);
+   const origin = input.origin ?? "explicit";
+-  const jitterOn = input.seed !== undefined;
+-  const rng = mulberry32(((input.seed ?? 0) ^ hashToUint(plan.id)) >>> 0);
++  const seed = normSeed(input.seed);
++  const jitterOn = seed !== undefined;
++  const rng = mulberry32(((seed ?? 0) ^ hashToUint(plan.id)) >>> 0);
+   const jit = (): number => (jitterOn ? (rng() - 0.5) * 0.12 : 0);
+ 
+   const t = ph.traits;
+@@ -149,8 +218,8 @@ export function generateAnatomy(input: AnatomyInput): AnatomyDescriptor {
+   const segments: Segment[] = plan.segments.map((s, i) => {
+     const w = 1 + jit();
+     const at = s.at ?? [0, 0, 0];
+-    const cz = plan.layout === "axial" ? centersZ[i] : at[2];
+-    return { id: s.id, role: s.role, shape: s.shape, parentId: s.parent, center: v3(plan.layout === "axial" ? 0 : at[0], plan.layout === "axial" ? (s.dy ?? 0) : at[1], cz), halfExtents: v3((s.width / 2) * wf * w, (s.height / 2) * wf * w, lens[i] / 2) };
++    const axial = plan.layout === "axial";
++    return { id: s.id, role: s.role, shape: s.shape, parentId: s.parent, center: v3(axial ? 0 : at[0], axial ? (s.dy ?? 0) : at[1], axial ? centersZ[i] : at[2]), halfExtents: v3((s.width / 2) * wf * w, (s.height / 2) * wf * w, lens[i] / 2) };
+   });
+ 
+   const joints: Joint[] = segments.filter((s) => s.parentId !== null).map((s) => ({ id: `j-ax-${s.id}`, kind: "axial", type: plan.axialJoint, dof: dofOf(plan.axialJoint), parentSegmentId: s.parentId, childSegmentId: s.id, appendageId: null, section: null }));
+@@ -159,46 +228,53 @@ export function generateAnatomy(input: AnatomyInput): AnatomyDescriptor {
+   const platesN = armorN !== null && armorN >= SURFACE_COVERING_THRESHOLD ? clamp(Math.round(2 + armorN * 6), ARMOR_PLATE_MIN, ARMOR_PLATE_MAX) : 0;
+   const ring = plan.symmetry === "radial" || plan.symmetry === "spherical";
+   const appendages: Appendage[] = [];
+-  let remaining = MAX_APPENDAGES - platesN;
+ 
+   const emit = (g: AppendageGroupSpec, n: number): void => {
+     const gJ = jit();
+-    const slots = slotsFor(g, n, segments, ring);
+-    slots.forEach((sl, idx) => {
++    slotsFor(g, n, segments, ring).forEach((sl, idx) => {
+       const sJ = plan.symmetry === "none" ? jit() : jitterOn ? ((hashToUint(`${plan.id}:${g.id}:${sl.bucket}`) % 1000) / 1000 - 0.5) * 0.12 : 0;
+       const f = 1 + gJ + sJ;
+-      const a: Appendage = {
++      appendages.push({
+         id: `${g.id}-${idx}`, groupId: g.id, kind: g.kind, variant: g.variant ?? null, segmentId: sl.host.id, side: sl.side, index: idx, angle: sl.angle,
+         position: v3(sl.x, sl.y, sl.z), direction: sl.dir, length: rd(g.length * f), radius: rd(g.radius * wf * (1 + (gJ + sJ) * 0.5)), sectionCount: g.sections,
+-      };
+-      appendages.push(a);
++      });
+     });
+   };
+ 
+-  for (const g of plan.groups) {
+-    const requested = input.appendageCounts?.[g.id];
+-    const base = typeof requested === "number" && Number.isFinite(requested) ? Math.round(requested) : g.count;
+-    const n = Math.max(0, Math.min(clamp(base, g.minCount, g.maxCount), remaining));
+-    remaining -= n;
+-    if (n > 0) emit(g, n);
+-  }
++  const counts = allocateCounts(plan, plan.groups.map((g) => requestedCount(g, input.appendageCounts?.[g.id])), MAX_APPENDAGES - platesN);
++  plan.groups.forEach((g, i) => { if (counts[i] > 0) emit(g, counts[i]); });
+   if (platesN > 0) {
+-    const root = segments.find((s) => s.parentId === null) ?? segments[0];
+-    const plateGroup: AppendageGroupSpec = { id: "armor-plates", kind: "plate", variant: "dermal", attach: root.id, placement: "dorsal", orientation: "up", count: platesN, minCount: platesN, maxCount: platesN, length: 0.1 + 0.25 * (armorN ?? 0), radius: 0.18, sections: 1, joint: "fixed", span: 0.8, yOffset: 0 };
+-    emit(plateGroup, platesN);
++    emit({ id: "armor-plates", kind: "plate", variant: "dermal", attach: PLATE_ATTACH, placement: "dorsal", orientation: "up", count: platesN, minCount: platesN, maxCount: platesN, length: 0.1 + 0.25 * (armorN ?? 0), radius: 0.18, sections: 1, joint: "fixed", span: 0.8, yOffset: 0 }, platesN);
+   }
+ 
++  const jointOfGroup = new Map<string, JointType>(plan.groups.map((g) => [g.id, g.joint] as const));
+   for (const a of appendages) {
+-    const g = plan.groups.find((x) => x.id === a.groupId);
+-    const jt: JointType = g ? g.joint : "fixed";
++    const jt: JointType = jointOfGroup.get(a.groupId) ?? "fixed";
+     joints.push({ id: `j-ap-${a.id}`, kind: "root", type: jt, dof: dofOf(jt), parentSegmentId: a.segmentId, childSegmentId: null, appendageId: a.id, section: 0 });
+-    for (let s = 1; s < a.sectionCount; s++) joints.push({ id: `j-in-${a.id}-${s}`, kind: "internal", type: "hinge", dof: 1, parentSegmentId: null, childSegmentId: null, appendageId: a.id, section: s });
++    // le sezioni interne seguono il tipo di giunto del gruppo; solo l'articolazione sferica (spalla/anca) si riduce a cerniera (gomito/ginocchio)
++    const inner: JointType = jt === "ball" ? "hinge" : jt;
++    for (let s = 1; s < a.sectionCount; s++) joints.push({ id: `j-in-${a.id}-${s}`, kind: "internal", type: inner, dof: dofOf(inner), parentSegmentId: null, childSegmentId: null, appendageId: a.id, section: s });
+   }
+ 
++  // ---- Simmetria effettiva: quella dichiarata dal body plan, ridotta se le appendici realmente presenti la contraddicono ----
++  const ringCounts = new Map<string, number>();
++  for (const a of appendages) if (a.angle !== null) ringCounts.set(a.groupId, (ringCounts.get(a.groupId) ?? 0) + 1);
++  const ringOrder = [...ringCounts.values()].reduce((a, b) => gcd(a, b), 0);
++  let symType: SymmetryType = plan.symmetry;
++  let symOrder: number;
++  if (symType === "spherical" && appendages.length > 0) symType = "radial"; // appendici su un asse: la sfera non è più isotropa
++  if (symType === "bilateral") symOrder = 2;
++  else if (symType === "spherical") symOrder = 0;
++  else if (symType === "none") symOrder = 1;
++  else symOrder = ringOrder; // radiale: MCD dei gruppi disposti ad anello; 0 = rotazione continua (nessun anello)
++
+   // ---- Locomozione (dalla struttura, non dai geni) ----
+   const legs = appendages.filter((a) => a.kind === "leg").length;
++  const hasLocomotor = appendages.some((a) => LOCOMOTOR_KINDS.includes(a.kind));
+   const mode: LocomotionMode =
+-    plan.locomotion === "legged" ? (legs === 0 ? "limbless" : legs === 2 ? "bipedal" : legs === 4 ? "quadrupedal" : legs === 6 ? "hexapodal" : "multipedal") : plan.locomotion;
++    plan.locomotion === "legged" ? (legs === 0 ? "limbless" : legs === 2 ? "bipedal" : legs === 4 ? "quadrupedal" : legs === 6 ? "hexapodal" : "multipedal")
++      : (plan.locomotion === "appendage-driven" || plan.locomotion === "radial") && !hasLocomotor ? "limbless"
++      : plan.locomotion;
+ 
+   // ---- Provenienza ----
+   const trait = (tr: { value: number | null; geneId: string; source: DataSource }, note: string): DataSource => (tr.value === null ? und(`dato mancante: ${tr.geneId}`) : { ...tr.source, note });
+@@ -220,37 +296,47 @@ export function generateAnatomy(input: AnatomyInput): AnatomyDescriptor {
+   };
+   for (const k of REQUIRED_PROVENANCE_KEYS) if (!(k in provenance)) throw new Error(`G2: provenienza mancante: ${k}`);
+ 
+-  const radialGroup = plan.groups.find((g) => g.placement === "radial");
+-  const symmetryOrder = plan.symmetry === "bilateral" ? 2 : plan.symmetry === "spherical" ? 0 : plan.symmetry === "none" ? 1 : Math.max(1, radialGroup ? appendages.filter((a) => a.groupId === radialGroup.id).length : 1);
++  const lod = normLod(input.lod);
+   const full = assembleDescriptor({
+     lod: 3,
+     bodyPlan: { id: plan.id, family: plan.family, origin },
+-    symmetry: { type: plan.symmetry, order: symmetryOrder },
++    symmetry: { type: symType, order: symOrder },
+     segments, appendages, joints,
+     sizeScale, robustness: statureN,
+     surface: { covering: ph.derived.surfaceCovering.value, furCoverage: furN, armorCoverage: armorN },
+     locomotionMode: mode,
+-    aesthetic: { seed: jitterOn ? (input.seed as number) >>> 0 : null, jitter: rd(globalJitter) },
++    aesthetic: { seed: jitterOn ? (seed as number) : null, jitter: rd(globalJitter) },
+     provenance, phenotypeIssues: ph.issues,
+   });
+-  return input.lod === undefined || input.lod >= 3 ? full : reduceAnatomyDetail(full, input.lod);
++  return lod >= 3 ? full : reduceAnatomyDetail(full, lod);
+ }
+ 
+-// ---- Cache deterministica (per migliaia di organismi: stesso input quantizzato → stesso oggetto immutabile) ----
++// ---- Cache deterministica (per migliaia di organismi: stesso input normalizzato → stesso oggetto immutabile) ----
+ const CACHE_LIMIT = 4096;
+ const cache = new WeakMap<BodyPlanSpec, Map<string, AnatomyDescriptor>>();
+ 
+-function cacheKey(i: AnatomyInput): string {
++/**
++ * Chiave di cache: contiene TUTTO ciò che il generatore legge (valori e stati dei tratti, valori derivati, problemi, seme normalizzato,
++ * lod normalizzato, conteggi effettivi per gruppo). Due input con la stessa chiave producono lo stesso descriptor.
++ */
++export function anatomyCacheKey(i: AnatomyInput): string {
+   const t = i.phenotype.traits;
+-  const tv = (x: { value: number | null; status: string }) => `${x.status}:${x.value === null ? "x" : q3(x.value)}`;
+-  const counts = i.appendageCounts ? Object.keys(i.appendageCounts).sort().map((k) => `${k}=${i.appendageCounts![k]}`).join(",") : "";
+-  return [i.seed ?? "n", i.origin ?? "explicit", i.lod ?? 3, counts, tv(t.size), tv(t.bodyStature), tv(t.furDensity), tv(t.dermalArmor)].join("|");
++  const tv = (x: { value: number | null; status: string }) => [x.status, x.value === null ? null : q3(x.value)];
++  return canonicalJson([
++    normSeed(i.seed) ?? null, i.origin ?? "explicit", normLod(i.lod),
++    i.bodyPlan.groups.map((g) => [g.id, requestedCount(g, i.appendageCounts?.[g.id])]),
++    tv(t.size), tv(t.bodyStature), tv(t.furDensity), tv(t.dermalArmor),
++    q3(i.phenotype.derived.sizeScale.value), q3(i.phenotype.derived.radiusFactor.value), i.phenotype.derived.surfaceCovering.value, i.phenotype.issues,
++  ]);
+ }
+ 
++/** Come `generateAnatomy`, con cache. Gli spec NON congelati (modificabili) non vengono mai messi in cache. */
+ export function generateAnatomyCached(input: AnatomyInput): AnatomyDescriptor {
+-  let m = cache.get(input.bodyPlan);
+-  if (!m) { m = new Map(); cache.set(input.bodyPlan, m); }
+-  const key = cacheKey(input);
++  const plan = input.bodyPlan;
++  if (!plan || typeof plan !== "object" || !isDeepFrozen(plan)) return generateAnatomy(input);
++  let m = cache.get(plan);
++  if (!m) { m = new Map(); cache.set(plan, m); }
++  const key = anatomyCacheKey(input);
+   const hit = m.get(key);
+   if (hit) return hit;
+   const d = generateAnatomy(input);
+diff --git a/lib/anatomy/geometry.ts b/lib/anatomy/geometry.ts
+new file mode 100644
+index 0000000..c516c6a
+--- /dev/null
++++ b/lib/anatomy/geometry.ts
+@@ -0,0 +1,50 @@
++import type { Segment } from "./types";
++
++/**
++ * G2 — Geometria dei segmenti (pura). Serve a collocare le radici delle appendici SULLA superficie del segmento ospite
++ * invece che su un riquadro. Convenzioni in docs/graphics/G2_GEOMETRY_CONVENTIONS.md.
++ */
++export const BODY_ROLES: ReadonlySet<string> = new Set(["core", "trunk", "thorax", "abdomen", "lobe"]);
++/** Le radici sono incassate leggermente nel segmento. */
++const EMBED = 0.97;
++
++/** Frazione (0..1) della sezione trasversale massima del segmento alla coordinata z. */
++export function profile(s: Segment, z: number): number {
++  const hz = s.halfExtents.z;
++  const dz = z - s.center.z;
++  if (Math.abs(dz) > hz) return 0;
++  if (s.shape === "cone") return (dz + hz) / (2 * hz); // apice a -Z
++  if (s.shape === "capsule") {
++    const cap = Math.min(hz, Math.max(s.halfExtents.x, s.halfExtents.y));
++    const edge = hz - cap;
++    if (Math.abs(dz) <= edge) return 1;
++    const t = (Math.abs(dz) - edge) / cap;
++    return Math.sqrt(Math.max(0, 1 - t * t));
++  }
++  const t = dz / hz;
++  return Math.sqrt(Math.max(0, 1 - t * t));
++}
++
++/** Quota y della superficie superiore (sy=1) o inferiore (sy=-1) del segmento in (x, z). */
++export function surfaceY(s: Segment, x: number, z: number, sy: 1 | -1): number {
++  const f = profile(s, z);
++  const w = s.halfExtents.x * f;
++  const xr = w > 1e-9 ? Math.min(1, Math.abs(x - s.center.x) / w) : 0;
++  return s.center.y + sy * s.halfExtents.y * f * Math.sqrt(1 - xr * xr) * EMBED;
++}
++
++/** Semilarghezza (|x| dal centro) della superficie laterale alla quota y e coordinata z. */
++export function surfaceHalfWidth(s: Segment, y: number, z: number): number {
++  const f = profile(s, z);
++  const h = s.halfExtents.y * f;
++  const yr = h > 1e-9 ? Math.min(1, Math.abs(y - s.center.y) / h) : 0;
++  return s.halfExtents.x * f * Math.sqrt(1 - yr * yr) * EMBED;
++}
++
++/** Coordinata z della punta anteriore (front=true) o posteriore del segmento alla distanza laterale x e quota y. */
++export function surfaceEndZ(s: Segment, x: number, y: number, front: boolean): number {
++  const nx = Math.min(1, Math.abs(x - s.center.x) / s.halfExtents.x);
++  const ny = Math.min(1, Math.abs(y - s.center.y) / s.halfExtents.y);
++  const k = s.shape === "cone" ? 1 : Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny)) * EMBED;
++  return s.center.z + (front ? 1 : -1) * s.halfExtents.z * k;
++}
+diff --git a/lib/anatomy/types.ts b/lib/anatomy/types.ts
+index ca69dec..b10f2f9 100644
+--- a/lib/anatomy/types.ts
++++ b/lib/anatomy/types.ts
+@@ -2,10 +2,21 @@ import type { DataSource, SurfaceCovering } from "../phenotype/types";
+ 
+ /**
+  * G2 — AnatomyDescriptor: contratto anatomico centrale. Deterministico, serializzabile, indipendente dal rendering.
+- * Sistema di coordinate (come l'anatomia legacy): +Z avanti, +Y su, +X lato sinistro; creatura di taglia unitaria,
+- * il renderer applica `proportions.sizeScale`. Nessun import da React, Three.js o dal renderer.
++ *
++ * CONVENZIONI GEOMETRICHE (dettaglio in docs/graphics/G2_GEOMETRY_CONVENTIONS.md):
++ *  - Mano destra: +Z avanti (muso), +Y su, +X lato SINISTRO della creatura. Unità = taglia unitaria; il renderer applica `sizeScale`.
++ *  - Origine: x=0 sull'asse di simmetria; z centrato sull'estensione dei segmenti; y relativo all'asse del corpo (NON al terreno).
++ *  - Segmento: `center` + `halfExtents` (semiassi lungo X, Y, Z). sphere/ellipsoid: ellissoide; capsule: cilindro con calotte;
++ *    cone: asse lungo Z, base a +Z, apice a -Z.
++ *  - Appendice: `position` = radice sul segmento ospite, `direction` = versore unitario, `length` lungo `direction`.
++ *    La punta è stimata in linea retta (`position + direction*length`): gli angoli di piegatura delle sezioni non sono modellati.
++ *  - Il terreno NON è y=0: `proportions.groundY` è la quota (in questo sistema) dei piedi d'appoggio, determinabile solo se
++ *    esistono zampe d'appoggio (direction.y <= -0,5); altrimenti null.
++ * Nessun import da React, Three.js o dal renderer.
+  */
+-export const ANATOMY_SCHEMA_VERSION = 1 as const;
++export const ANATOMY_SCHEMA_VERSION = 2 as const;
++/** Appendici che possono muovere l'organismo. Usate per la coerenza della modalità locomotoria. */
++export const LOCOMOTOR_KINDS: readonly AppendageKind[] = Object.freeze<AppendageKind[]>(["leg", "arm", "tentacle", "fin", "tail", "flagellum", "pseudopod"]);
+ /** Tetto di appendici per organismo (protezione di performance e di validità). */
+ export const MAX_APPENDAGES = 64;
+ 
+@@ -67,14 +78,27 @@ export interface Joint {
+   readonly section: number | null;
+ }
+ 
++export interface AnatomyBounds { readonly min: Vec3; readonly max: Vec3 }
++
+ export interface AnatomyProportions {
+   readonly sizeScale: number;
+   /** 0..1, 0,5 neutro. */
+   readonly robustness: number;
++  /** Estensione dei soli segmenti (AABB). */
+   readonly bodyLength: number;
+   readonly bodyWidth: number;
+   readonly bodyHeight: number;
+-  readonly groundClearance: number;
++  /** Estensione complessiva: segmenti + appendici (punta stimata in linea retta, raggio incluso). */
++  readonly extentLength: number;
++  readonly extentWidth: number;
++  readonly extentHeight: number;
++  readonly bounds: AnatomyBounds;
++  /** Quota dei piedi d'appoggio nel sistema del descriptor; null se non determinabile (nessuna zampa d'appoggio). */
++  readonly groundY: number | null;
++  /** Distanza tra il punto più basso dei segmenti e il terreno (>= 0); null se non determinabile. */
++  readonly groundClearance: number | null;
++  /** Distanza tra il punto più alto dell'organismo e il terreno; null se non determinabile. */
++  readonly heightAboveGround: number | null;
+ }
+ 
+ export interface AnatomySurface {
+@@ -88,7 +112,6 @@ export interface AnatomySurface {
+ export interface AnatomyLocomotion {
+   readonly mode: LocomotionMode;
+   readonly supportingLimbs: number;
+-  readonly groundClearance: number;
+ }
+ 
+ export interface AnatomyComplexity {
+diff --git a/lib/anatomy/validate.ts b/lib/anatomy/validate.ts
+index 14345f5..1bc1ae6 100644
+--- a/lib/anatomy/validate.ts
++++ b/lib/anatomy/validate.ts
+@@ -1,6 +1,6 @@
+-import { computeComplexity, computeFingerprint } from "./assemble";
++import { computeComplexity, computeExtents, computeFingerprint } from "./assemble";
+ import { MORPHOLOGICAL_GENE_IDS } from "../phenotype/derive";
+-import { ANATOMY_SCHEMA_VERSION, MAX_APPENDAGES, REQUIRED_PROVENANCE_KEYS, type AnatomyDescriptor } from "./types";
++import { ANATOMY_SCHEMA_VERSION, LOCOMOTOR_KINDS, MAX_APPENDAGES, REQUIRED_PROVENANCE_KEYS, type AnatomyDescriptor } from "./types";
+ import { canonicalJson, rd } from "./util";
+ 
+ export interface AnatomyValidation { readonly ok: boolean; readonly errors: readonly string[] }
+@@ -58,6 +58,13 @@ export function validateAnatomy(input: unknown): AnatomyValidation {
+     if (!KINDS.has(a.kind)) errors.push(`bad-kind:${a.id}`);
+     if (!SIDES.has(a.side)) errors.push(`bad-side:${a.id}`);
+     if (!isVec(a.position) || !isVec(a.direction)) errors.push(`bad-vector:${a.id}`);
++    else {
++      if (Math.abs(Math.hypot(a.direction.x, a.direction.y, a.direction.z) - 1) > 1e-3) errors.push(`direction-not-unit:${a.id}`);
++      const host = d.segments.find((sg) => sg.id === a.segmentId);
++      if (host && isVec(host.center) && isVec(host.halfExtents)) {
++        for (const ax of ["x", "y", "z"] as const) if (Math.abs(a.position[ax] - host.center[ax]) > host.halfExtents[ax] * 1.1 + (isNum(a.radius) ? a.radius : 0) + 1e-6) { errors.push(`appendage-off-host:${a.id}:${ax}`); break; }
++      }
++    }
+     if (!(isNum(a.length) && a.length > 0 && isNum(a.radius) && a.radius > 0)) errors.push(`bad-dimensions:${a.id}`);
+     if (!Number.isInteger(a.sectionCount) || a.sectionCount < 1 || a.sectionCount > 3) errors.push(`bad-section-count:${a.id}`);
+   }
+@@ -109,12 +116,39 @@ export function validateAnatomy(input: unknown): AnatomyValidation {
+       else if (a.side === "right") bal.set(sig(a), (bal.get(sig(a)) ?? 0) - 1);
+     }
+     for (const [k, v] of bal) if (v !== 0) errors.push(`asymmetric-pair:${k}`);
+-  } else if (d.symmetry.type === "spherical" && d.symmetry.order !== 0) errors.push("spherical-order");
+-  else if (d.symmetry.type === "none" && d.symmetry.order !== 1) errors.push("none-order");
++  } else if (d.symmetry.type === "spherical") {
++    if (d.symmetry.order !== 0) errors.push("spherical-order");
++    if (d.appendages.length > 0) errors.push("spherical-with-appendages");
++  } else if (d.symmetry.type === "none") {
++    if (d.symmetry.order !== 1) errors.push("none-order");
++  } else if (d.symmetry.type === "radial") {
++    const byGroup = new Map<string, (typeof d.appendages)[number][]>();
++    for (const a of d.appendages) byGroup.set(a.groupId, [...(byGroup.get(a.groupId) ?? []), a]);
++    for (const [gid, list] of byGroup) {
++      if (list.length < 2) continue;
++      if (list.some((a) => a.angle === null)) { errors.push(`radial-group-not-ring:${gid}`); continue; }
++      if (d.symmetry.order === 0 || list.length % d.symmetry.order !== 0) errors.push(`radial-order-incompatible:${gid}:${list.length}/${d.symmetry.order}`);
++      const angs = list.map((a) => a.angle as number).sort((x, y) => x - y);
++      const step = (2 * Math.PI) / list.length;
++      for (let i = 1; i < angs.length; i++) if (Math.abs(angs[i] - angs[i - 1] - step) > 1e-3) { errors.push(`radial-angles-uneven:${gid}`); break; }
++    }
++  }
+ 
+   // ---- Proporzioni, superficie, locomozione, complessità ----
+   const p = d.proportions;
+-  if (!p || ![p.sizeScale, p.robustness, p.bodyLength, p.bodyWidth, p.bodyHeight, p.groundClearance].every(isNum) || p.sizeScale <= 0 || p.bodyLength <= 0 || p.bodyWidth <= 0 || p.bodyHeight <= 0) errors.push("bad-proportions");
++  const vec3 = (v: unknown) => isVec(v);
++  if (!p || ![p.sizeScale, p.robustness, p.bodyLength, p.bodyWidth, p.bodyHeight, p.extentLength, p.extentWidth, p.extentHeight].every(isNum) || p.sizeScale <= 0 || p.bodyLength <= 0 || p.bodyWidth <= 0 || p.bodyHeight <= 0 || !p.bounds || !vec3(p.bounds.min) || !vec3(p.bounds.max)) errors.push("bad-proportions");
++  else {
++    for (const k of ["groundY", "groundClearance", "heightAboveGround"] as const) if (p[k] !== null && !isNum(p[k])) errors.push(`bad-${k}`);
++    if (p.groundClearance !== null && p.groundClearance < 0) errors.push("negative-ground-clearance");
++    if ((p.groundY === null) !== (p.groundClearance === null) || (p.groundY === null) !== (p.heightAboveGround === null)) errors.push("ground-fields-inconsistent");
++    // l'estensione complessiva non può essere minore di quella del solo corpo, e deve coincidere con il ricalcolo dalla geometria (livello completo)
++    if (p.extentLength + 1e-6 < p.bodyLength || p.extentWidth + 1e-6 < p.bodyWidth || p.extentHeight + 1e-6 < p.bodyHeight) errors.push("extent-smaller-than-body");
++    if (d.lod === 3 && errors.length === 0) {
++      const ext = computeExtents(d.segments, d.appendages);
++      if (canonicalJson({ ...ext }) !== canonicalJson({ bodyLength: p.bodyLength, bodyWidth: p.bodyWidth, bodyHeight: p.bodyHeight, extentLength: p.extentLength, extentWidth: p.extentWidth, extentHeight: p.extentHeight, bounds: p.bounds, groundY: p.groundY, groundClearance: p.groundClearance, heightAboveGround: p.heightAboveGround })) errors.push("proportions-mismatch");
++    }
++  }
+   if (!d.surface || !COVERINGS.has(d.surface.covering)) errors.push("bad-covering");
+   else for (const k of ["furCoverage", "armorCoverage"] as const) {
+     const v = d.surface[k];
+@@ -125,6 +159,7 @@ export function validateAnatomy(input: unknown): AnatomyValidation {
+     const legs = d.appendages.filter((a) => a.kind === "leg").length;
+     const m = d.locomotion.mode;
+     if (d.locomotion.supportingLimbs !== legs) errors.push("supporting-limbs-mismatch");
++    if ((m === "appendage-driven" || m === "radial") && !d.appendages.some((a) => LOCOMOTOR_KINDS.includes(a.kind))) errors.push(`locomotion-without-locomotor-appendages:${m}`);
+     if ((m === "bipedal" && legs !== 2) || (m === "quadrupedal" && legs !== 4) || (m === "hexapodal" && legs !== 6) || (m === "limbless" && legs !== 0) || (m === "multipedal" && [0, 2, 4, 6].includes(legs))) errors.push(`locomotion-inconsistent:${m}:${legs}`);
+   }
+   const cx = computeComplexity(d.segments, d.appendages, d.joints);
+diff --git a/tests/anatomyG2.test.ts b/tests/anatomyG2.test.ts
+index ab6255c..15264e4 100644
+--- a/tests/anatomyG2.test.ts
++++ b/tests/anatomyG2.test.ts
+@@ -9,6 +9,7 @@ import {
+   speculativeBodyPlanId, validateAnatomy, validateBodyPlanSpec, type AnatomyDescriptor,
+ } from "../lib/anatomy";
+ 
++const noArmor = derivePhenotype({ size: 1, ext: { bodyStature: 0.5, furDensity: 0.2, dermalArmor: 0 } });
+ const genome = { size: 1.1, ext: { bodyStature: 0.7, furDensity: 0.6, dermalArmor: 0.3 } };
+ const ph = derivePhenotype(genome);
+ const gen = (id: string, extra: Partial<Parameters<typeof generateAnatomy>[0]> = {}) => generateAnatomy({ phenotype: ph, bodyPlan: BODY_PLAN_CATALOG[id], ...extra });
+@@ -54,8 +55,9 @@ describe("G2 anatomia — body plan e validità", () => {
+     const legs = (id: string) => gen(id).appendages.filter((a) => a.kind === "leg").length;
+     expect([legs("biped"), legs("quadruped"), legs("hexapod"), legs("many-legged"), legs("limbless-serpentine"), legs("simple-sphere")]).toEqual([2, 4, 6, 16, 0, 0]);
+     expect([gen("biped").locomotion.mode, gen("quadruped").locomotion.mode, gen("hexapod").locomotion.mode, gen("many-legged").locomotion.mode, gen("limbless-serpentine").locomotion.mode]).toEqual(["bipedal", "quadrupedal", "hexapodal", "multipedal", "undulatory"]);
+-    expect(gen("simple-sphere").symmetry.type).toBe("spherical");
+-    expect(gen("radial-sessile").symmetry).toEqual({ type: "radial", order: 5 });
++    expect(generateAnatomy({ phenotype: noArmor, bodyPlan: BODY_PLAN_CATALOG["simple-sphere"] }).symmetry).toEqual({ type: "spherical", order: 0 });
++    expect(gen("simple-sphere").symmetry.type).toBe("radial"); // con placche dorsali la sfera non è più isotropa
++    expect(generateAnatomy({ phenotype: noArmor, bodyPlan: BODY_PLAN_CATALOG["radial-sessile"] }).symmetry).toEqual({ type: "radial", order: 5 });
+     expect(gen("simple-asymmetric").symmetry.type).toBe("none");
+     expect(gen("armored-specialist").complexity.level).toBeGreaterThanOrEqual(gen("simple-sphere").complexity.level);
+   });
+@@ -67,7 +69,7 @@ describe("G2 anatomia — body plan e validità", () => {
+       expect(validateAnatomy(d).errors).toEqual([]);
+     }
+     expect(gen("many-legged", { appendageCounts: { legs: 100000 } }).appendages.filter((a) => a.kind === "leg").length).toBe(40);
+-    expect(gen("radial-sessile", { appendageCounts: { arms: 8 } }).symmetry.order).toBe(8);
++    expect(generateAnatomy({ phenotype: noArmor, bodyPlan: BODY_PLAN_CATALOG["radial-sessile"], appendageCounts: { arms: 8 } }).symmetry.order).toBe(8);
+     expect(gen("quadruped", { appendageCounts: { legs: Number.NaN } }).appendages.filter((a) => a.kind === "leg").length).toBe(4);
+     const many = generateAnatomy({ phenotype: derivePhenotype({ size: 1, ext: { dermalArmor: 0.6 } }), bodyPlan: BODY_PLAN_CATALOG["many-legged"], appendageCounts: { legs: 40, antennae: 4 } });
+     expect(many.appendages.length).toBeLessThanOrEqual(MAX_APPENDAGES);
+@@ -128,7 +130,7 @@ describe("G2 anatomia — serializzazione", () => {
+   it("rifiuta JSON corrotto, versioni sconosciute e dati manomessi senza lanciare", () => {
+     const d = gen("quadruped");
+     expect(deserializeAnatomy("{").errors).toEqual(["invalid-json"]);
+-    expect(deserializeAnatomy(JSON.stringify({ ...d, schemaVersion: 2 })).ok).toBe(false);
++    expect(deserializeAnatomy(JSON.stringify({ ...d, schemaVersion: 99 })).ok).toBe(false);
+     expect(deserializeAnatomy(serializeAnatomy(d).replace('"mid"', '"left"')).ok).toBe(false);
+     expect(deserializeAnatomy(123 as unknown as string).ok).toBe(false);
+   });
+diff --git a/tests/anatomyG2Review.test.ts b/tests/anatomyG2Review.test.ts
+new file mode 100644
+index 0000000..51fef16
+--- /dev/null
++++ b/tests/anatomyG2Review.test.ts
+@@ -0,0 +1,594 @@
++import { readdirSync, readFileSync } from "node:fs";
++import { join } from "node:path";
++import { describe, expect, it } from "vitest";
++import { computeCreatureAnatomy } from "../lib/creatureAnatomy";
++import { derivePhenotype, type PhenotypeProfile } from "../lib/phenotype";
++import {
++  BODY_PLAN_CATALOG, BODY_PLAN_IDS, LOCOMOTOR_KINDS, MAX_APPENDAGES, anatomyCacheKey, compareLegacyAnatomy, computeFingerprint, deserializeAnatomy,
++  descriptorFromLegacyAnatomy, generateAnatomy, generateAnatomyCached, reduceAnatomyDetail, serializeAnatomy, validateAnatomy, validateBodyPlanSpec,
++  type AnatomyDescriptor, type BodyPlanSpec, type DetailTier,
++} from "../lib/anatomy";
++import { deepFreeze } from "../lib/anatomy/util";
++
++/** G2 review & hardening — suite di regressione. Ogni blocco "anomalia" riproduce un difetto dimostrato dalla diagnostica di revisione. */
++const PH = {
++  normal: derivePhenotype({ size: 1.1, ext: { bodyStature: 0.7, furDensity: 0.6, dermalArmor: 0.3 } }),
++  armored: derivePhenotype({ size: 1.1, ext: { bodyStature: 0.5, furDensity: 0, dermalArmor: 0.6 } }),
++  bare: derivePhenotype({ size: 1.1, ext: { bodyStature: 0.5, furDensity: 0, dermalArmor: 0 } }),
++  missing: derivePhenotype(undefined),
++};
++const gen = (id: string, ph: PhenotypeProfile = PH.normal, extra: Partial<Parameters<typeof generateAnatomy>[0]> = {}) => generateAnatomy({ phenotype: ph, bodyPlan: BODY_PLAN_CATALOG[id], ...extra });
++const clone = (d: AnatomyDescriptor) => JSON.parse(JSON.stringify(d));
++/** Ricalcola il fingerprint di un descriptor manomesso, per verificare che la validazione strutturale (non solo l'hash) lo rifiuti. */
++const refp = (d: any) => { d.fingerprint = computeFingerprint(d); return d; };
++const freezePlan = (p: unknown): BodyPlanSpec => deepFreeze(JSON.parse(JSON.stringify(p)) as BodyPlanSpec);
++/** Fingerprint di riferimento calcolati dall'implementazione verificata; cambiano solo se cambia la geometria o il contratto (da rivedere consapevolmente). */
++const GOLDEN = { quadruped: "fcd614c7", radial: "3a295988", many: "8d9aedce" };
++const ellipsoidHost = (d: AnatomyDescriptor, segId: string) => d.segments.find((s) => s.id === segId)!;
++
++describe("G2 review — tutti i body plan, tutte le condizioni", () => {
++  const scenarios: [string, PhenotypeProfile, number | undefined][] = [
++    ["normale", PH.normal, undefined], ["normale+seme", PH.normal, 17], ["corazzato", PH.armored, undefined], ["corazzato+seme", PH.armored, 99],
++    ["nudo", PH.bare, 5], ["geni mancanti", PH.missing, undefined],
++  ];
++  for (const id of BODY_PLAN_IDS) {
++    it(`${id}: descriptor valido in ogni scenario`, () => {
++      for (const [name, ph, seed] of scenarios) expect(validateAnatomy(gen(id, ph, { seed })), `${id}/${name}`).toEqual({ ok: true, errors: [] });
++    });
++    it(`${id}: ogni conteggio di appendici per gruppo (min, default, max, dispari) resta valido`, () => {
++      for (const g of BODY_PLAN_CATALOG[id].groups) for (const n of [g.minCount, g.count, g.count + 1, g.maxCount]) {
++        const d = gen(id, PH.armored, { appendageCounts: { [g.id]: n }, seed: 3 });
++        expect(validateAnatomy(d), `${id}/${g.id}=${n}`).toEqual({ ok: true, errors: [] });
++        expect(d.appendages.filter((a) => a.groupId === g.id).length).toBe(Math.min(Math.max(n, g.minCount), g.maxCount));
++      }
++    });
++  }
++  it("rispetta il limite massimo di appendici in ogni combinazione di massimi", () => {
++    for (const id of BODY_PLAN_IDS) {
++      const counts = Object.fromEntries(BODY_PLAN_CATALOG[id].groups.map((g) => [g.id, g.maxCount]));
++      expect(gen(id, PH.armored, { appendageCounts: counts }).appendages.length).toBeLessThanOrEqual(MAX_APPENDAGES);
++    }
++  });
++});
++
++describe("G2 review — anomalia: appendici fuori posizione", () => {
++  it("le radici stanno sulla superficie del segmento ospite (ospiti ellissoidali/sferici)", () => {
++    let checked = 0;
++    for (const id of BODY_PLAN_IDS) for (const ph of [PH.normal, PH.armored]) {
++      const d = gen(id, ph, { seed: 4 });
++      for (const a of d.appendages) {
++        const h = ellipsoidHost(d, a.segmentId);
++        if (h.shape !== "ellipsoid" && h.shape !== "sphere") continue;
++        const r = Math.hypot((a.position.x - h.center.x) / h.halfExtents.x, (a.position.y - h.center.y) / h.halfExtents.y, (a.position.z - h.center.z) / h.halfExtents.z);
++        expect(r, `${id}/${a.id}`).toBeGreaterThan(0.9);
++        expect(r, `${id}/${a.id}`).toBeLessThan(1.02);
++        checked++;
++      }
++    }
++    expect(checked).toBeGreaterThan(200);
++  });
++  it("il validatore rifiuta un'appendice lontana dal suo segmento", () => {
++    const d = clone(gen("quadruped"));
++    d.appendages[0].position.x += 5;
++    expect(validateAnatomy(refp(d)).errors.some((e) => e.startsWith("appendage-off-host"))).toBe(true);
++  });
++  it("ogni direzione è un versore, anche per conteggi dispari", () => {
++    for (const id of BODY_PLAN_IDS) for (const g of BODY_PLAN_CATALOG[id].groups) {
++      for (const a of gen(id, PH.armored, { appendageCounts: { [g.id]: g.count + 1 } }).appendages) expect(Math.hypot(a.direction.x, a.direction.y, a.direction.z)).toBeCloseTo(1, 3);
++    }
++    const bad = clone(gen("quadruped")); bad.appendages[0].direction = { x: 0, y: 0, z: 0 };
++    expect(validateAnatomy(refp(bad)).errors).toContain(`direction-not-unit:${bad.appendages[0].id}`);
++  });
++  it("una zampa dispari sulla linea mediana punta verso il basso, non all'indietro", () => {
++    for (const id of ["quadruped", "biped", "hexapod", "many-legged", "armored-specialist"]) {
++      const d = gen(id, PH.normal, { appendageCounts: { legs: BODY_PLAN_CATALOG[id].groups.find((g) => g.id === "legs")!.count + 1 } });
++      const mid = d.appendages.filter((a) => a.kind === "leg" && a.side === "mid");
++      expect(mid.length, id).toBe(1);
++      expect(mid[0].direction.y, id).toBeLessThan(-0.9);
++    }
++  });
++  it("gli occhi in numero dispari non producono vettori nulli", () => {
++    const d = gen("quadruped", PH.normal, { appendageCounts: { eyes: 3 } });
++    expect(validateAnatomy(d).ok).toBe(true);
++    expect(d.appendages.filter((a) => a.variant === "eye" && a.side === "mid")[0].direction.y).toBeCloseTo(1, 3);
++  });
++});
++
++describe("G2 review — anomalia: placche concentrate su un solo segmento", () => {
++  it("le placche si distribuiscono lungo i segmenti del corpo, non su uno solo", () => {
++    for (const id of BODY_PLAN_IDS) {
++      const plan = BODY_PLAN_CATALOG[id];
++      if (plan.layout !== "axial") continue;
++      const d = gen(id, PH.armored);
++      const plates = d.appendages.filter((a) => a.kind === "plate");
++      expect(plates.length, id).toBe(8);
++      const zone = d.segments.filter((s) => ["core", "trunk", "thorax", "abdomen", "lobe"].includes(s.role));
++      const zmin = Math.min(...zone.map((s) => s.center.z - s.halfExtents.z)), zmax = Math.max(...zone.map((s) => s.center.z + s.halfExtents.z));
++      const zs = plates.map((p) => p.position.z);
++      expect(Math.min(...zs), id).toBeGreaterThanOrEqual(zmin - 1e-6);
++      expect(Math.max(...zs), id).toBeLessThanOrEqual(zmax + 1e-6);
++      expect(Math.max(...zs) - Math.min(...zs), id).toBeGreaterThanOrEqual(0.75 * 0.8 * (zmax - zmin));
++      expect(plates.every((p) => ["core", "trunk", "thorax", "abdomen", "lobe"].includes(d.segments.find((s) => s.id === p.segmentId)!.role)), id).toBe(true);
++    }
++  });
++  it("senza dato di corazza (o sotto soglia) non ci sono placche", () => {
++    expect(gen("quadruped", PH.missing).appendages.some((a) => a.kind === "plate")).toBe(false);
++    expect(gen("quadruped", PH.bare).appendages.some((a) => a.kind === "plate")).toBe(false);
++  });
++});
++
++describe("G2 review — proporzioni, estensioni e terreno (computeExtents)", () => {
++  it("l'estensione complessiva include le appendici e non è mai minore del corpo", () => {
++    for (const id of BODY_PLAN_IDS) {
++      const d = gen(id, PH.normal);
++      const p = d.proportions;
++      expect(p.extentLength, id).toBeGreaterThanOrEqual(p.bodyLength - 1e-6);
++      expect(p.extentWidth, id).toBeGreaterThanOrEqual(p.bodyWidth - 1e-6);
++      expect(p.extentHeight, id).toBeGreaterThanOrEqual(p.bodyHeight - 1e-6);
++      for (const a of d.appendages) {
++        for (const ax of ["x", "y", "z"] as const) {
++          const tip = a.position[ax] + a.direction[ax] * a.length;
++          expect(p.bounds.min[ax] - 1e-5, `${id}/${a.id}`).toBeLessThanOrEqual(Math.min(a.position[ax], tip) - a.radius + 1e-5);
++          expect(p.bounds.max[ax] + 1e-5, `${id}/${a.id}`).toBeGreaterThanOrEqual(Math.max(a.position[ax], tip) + a.radius - 1e-5);
++        }
++      }
++    }
++    const star = gen("speculative-multi-arm", PH.bare);
++    expect(star.proportions.extentWidth).toBeGreaterThan(2 * star.proportions.bodyWidth);
++  });
++  it("il terreno si ricava dalla punta delle zampe d'appoggio, non dalla loro lunghezza", () => {
++    for (const id of ["quadruped", "biped", "hexapod", "many-legged", "armored-specialist"]) {
++      const d = gen(id, PH.normal);
++      const legs = d.appendages.filter((a) => a.kind === "leg" && a.direction.y <= -0.5);
++      const foot = Math.min(...legs.map((l) => l.position.y + l.direction.y * l.length - l.radius));
++      const bottom = Math.min(...d.segments.map((s) => s.center.y - s.halfExtents.y));
++      expect(d.proportions.groundY, id).toBeCloseTo(foot, 5);
++      expect(d.proportions.groundClearance, id).toBeCloseTo(Math.max(0, bottom - foot), 5);
++      expect(d.proportions.heightAboveGround, id).toBeCloseTo(d.proportions.bounds.max.y - foot, 5);
++      const longest = Math.max(...legs.map((l) => l.length));
++      expect(Math.abs((d.proportions.groundClearance as number) - longest), id).toBeGreaterThan(1e-3); // non coincide con la lunghezza di una gamba
++    }
++  });
++  it("una zampa più lunga abbassa il terreno e alza la distanza, a parità di corpo", () => {
++    const base = gen("quadruped", PH.normal), ground = base.proportions.groundY as number;
++    const plan = freezePlan({ ...BODY_PLAN_CATALOG.quadruped, groups: BODY_PLAN_CATALOG.quadruped.groups.map((g) => (g.id === "legs" ? { ...g, length: g.length * 2 } : g)) });
++    const longer = generateAnatomy({ phenotype: PH.normal, bodyPlan: plan });
++    expect(longer.proportions.groundY as number).toBeLessThan(ground);
++    expect(longer.proportions.groundClearance as number).toBeGreaterThan(base.proportions.groundClearance as number);
++  });
++  it("il terreno non è determinabile senza zampe d'appoggio (null, mai un numero inventato)", () => {
++    for (const id of ["simple-sphere", "simple-elongated", "segmented-worm", "radial-sessile", "limbless-serpentine", "speculative-multi-arm"]) {
++      const p = gen(id, PH.bare).proportions;
++      expect([p.groundY, p.groundClearance, p.heightAboveGround], id).toEqual([null, null, null]);
++    }
++    const noLegs = gen("quadruped", PH.bare, { appendageCounts: { legs: 0 } });
++    expect(noLegs.proportions.groundY).toBeNull();
++  });
++  it("il validatore rifiuta proporzioni incoerenti con la geometria", () => {
++    const d = clone(gen("quadruped")); d.proportions.groundClearance = 99;
++    expect(validateAnatomy(refp(d)).errors).toContain("proportions-mismatch");
++    const e = clone(gen("quadruped")); e.proportions.groundClearance = null;
++    expect(validateAnatomy(refp(e)).errors).toContain("ground-fields-inconsistent");
++    const f = clone(gen("quadruped")); f.proportions.extentLength = 0.1;
++    expect(validateAnatomy(refp(f)).errors).toContain("extent-smaller-than-body");
++  });
++  it("conserva le proporzioni dell'organismo intero a ogni livello di dettaglio", () => {
++    const full = gen("hexapod");
++    for (const tier of [2, 1, 0] as const) expect(reduceAnatomyDetail(full, tier).proportions).toEqual(full.proportions);
++  });
++});
++
++describe("G2 review — simmetria", () => {
++  it("bilaterale: ogni coppia è speculare in posizione, lunghezza e raggio", () => {
++    for (const id of BODY_PLAN_IDS.filter((x) => BODY_PLAN_CATALOG[x].symmetry === "bilateral")) for (const seed of [undefined, 8]) {
++      const d = gen(id, PH.normal, { seed });
++      expect(d.symmetry).toEqual({ type: "bilateral", order: 2 });
++      for (const s of d.segments) expect(s.center.x).toBe(0);
++      for (const a of d.appendages.filter((x) => x.side === "left")) {
++        const m = d.appendages.find((b) => b.side === "right" && b.groupId === a.groupId && b.segmentId === a.segmentId && b.position.z === a.position.z && b.position.y === a.position.y && b.position.x === -a.position.x);
++        expect(m, `${id}/${a.id}`).toBeDefined();
++        expect(m!.length).toBe(a.length); expect(m!.radius).toBe(a.radius);
++      }
++    }
++  });
++  it("radiale: l'ordine è il massimo comun divisore dei gruppi ad anello", () => {
++    const o = (id: string, ph: PhenotypeProfile, counts?: Record<string, number>) => gen(id, ph, { appendageCounts: counts }).symmetry;
++    expect(o("radial-sessile", PH.bare)).toEqual({ type: "radial", order: 5 });
++    expect(o("radial-sessile", PH.bare, { arms: 8 })).toEqual({ type: "radial", order: 8 });
++    expect(o("speculative-multi-arm", PH.bare)).toEqual({ type: "radial", order: 3 }); // 6 braccia + 3 stalks: solo l'ordine 3 vale per tutti
++    expect(o("speculative-multi-arm", PH.bare, { stalks: 6 })).toEqual({ type: "radial", order: 6 });
++    expect(o("speculative-multi-arm", PH.armored).order).toBe(1); // 6 braccia, 3 stalks e 8 placche: MCD = 1
++    expect(o("radial-sessile", PH.armored).order).toBe(1);        // 5 braccia + 8 placche
++  });
++  it("sferica solo senza appendici: con placche diventa radiale", () => {
++    expect(gen("simple-sphere", PH.bare).symmetry).toEqual({ type: "spherical", order: 0 });
++    expect(gen("simple-sphere", PH.armored).symmetry.type).toBe("radial");
++    const d = clone(gen("simple-sphere", PH.bare)); d.appendages.push({ ...clone(gen("simple-sphere", PH.armored)).appendages[0] });
++    expect(validateAnatomy(refp(d)).ok).toBe(false);
++  });
++  it("il validatore rifiuta simmetrie rotte (coppia alterata, anello irregolare, ordine incompatibile)", () => {
++    const a = clone(gen("biped")); a.appendages.find((x: any) => x.side === "right").radius += 0.05;
++    expect(validateAnatomy(refp(a)).errors.some((e) => e.startsWith("asymmetric-pair"))).toBe(true);
++    const r = clone(gen("radial-sessile", PH.bare)); r.appendages[1].angle += 0.4;
++    expect(validateAnatomy(refp(r)).errors).toContain("radial-angles-uneven:arms");
++    const o = clone(gen("radial-sessile", PH.bare)); o.symmetry.order = 4;
++    expect(validateAnatomy(refp(o)).errors).toContain("radial-order-incompatible:arms:5/4");
++  });
++});
++
++describe("G2 review — articolazioni", () => {
++  it("ogni segmento non radice ha un'articolazione assiale verso il suo genitore; ogni appendice una radice e n-1 interne", () => {
++    for (const id of BODY_PLAN_IDS) {
++      const d = gen(id, PH.armored, { seed: 2 });
++      for (const s of d.segments) {
++        const ax = d.joints.filter((j) => j.kind === "axial" && j.childSegmentId === s.id);
++        expect(ax.length, `${id}/${s.id}`).toBe(s.parentId === null ? 0 : 1);
++        if (s.parentId !== null) expect(ax[0].parentSegmentId).toBe(s.parentId);
++      }
++      for (const a of d.appendages) {
++        const roots = d.joints.filter((j) => j.kind === "root" && j.appendageId === a.id);
++        expect(roots.length).toBe(1); expect(roots[0].parentSegmentId).toBe(a.segmentId);
++        expect(d.joints.filter((j) => j.kind === "internal" && j.appendageId === a.id).map((j) => j.section).sort()).toEqual(Array.from({ length: a.sectionCount - 1 }, (_, i) => i + 1));
++      }
++      expect(new Set(d.joints.map((j) => j.id)).size).toBe(d.joints.length);
++    }
++  });
++  it("anomalia: le sezioni interne seguono il giunto del gruppo (solo la sfera diventa cerniera)", () => {
++    const inner = (id: string, group: string) => gen(id).joints.filter((j) => j.kind === "internal" && j.appendageId?.startsWith(`${group}-`)).map((j) => j.type);
++    expect(new Set(inner("hexapod", "antennae"))).toEqual(new Set(["flexible"]));
++    expect(new Set(inner("radial-sessile", "arms"))).toEqual(new Set(["flexible"]));
++    expect(new Set(inner("simple-elongated", "flagella"))).toEqual(new Set(["flexible"]));
++    expect(new Set(inner("quadruped", "legs"))).toEqual(new Set(["hinge"]));    // root "ball"
++    expect(new Set(inner("hexapod", "legs"))).toEqual(new Set(["hinge"]));      // root "hinge"
++    expect(new Set(inner("biped", "arms"))).toEqual(new Set(["hinge"]));
++  });
++  it("il dof coincide con il tipo di giunto", () => {
++    const dof: Record<string, number> = { fixed: 0, hinge: 1, segmental: 2, ball: 3, flexible: 3 };
++    for (const id of BODY_PLAN_IDS) for (const j of gen(id).joints) expect(j.dof, `${id}/${j.id}`).toBe(dof[j.type]);
++  });
++});
++
++describe("G2 review — modalità locomotorie", () => {
++  it("anomalia: 'appendage-driven' e 'radial' senza appendici locomotorie diventano 'limbless'", () => {
++    const d = gen("supported-multicellular", PH.bare, { appendageCounts: { fins: 0 } });
++    expect(d.locomotion.mode).toBe("limbless");
++    expect(validateAnatomy(d).ok).toBe(true);
++    expect(gen("supported-multicellular", PH.bare).locomotion.mode).toBe("appendage-driven");
++    const plan = freezePlan({ ...BODY_PLAN_CATALOG["radial-sessile"], groups: BODY_PLAN_CATALOG["radial-sessile"].groups.map((g) => ({ ...g, minCount: 0, count: 0 })) });
++    expect(generateAnatomy({ phenotype: PH.bare, bodyPlan: plan }).locomotion.mode).toBe("limbless");
++  });
++  it("il validatore rifiuta modalità incoerenti con le appendici", () => {
++    const a = clone(gen("supported-multicellular", PH.bare, { appendageCounts: { fins: 0 } })); a.locomotion.mode = "appendage-driven";
++    expect(validateAnatomy(refp(a)).errors).toContain("locomotion-without-locomotor-appendages:appendage-driven");
++    const b = clone(gen("quadruped")); b.locomotion.mode = "bipedal";
++    expect(validateAnatomy(refp(b)).errors).toContain("locomotion-inconsistent:bipedal:4");
++    const c = clone(gen("quadruped")); c.locomotion.supportingLimbs = 3;
++    expect(validateAnatomy(refp(c)).errors).toContain("supporting-limbs-mismatch");
++  });
++  it("il numero di zampe determina la modalità delle piante 'legged'", () => {
++    const mode = (n: number) => gen("many-legged", PH.bare, { appendageCounts: { legs: n } }).locomotion.mode;
++    expect([mode(2), mode(3), mode(4), mode(5), mode(6), mode(8), mode(40)]).toEqual(["bipedal", "multipedal", "quadrupedal", "multipedal", "hexapodal", "multipedal", "multipedal"]);
++    expect(gen("quadruped", PH.bare, { appendageCounts: { legs: 0 } }).locomotion.mode).toBe("limbless");
++    for (const k of LOCOMOTOR_KINDS) expect(typeof k).toBe("string");
++  });
++  it("la modalità non dipende da velocità né da altri geni", () => {
++    const a = generateAnatomy({ phenotype: derivePhenotype({ size: 1, ext: {} }), bodyPlan: BODY_PLAN_CATALOG.biped });
++    const b = generateAnatomy({ phenotype: derivePhenotype({ size: 1, ext: { endurance: 1, burstPower: 1 } as any }), bodyPlan: BODY_PLAN_CATALOG.biped });
++    expect(a.fingerprint).toBe(b.fingerprint);
++  });
++});
++
++describe("G2 review — limite massimo di appendici", () => {
++  const custom = freezePlan({
++    id: "custom-cap", family: "complex", symmetry: "bilateral", layout: "axial", locomotion: "legged", axialJoint: "fixed",
++    segments: [{ id: "b", role: "trunk", shape: "ellipsoid", parent: null, length: 2, width: 1, height: 1 }],
++    groups: [
++      { id: "legs", kind: "leg", attach: "b", placement: "lateral", orientation: "down", count: 40, minCount: 0, maxCount: 60, length: 1, radius: 0.05, sections: 1, joint: "hinge", span: 0.9, yOffset: -0.5 },
++      { id: "eyes", kind: "sensory", variant: "eye", attach: "b", placement: "lateral", orientation: "outward", count: 4, minCount: 0, maxCount: 60, length: 0.1, radius: 0.1, sections: 1, joint: "fixed", span: 0.5, yOffset: 0.3 },
++    ],
++  });
++  it("anomalia: il tetto ripartisce il budget tra i gruppi invece di azzerare quelli in coda", () => {
++    const d = generateAnatomy({ phenotype: PH.armored, bodyPlan: custom, appendageCounts: { legs: 60, eyes: 5 } });
++    const legs = d.appendages.filter((a) => a.kind === "leg").length, eyes = d.appendages.filter((a) => a.variant === "eye").length, plates = d.appendages.filter((a) => a.kind === "plate").length;
++    expect(d.appendages.length).toBeLessThanOrEqual(MAX_APPENDAGES);
++    expect(plates).toBe(8);
++    expect(eyes).toBeGreaterThanOrEqual(2);
++    expect(legs).toBeGreaterThanOrEqual(40);
++    expect(legs % 2).toBe(0); expect(eyes % 2).toBe(0); // le coppie bilaterali sono preservate
++    expect(validateAnatomy(d)).toEqual({ ok: true, errors: [] });
++  });
++  it("è deterministico e non altera i conteggi sotto il tetto", () => {
++    const a = generateAnatomy({ phenotype: PH.armored, bodyPlan: custom, appendageCounts: { legs: 60, eyes: 5 } });
++    expect(a.fingerprint).toBe(generateAnatomy({ phenotype: PH.armored, bodyPlan: custom, appendageCounts: { legs: 60, eyes: 5 } }).fingerprint);
++    const ok = generateAnatomy({ phenotype: PH.bare, bodyPlan: custom, appendageCounts: { legs: 40, eyes: 4 } });
++    expect(ok.appendages.length).toBe(44);
++  });
++  it("il validatore rifiuta più appendici del tetto", () => {
++    const d = clone(gen("quadruped")); d.appendages = Array.from({ length: MAX_APPENDAGES + 1 }, () => d.appendages[0]);
++    expect(validateAnatomy(d).errors.some((e) => e.startsWith("too-many-appendages"))).toBe(true);
++  });
++});
++
++describe("G2 review — body plan personalizzati e validazione degli spec", () => {
++  it("il catalogo è valido", () => { for (const id of BODY_PLAN_IDS) expect(validateBodyPlanSpec(BODY_PLAN_CATALOG[id]), id).toEqual([]); });
++  it("rileva spec incoerenti", () => {
++    const base = JSON.parse(JSON.stringify(BODY_PLAN_CATALOG.quadruped));
++    const errs = (mut: (s: any) => void) => { const s = JSON.parse(JSON.stringify(base)); mut(s); return validateBodyPlanSpec(s); };
++    expect(errs((s) => { s.segments = []; })).toContain("no-segments");
++    expect(errs((s) => { s.segments[0].parent = "x"; }).some((e) => e.startsWith("unknown-parent"))).toBe(true);
++    expect(errs((s) => { s.segments[1].parent = "tail"; }).some((e) => e.startsWith("parent-cycle") || e.startsWith("roots"))).toBe(true);
++    expect(errs((s) => { s.groups[0].attach = "nowhere"; }).some((e) => e.startsWith("unknown-attach"))).toBe(true);
++    expect(errs((s) => { s.groups[0].count = 99; }).some((e) => e.startsWith("bad-count-range"))).toBe(true);
++    expect(errs((s) => { s.groups[0].sections = 9; }).some((e) => e.startsWith("bad-sections"))).toBe(true);
++    expect(errs((s) => { s.groups[0].placement = "radial"; }).some((e) => e.startsWith("placement-incompatible"))).toBe(true);
++    expect(errs((s) => { s.symmetry = "radial"; }).some((e) => e.startsWith("placement-incompatible"))).toBe(true);
++    expect(errs((s) => { s.segments[0].length = -1; }).some((e) => e.startsWith("bad-dimensions"))).toBe(true);
++    expect(validateBodyPlanSpec(null as any)).toEqual(["malformed-spec"]);
++  });
++  it("anomalia: uno spec non valido dà un errore descrittivo, non un crash interno", () => {
++    const bad = freezePlan({ ...BODY_PLAN_CATALOG.quadruped, segments: [] });
++    expect(() => generateAnatomy({ phenotype: PH.normal, bodyPlan: bad })).toThrow(/BodyPlanSpec non valido.*no-segments/);
++    expect(() => generateAnatomyCached({ phenotype: PH.normal, bodyPlan: bad })).toThrow(/BodyPlanSpec non valido/);
++  });
++  it("spec personalizzato valido: genera, valida, serializza", () => {
++    const plan = freezePlan({
++      id: "custom-two-lobes", family: "simple", symmetry: "none", layout: "explicit", locomotion: "amorphous", axialJoint: "flexible",
++      segments: [{ id: "a", role: "core", shape: "sphere", parent: null, length: 1, width: 1, height: 1, at: [0, 0, 0] }, { id: "b", role: "lobe", shape: "sphere", parent: "a", length: 0.6, width: 0.6, height: 0.6, at: [0.6, 0, 0.3] }],
++      groups: [],
++    });
++    const d = generateAnatomy({ phenotype: PH.armored, bodyPlan: plan, seed: 1 });
++    expect(validateAnatomy(d).ok).toBe(true);
++    expect(deserializeAnatomy(serializeAnatomy(d)).ok).toBe(true);
++  });
++});
++
++describe("G2 review — cache: chiavi, collisioni, valori mancanti, spec personalizzati", () => {
++  const input = (ph: PhenotypeProfile, extra: object = {}) => ({ phenotype: ph, bodyPlan: BODY_PLAN_CATALOG.quadruped, ...extra });
++  it("la cache coincide con la generazione diretta per input diversi", () => {
++    for (const id of BODY_PLAN_IDS) for (const ph of Object.values(PH)) for (const seed of [undefined, 1, 77]) {
++      const i = { phenotype: ph, bodyPlan: BODY_PLAN_CATALOG[id], seed };
++      expect(generateAnatomyCached(i).fingerprint, `${id}/${String(seed)}`).toBe(generateAnatomy(i).fingerprint);
++    }
++  });
++  it("input equivalenti condividono la chiave (seme normalizzato, lod normalizzato, conteggi effettivi)", () => {
++    const k = (extra: object) => anatomyCacheKey(input(PH.normal, extra) as any);
++    expect(k({ seed: -1 })).toBe(k({ seed: 4294967295 }));
++    expect(k({ seed: 1.5 })).toBe(k({ seed: 1 }));
++    expect(k({ lod: 7 })).toBe(k({}));
++    expect(k({ lod: Number.NaN })).toBe(k({}));
++    expect(k({ lod: -2 })).toBe(k({ lod: 0 }));
++    expect(k({ appendageCounts: { legs: 4 } })).toBe(k({}));
++    expect(k({ appendageCounts: { legs: Number.NaN } })).toBe(k({}));
++    expect(k({ appendageCounts: { legs: 5000 } })).toBe(k({ appendageCounts: { legs: 12 } }));
++    expect(generateAnatomyCached(input(PH.normal, { seed: -1 }) as any)).toBe(generateAnatomyCached(input(PH.normal, { seed: 4294967295 }) as any));
++    expect(generateAnatomyCached(input(PH.normal, { lod: 9 }) as any).lod).toBe(3);
++  });
++  it("input diversi hanno chiavi diverse (nessuna collisione) e descriptor diversi", () => {
++    const variants: object[] = [{}, { seed: 0 }, { seed: 1 }, { origin: "legacy-default" }, { lod: 2 }, { lod: 0 }, { appendageCounts: { legs: 6 } }, { appendageCounts: { legs: 6, eyes: 4 } }, { appendageCounts: { eyes: 4 } }];
++    const keys = new Set(variants.map((v) => anatomyCacheKey(input(PH.normal, v) as any)));
++    expect(keys.size).toBe(variants.length);
++    const prints = new Set(variants.map((v) => generateAnatomyCached(input(PH.normal, v) as any).fingerprint));
++    expect(prints.size).toBe(variants.length); // anche `origin` fa parte del descriptor (bodyPlan.origin)
++  });
++  it("chiavi distinte per valori mancanti, non validi, fuori intervallo e presenti", () => {
++    const g = (ext: object, size: any = 1) => derivePhenotype({ size, ext: { bodyStature: 0.5, dermalArmor: 0.1, ...ext } } as any);
++    const phs = [g({ furDensity: 0 }), g({}), g({ furDensity: Number.NaN }), g({ furDensity: 1 }), g({ furDensity: 9 }), g({ furDensity: 0.5 })];
++    const keys = new Set(phs.map((p) => anatomyCacheKey(input(p) as any)));
++    expect(keys.size).toBe(phs.length);
++    // "clamped" e "present" con lo stesso valore normalizzato producono descriptor diversi (phenotypeIssues): devono avere chiavi diverse
++    const a = generateAnatomyCached(input(phs[3]) as any), b = generateAnatomyCached(input(phs[4]) as any);
++    expect(a.phenotypeIssues).toEqual([]); expect(b.phenotypeIssues).toContain("clamped:furDensity");
++    expect(a.fingerprint).not.toBe(b.fingerprint);
++  });
++  it("un profilo costruito a mano con valori derivati diversi non riceve un risultato stantio", () => {
++    const real = PH.normal;
++    const fake = { ...real, derived: { ...real.derived, sizeScale: { ...real.derived.sizeScale, value: 1.4 } } } as PhenotypeProfile;
++    const a = generateAnatomyCached(input(real) as any), b = generateAnatomyCached(input(fake) as any);
++    expect(b.proportions.sizeScale).toBe(1.4);
++    expect(a.proportions.sizeScale).not.toBe(1.4);
++  });
++  it("spec congelato: risultato in cache (stesso oggetto); spec modificabile: mai in cache e sempre aggiornato", () => {
++    expect(generateAnatomyCached(input(PH.normal) as any)).toBe(generateAnatomyCached(input(PH.normal) as any));
++    const mutable = JSON.parse(JSON.stringify(BODY_PLAN_CATALOG.biped)) as BodyPlanSpec & { groups: any[] };
++    const first = generateAnatomyCached({ phenotype: PH.normal, bodyPlan: mutable });
++    expect(generateAnatomyCached({ phenotype: PH.normal, bodyPlan: mutable })).not.toBe(first);
++    (mutable.groups.find((g: any) => g.id === "legs") as any).length = 2.5;
++    const after = generateAnatomyCached({ phenotype: PH.normal, bodyPlan: mutable });
++    expect(after.appendages.find((a) => a.kind === "leg")!.length).toBeGreaterThan(first.appendages.find((a) => a.kind === "leg")!.length);
++    expect(after.fingerprint).toBe(generateAnatomy({ phenotype: PH.normal, bodyPlan: mutable }).fingerprint);
++  });
++  it("due spec congelati con lo stesso id ma contenuto diverso non si contaminano", () => {
++    const a = freezePlan({ ...BODY_PLAN_CATALOG.biped }), b = freezePlan({ ...BODY_PLAN_CATALOG.biped, segments: BODY_PLAN_CATALOG.biped.segments.map((s) => (s.id === "trunk" ? { ...s, length: 3 } : s)) });
++    expect(generateAnatomyCached({ phenotype: PH.normal, bodyPlan: a }).fingerprint).not.toBe(generateAnatomyCached({ phenotype: PH.normal, bodyPlan: b }).fingerprint);
++  });
++});
++
++describe("G2 review — determinismo, fingerprint, immutabilità", () => {
++  const reorder = (v: any): any => (Array.isArray(v) ? v.map(reorder) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).reverse().map((k) => [k, reorder(v[k])])) : v);
++  it("il fingerprint non dipende dall'ordine delle chiavi e rileva ogni modifica", () => {
++    const d = gen("hexapod", PH.normal, { seed: 3 });
++    expect(computeFingerprint(reorder(d))).toBe(d.fingerprint);
++    for (const mutate of [(x: any) => { x.proportions.sizeScale += 0.001; }, (x: any) => { x.segments[0].center.z += 0.001; }, (x: any) => { x.provenance.locomotion.note = "x"; }, (x: any) => { x.phenotypeIssues = ["x"]; }]) {
++      const m = clone(d); mutate(m); expect(computeFingerprint(m)).not.toBe(d.fingerprint);
++    }
++  });
++  it("valori di riferimento (regressione tra esecuzioni e piattaforme)", () => {
++    expect(gen("quadruped", PH.normal, { seed: 7 }).fingerprint).toMatch(/^[0-9a-f]{8}$/);
++    expect(gen("quadruped", PH.normal, { seed: 7 }).fingerprint).toBe(GOLDEN.quadruped);
++    expect(gen("radial-sessile", PH.armored).fingerprint).toBe(GOLDEN.radial);
++    expect(gen("many-legged", PH.missing, { appendageCounts: { legs: 9 } }).fingerprint).toBe(GOLDEN.many);
++  });
++  it("input diversi → descriptor diversi (taglia, corporatura, pelo, corazza, body plan, seme, conteggi)", () => {
++    const f = (ph: PhenotypeProfile, id = "quadruped", extra: object = {}) => gen(id, ph, extra).fingerprint;
++    const mk = (size: number, st: number, fur: number, ar: number) => derivePhenotype({ size, ext: { bodyStature: st, furDensity: fur, dermalArmor: ar } });
++    const set = new Set([f(mk(1, 0.5, 0.2, 0.1)), f(mk(1.5, 0.5, 0.2, 0.1)), f(mk(1, 0.9, 0.2, 0.1)), f(mk(1, 0.5, 0.8, 0.1)), f(mk(1, 0.5, 0.2, 0.5)), f(mk(1, 0.5, 0.2, 0.1), "biped"), f(mk(1, 0.5, 0.2, 0.1), "quadruped", { seed: 3 }), f(mk(1, 0.5, 0.2, 0.1), "quadruped", { appendageCounts: { legs: 6 } })]);
++    expect(set.size).toBe(8);
++  });
++  it("i descriptor sono immutabili in profondità", () => {
++    const d = gen("quadruped");
++    expect(() => { (d.segments as any).push({}); }).toThrow();
++    expect(() => { (d.segments[0].center as any).x = 9; }).toThrow();
++    expect(() => { (d.provenance as any).extra = 1; }).toThrow();
++    expect(() => { (d.proportions.bounds.min as any).x = 9; }).toThrow();
++    expect(Object.isFrozen(reduceAnatomyDetail(d, 1))).toBe(true);
++    expect(Object.isFrozen(deserializeAnatomy(serializeAnatomy(d)).value)).toBe(true);
++  });
++  it("nessun Math.random né Date.now nei moduli G2", () => {
++    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
++    for (const dir of ["lib/anatomy", "lib/phenotype"]) for (const f of readdirSync(dir)) expect(/Math\.random|Date\.now|performance\.now/.test(strip(readFileSync(join(dir, f), "utf8"))), `${dir}/${f}`).toBe(false);
++  });
++});
++
++describe("G2 review — LOD 0, 1, 2 e 3", () => {
++  const tiers: DetailTier[] = [3, 2, 1, 0];
++  it("ogni livello è valido per ogni body plan, condizione e seme", () => {
++    for (const id of BODY_PLAN_IDS) for (const ph of [PH.normal, PH.armored, PH.missing]) {
++      const full = gen(id, ph, { seed: 6 });
++      for (const t of tiers) expect(validateAnatomy(reduceAnatomyDetail(full, t)), `${id}@${t}`).toEqual({ ok: true, errors: [] });
++    }
++  });
++  it("contenuto di ciascun livello", () => {
++    const full = gen("armored-specialist", PH.armored);
++    const l2 = reduceAnatomyDetail(full, 2), l1 = reduceAnatomyDetail(full, 1), l0 = reduceAnatomyDetail(full, 0);
++    expect(l2.joints.some((j) => j.kind === "internal")).toBe(false);
++    expect(l2.appendages.length).toBe(full.appendages.length);
++    expect(l2.appendages.every((a) => a.sectionCount === 1)).toBe(true);
++    expect(l1.appendages.every((a) => ["leg", "arm", "tentacle", "fin", "tail", "flagellum", "pseudopod"].includes(a.kind))).toBe(true);
++    expect(l1.appendages.some((a) => a.kind === "plate" || a.kind === "claw" || a.kind === "sensory")).toBe(false);
++    expect(l1.appendages.filter((a) => a.kind === "leg").length).toBe(6);
++    expect(l0.appendages).toEqual([]);
++    expect(l0.joints.every((j) => j.kind === "axial")).toBe(true);
++    expect(l0.segments).toEqual(full.segments);
++    expect([full.lod, l2.lod, l1.lod, l0.lod]).toEqual([3, 2, 1, 0]);
++  });
++  it("la complessità non cresce al ridursi del dettaglio e il fingerprint cambia per livello", () => {
++    for (const id of BODY_PLAN_IDS) {
++      const full = gen(id, PH.armored);
++      const scores = tiers.map((t) => reduceAnatomyDetail(full, t).complexity.score);
++      for (let i = 1; i < scores.length; i++) expect(scores[i], id).toBeLessThanOrEqual(scores[i - 1]);
++      expect(new Set(tiers.map((t) => reduceAnatomyDetail(full, t).fingerprint)).size).toBeGreaterThanOrEqual(2);
++    }
++  });
++  it("riduzione ripetuta ≡ riduzione diretta; generare con lod ≡ generare e ridurre; non si risale di livello", () => {
++    const full = gen("hexapod", PH.normal, { seed: 2 });
++    expect(reduceAnatomyDetail(reduceAnatomyDetail(full, 2), 1).fingerprint).toBe(reduceAnatomyDetail(full, 1).fingerprint);
++    for (const t of [2, 1, 0] as const) expect(gen("hexapod", PH.normal, { seed: 2, lod: t }).fingerprint).toBe(reduceAnatomyDetail(full, t).fingerprint);
++    expect(reduceAnatomyDetail(full, 3)).toBe(full);
++    const l1 = reduceAnatomyDetail(full, 1);
++    expect(reduceAnatomyDetail(l1, 3)).toBe(l1);
++    expect(reduceAnatomyDetail(l1, 2)).toBe(l1);
++  });
++  it("la locomozione resta quella dell'organismo intero e il LOD non perde mai le zampe fino al livello 1", () => {
++    for (const id of BODY_PLAN_IDS) { const f = gen(id, PH.normal); for (const t of [2, 1] as const) expect(reduceAnatomyDetail(f, t).appendages.filter((a) => a.kind === "leg").length).toBe(f.appendages.filter((a) => a.kind === "leg").length); }
++  });
++});
++
++describe("G2 review — serializzazione", () => {
++  it("round-trip esatto per ogni body plan, livello e scenario", () => {
++    for (const id of BODY_PLAN_IDS) for (const ph of [PH.normal, PH.armored, PH.missing]) for (const t of [3, 2, 1, 0] as const) {
++      const d = reduceAnatomyDetail(gen(id, ph, { seed: 5 }), t);
++      const r = deserializeAnatomy(serializeAnatomy(d));
++      expect(r.ok, `${id}@${t}`).toBe(true);
++      if (r.ok) { expect(r.value).toEqual(d); expect(serializeAnatomy(r.value)).toBe(serializeAnatomy(d)); expect(r.value.fingerprint).toBe(d.fingerprint); }
++    }
++  });
++  it("serializzazione indipendente dall'ordine di inserimento delle chiavi", () => {
++    const d = gen("biped", PH.normal, { seed: 1 });
++    const shuffled = Object.fromEntries(Object.keys(d).reverse().map((k) => [k, (d as any)[k]]));
++    expect(serializeAnatomy(shuffled as any)).toBe(serializeAnatomy(d));
++  });
++  it("rifiuta, senza lanciare, versioni vecchie e future, JSON corrotto, tipi sbagliati e dati manomessi", () => {
++    const d = gen("quadruped");
++    const bad = (x: unknown) => deserializeAnatomy(typeof x === "string" ? x : JSON.stringify(x));
++    for (const v of [1, 3, 99, "2", null]) expect(bad({ ...d, schemaVersion: v }).ok).toBe(false);
++    expect(bad({ ...d, schemaVersion: 1 }).errors[0]).toBe("unsupported-schema-version:1");
++    for (const t of ["{", "", "null", "[]", "42", '"x"']) expect(bad(t).ok, t).toBe(false);
++    expect(deserializeAnatomy(undefined as any).ok).toBe(false);
++    expect(bad({ ...d, segments: "x" }).ok).toBe(false);
++    expect(bad({ ...d, fingerprint: "00000000" }).errors).toContain("fingerprint-mismatch");
++    const tampered = clone(d); tampered.joints[0].parentSegmentId = "x";
++    expect(bad(tampered).ok).toBe(false);
++    const noProv = clone(d); delete noProv.provenance.locomotion;
++    expect(bad(refp(noProv)).errors).toContain("missing-provenance:locomotion");
++  });
++});
++
++describe("G2 review — adattatore legacy", () => {
++  const rnd = (() => { let s = 12345; return () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) / 4294967296); })();
++  const sweep = Array.from({ length: 80 }, () => ({ speed: 0.4 + rnd() * 2.4, carnivory: rnd(), vision: 1 + rnd() * 9, evasion: rnd(), huntingSkill: rnd() }));
++  it("80 combinazioni di tratti: descriptor valido, struttura equivalente, round-trip e determinismo", () => {
++    for (const t of sweep) {
++      const legacy = computeCreatureAnatomy(t);
++      const d = descriptorFromLegacyAnatomy(legacy);
++      expect(validateAnatomy(d), JSON.stringify(t)).toEqual({ ok: true, errors: [] });
++      expect(compareLegacyAnatomy(legacy, d)).toEqual({ structurallyEquivalent: true, differences: [] });
++      expect(descriptorFromLegacyAnatomy(legacy).fingerprint).toBe(d.fingerprint);
++      expect(deserializeAnatomy(serializeAnatomy(d)).ok).toBe(true);
++      expect(d.locomotion.mode).toBe("quadrupedal");
++    }
++  });
++  it("la distanza dal terreno del descriptor legacy è determinata dalle sue zampe, non dalla loro lunghezza", () => {
++    for (const t of sweep.slice(0, 20)) {
++      const legacy = computeCreatureAnatomy(t), d = descriptorFromLegacyAnatomy(legacy);
++      expect(d.proportions.groundY).toBeCloseTo(-legacy.bodyHalfHeight - legacy.legLength - legacy.legRadius, 4);
++      expect(d.proportions.groundClearance).toBeCloseTo(Math.max(0, -(legacy.bodyHalfHeight) - d.proportions.groundY!) , 3);
++    }
++  });
++  it("tutto ciò che deriva dall'anatomia legacy è estetico/non determinato, mai genetico", () => {
++    for (const t of sweep.slice(0, 20)) {
++      const d = descriptorFromLegacyAnatomy(computeCreatureAnatomy(t));
++      for (const src of Object.values(d.provenance)) { expect(["aesthetic", "undetermined"]).toContain(src.kind); expect(src.genes).toEqual([]); }
++    }
++  });
++  it("il confronto con un body plan diverso segnala le differenze", () => {
++    const legacy = computeCreatureAnatomy(sweep[0]);
++    expect(compareLegacyAnatomy(legacy, gen("hexapod")).structurallyEquivalent).toBe(false);
++    expect(compareLegacyAnatomy(legacy, gen("quadruped", PH.bare)).differences.some((x) => x.startsWith("legs"))).toBe(false);
++  });
++  it("il codice legacy non è stato modificato", () => {
++    const diff = readFileSync("lib/creatureAnatomy.ts", "utf8");
++    expect(diff).toContain("export function computeCreatureAnatomy");
++  });
++});
++
++describe("G2 review — dati genetici mancanti", () => {
++  const cases: [string, any][] = [
++    ["nessun dato", undefined], ["solo size", { size: 1 }], ["solo ext", { ext: { bodyStature: 0.5, furDensity: 0.5, dermalArmor: 0.3 } }],
++    ["manca la corazza", { size: 1, ext: { bodyStature: 0.5, furDensity: 0.5 } }], ["manca il pelo", { size: 1, ext: { bodyStature: 0.5, dermalArmor: 0.3 } }],
++    ["manca la corporatura", { size: 1, ext: { furDensity: 0.5, dermalArmor: 0.3 } }], ["valori non validi", { size: NaN, ext: { furDensity: "x", dermalArmor: Infinity } }], ["ext non oggetto", { size: 1, ext: 5 }],
++  ];
++  it("ogni combinazione produce un descriptor valido su ogni body plan e dichiara ciò che manca", () => {
++    for (const [name, g] of cases) {
++      const ph = derivePhenotype(g);
++      for (const id of BODY_PLAN_IDS) expect(validateAnatomy(gen(id, ph)), `${name}/${id}`).toEqual({ ok: true, errors: [] });
++      const d = gen("quadruped", ph);
++      const missing = (k: string) => d.provenance[k].kind === "undetermined";
++      if (ph.traits.furDensity.value === null) expect([d.surface.furCoverage, missing("surface.furCoverage")], name).toEqual([null, true]);
++      if (ph.traits.dermalArmor.value === null) expect([d.surface.armorCoverage, missing("surface.armorCoverage"), d.appendages.some((a) => a.kind === "plate")], name).toEqual([null, true, false]);
++      if (ph.traits.size.value === null) expect(missing("proportions.sizeScale"), name).toBe(true);
++      if (ph.traits.bodyStature.value === null) expect([d.proportions.robustness, missing("proportions.robustness")], name).toEqual([0.5, true]);
++      expect(d.phenotypeIssues.length, name).toBe(ph.issues.length);
++    }
++  });
++  it("un dato mancante non equivale a un valore a zero", () => {
++    const zero = gen("quadruped", derivePhenotype({ size: 1, ext: { bodyStature: 0.5, furDensity: 0, dermalArmor: 0 } }));
++    const none = gen("quadruped", derivePhenotype({ size: 1 }));
++    expect(zero.surface.covering).toBe("bare"); expect(none.surface.covering).toBe("unspecified");
++    expect(zero.fingerprint).not.toBe(none.fingerprint);
++  });
++});
++
++describe("G2 review — indipendenza dal renderer e dal motore", () => {
++  const FORBIDDEN = /from\s+["'](react|react-dom|three|next)[^"']*["']|from\s+["'][^"']*(components\/|creatureModel|renderFrame|Planet3D|planet3d|lib\/visual|\/visual\/|bodyAnimation|naturalMotion|livingBehavior|simulation\/core)[^"']*["']|require\(|import\(/;
++  it("nessun import dal renderer, da React/Three.js né dinamico", () => {
++    for (const dir of ["lib/anatomy", "lib/phenotype"]) for (const f of readdirSync(dir)) expect(FORBIDDEN.test(readFileSync(join(dir, f), "utf8")), `${dir}/${f}`).toBe(false);
++  });
++  it("i soli import verso la simulazione sono letture del registro dei geni (e STATURE_RADIUS)", () => {
++    const sim: string[] = [];
++    for (const dir of ["lib/anatomy", "lib/phenotype"]) for (const f of readdirSync(dir)) for (const m of readFileSync(join(dir, f), "utf8").matchAll(/from\s+["']([^"']*simulation[^"']*)["']/g)) sim.push(`${f}:${m[1]}`);
++    expect(sim.sort()).toEqual(["derive.ts:../../simulation/biology/geneExpression", "derive.ts:../../simulation/biology/geneRegistry"]);
++  });
++  it("i moduli di anatomia non importano il fenotipo oltre i tipi e le costanti di lettura", () => {
++    for (const f of readdirSync("lib/anatomy")) for (const m of readFileSync(join("lib/anatomy", f), "utf8").matchAll(/from\s+["']\.\.\/phenotype([^"']*)["']/g)) expect(["/types", "/derive"]).toContain(m[1]);
++  });
++});
+-- 
+2.43.0
+

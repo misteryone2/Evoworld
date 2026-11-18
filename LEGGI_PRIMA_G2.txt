@@ -1,0 +1,33 @@
+EvoWorld — G2 Review & Hardening — come caricarlo SENZA toccare main
+
+ATTENZIONE: GitHub web scrive su main se non scegli prima il branch. Fai i passi nell'ordine.
+Questo file NON si chiama LEGGIMI.txt apposta: non sovrascrive quello della radice.
+
+1) Crea il branch (dal telefono)
+   - Repository → tasto del branch (main) → scrivi: graphics/g2-anatomy-phenotype → "Create branch ... from main".
+   - Controlla che il branch selezionato in alto sia graphics/g2-anatomy-phenotype, NON main.
+
+2) Carica i 13 file della cartella "files" (stessi percorsi; sono sostituzioni complete)
+   (sostituisce) lib/anatomy/assemble.ts
+   (sostituisce) lib/anatomy/bodyPlan.ts
+   (sostituisce) lib/anatomy/generate.ts
+   (sostituisce) lib/anatomy/types.ts
+   (sostituisce) lib/anatomy/validate.ts
+   (NUOVO)       lib/anatomy/geometry.ts
+   (sostituisce) tests/anatomyG2.test.ts
+   (NUOVO)       tests/anatomyG2Review.test.ts
+   (sostituisce) docs/graphics/G2_ARCHITECTURE.md
+   (sostituisce) docs/graphics/G2_FINAL_REPORT.md
+   (sostituisce) docs/graphics/G2_MISSING_GENETIC_DATA.md
+   (NUOVO)       docs/graphics/G2_GEOMETRY_CONVENTIONS.md
+   (NUOVO)       docs/graphics/G2_REVIEW_REPORT.md
+   - Nel commit scegli "Commit directly to the graphics/g2-anatomy-phenotype branch". Se vedi "main", fermati.
+   - Alternativa da computer: git apply G2_review.patch sul branch.
+
+3) Apri la PR: usa PR_G2.md (titolo e testo). Base main ← graphics/g2-anatomy-phenotype. Non fare merge finché non decidi.
+
+4) Separato: LEGGIMI.txt.originale-main è il LEGGIMI v1.11.0 di Vibe sovrascritto sulla radice di main dall'upload del 17/11.
+   Ripristinalo con un commit a parte (o "Revert" del commit 83abcc4). Non è nella PR G2.
+
+Verifiche reali eseguite: tsc 0 errori; npm test 797 passati / 5 falliti preesistenti (fauna180, reproduction x2, vibeGenomeV1110 x2) / 1 saltato; npm run build riuscita.
+Non eseguiti: ESLint (nessuna configurazione), prove su browser/telefono. Non collegato al renderer.
