@@ -1,0 +1,49 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.2-foodweb.json.gz",
+  "payloadSha256": "755d2a4f778ba8c90243daee3dd01e63530380567ac36875d8ecc281dc5e772d",
+  "archiveSha256": "d407c8d3a906ff1d0909681f95a9f441173f502eb61a3b39970a82ef17f7cb79",
+  "phase": "E2.2-foodweb",
+  "experiment": "E2.2 food web dynamics: trait abundance, recorded kills, lagged sequencing and persistence",
+  "codeCommit": "b604b031c32ac10f0fbcab67d3624942074c1ed0",
+  "workingTreeDirty": false,
+  "sourceSha256": "ee1e362eff3914b2f5607081e5213d81a3037dd4b0c75416a30a20d963295877",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-18T12:30:00.000Z",
+  "scenarioIds": [
+    "S04_herbivore_monoculture",
+    "S05_carnivore_stress",
+    "S06_predator_prey_mixed"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 120,
+  "reproduction": {
+    "env": {
+      "E2_FOODWEB_LABEL": "main",
+      "E2_FOODWEB_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E2_FOODWEB_TICKS": "2700",
+      "E2_FOODWEB_SAMPLE_EVERY": "10",
+      "E2_FOODWEB_MAX_LAG": "200",
+      "E2_FOODWEB_SCENARIOS": "S04_herbivore_monoculture,S05_carnivore_stress,S06_predator_prey_mixed"
+    },
+    "command": "E2_FOODWEB_LABEL=main E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_MAX_LAG=200 E2_FOODWEB_OUT=<main>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts\nE2_FOODWEB_LABEL=seed E2_FOODWEB_SEEDS=13..24 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_OUT=<seed>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts\nE2_FOODWEB_LABEL=duration E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=900 E2_FOODWEB_SAMPLE_EVERY=10 E2_FOODWEB_OUT=<duration>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts\nE2_FOODWEB_LABEL=sampling E2_FOODWEB_SEEDS=1..12 E2_FOODWEB_TICKS=2700 E2_FOODWEB_SAMPLE_EVERY=5 E2_FOODWEB_SCENARIOS=S06_predator_prey_mixed E2_FOODWEB_OUT=<sampling>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb.experiment.ts\nE2_FOODWEB_SENS_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts\nE2_FOODWEB_DATASET_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.experiment.ts"
+  },
+  "note": "Dataset E2.2: 120 corse (primaria, replica seed, durata, campionamento), analisi trofiche additive; sorgenti E2 e E1 tracciati separatamente. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità."
+}
