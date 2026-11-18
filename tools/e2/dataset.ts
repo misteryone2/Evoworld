@@ -29,6 +29,10 @@ export interface E2DatasetSource {
   e1SourceSha256: string;
   runtime?: { node: string; v8: string };
   note?: string;
+  /** Sovrascrittura additiva del comando di riproduzione per dataset revisionati. */
+  reproduction?: E2Dataset["protocol"]["reproduction"];
+  /** Analisi aggiuntive (es. review E2.1) conservate senza alterare lo schema base. */
+  auxiliary?: Record<string, unknown>;
 }
 
 export interface E2Dataset {
@@ -55,6 +59,7 @@ export interface E2Dataset {
   configuration: unknown[];
   results: unknown;
   metrics: unknown;
+  auxiliary: Record<string, unknown>;
 }
 
 export interface E2Manifest {
@@ -109,7 +114,7 @@ export function buildDataset(source: E2DatasetSource): E2Dataset {
       ticks: source.env.TICKS,
       sampleEvery: source.env.SAMPLE_EVERY,
       totalRuns: source.results.length,
-      reproduction: {
+      reproduction: source.reproduction ?? {
         env: {
           E2_PILOT_SEEDS: source.env.SEEDS.join(","),
           E2_PILOT_TICKS: String(source.env.TICKS),
@@ -135,6 +140,7 @@ export function buildDataset(source: E2DatasetSource): E2Dataset {
     })),
     results: stripVariableData(source.results),
     metrics: stripVariableData(source.scientificReport),
+    auxiliary: stripVariableData(source.auxiliary ?? {}) as Record<string, unknown>,
   };
 }
 

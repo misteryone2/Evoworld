@@ -36,6 +36,17 @@ describe("E2 dataset", () => {
     expect(dataset.protocol.reproduction.command).toContain("scripts/e2_population_pilot.experiment.ts");
   });
 
+  it("preserves additive reproduction and auxiliary fields", () => {
+    const base = source();
+    const dataset = buildDataset({
+      ...base,
+      reproduction: { env: { E2_REVIEW: "1" }, command: "review-command" },
+      auxiliary: { review: { seeds: 12, note: "additive" } },
+    });
+    expect(dataset.protocol.reproduction.command).toBe("review-command");
+    expect(dataset.auxiliary).toEqual({ review: { seeds: 12, note: "additive" } });
+  });
+
   it("writes and verifies gzip archive and manifest", () => {
     const dir = mkdtempSync(join(tmpdir(), "e2-dataset-"));
     try {
