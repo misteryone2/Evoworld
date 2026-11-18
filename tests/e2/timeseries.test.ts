@@ -20,8 +20,12 @@ describe("E2 timeseries", () => {
     expect(sampleSeries(run, "population").map((p) => p.value)).toEqual([10, 12, 14]);
   });
 
-  it("computes lag-1 autocorrelation", () => {
+  it("computes lag-1 autocorrelation within [-1, 1] even with a trend", () => {
     expect(lag1Autocorrelation([1, 2, 1, 2, 1, 2])).toBeCloseTo(-1, 5);
+    const trending = lag1Autocorrelation([150, 120, 100, 80, 60, 45, 30, 25]);
+    expect(trending).not.toBeNull();
+    expect(trending as number).toBeGreaterThanOrEqual(-1);
+    expect(trending as number).toBeLessThanOrEqual(1);
     expect(lag1Autocorrelation([1, 2, 3, 4, 5])).toBeGreaterThan(0.5);
     expect(lag1Autocorrelation([1])).toBeNull();
   });

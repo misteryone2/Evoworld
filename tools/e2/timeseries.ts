@@ -79,19 +79,29 @@ export function seriesSd(points: Point[]): number | null {
   return sampleSd(points.map((p) => p.value));
 }
 
-/** Autocorrelazione lag-1. `null` se la serie e' troppo corta o costante. */
+/**
+ * Autocorrelazione lag-1. `null` se la serie e' troppo corta o costante.
+ *
+ * Il denominatore usa la radice delle due somme dei quadrati (ossia le parti
+ * "corrente" e "precedente" della stessa serie): per il Cauchy-Schwarz il
+ * risultato resta sempre in [-1, 1], anche in presenza di trend. Usare solo
+ * la somma dei quadrati correnti produrrebbe valori > 1 e non interpretabili.
+ */
 export function lag1Autocorrelation(values: number[]): number | null {
   const finite = values.filter(Number.isFinite);
   if (finite.length < 3) return null;
   const m = mean(finite);
   let numerator = 0;
-  let denominator = 0;
+  let currentSquares = 0;
+  let previousSquares = 0;
   for (let i = 1; i < finite.length; i++) {
     const previous = finite[i - 1] - m;
     const current = finite[i] - m;
     numerator += current * previous;
-    denominator += current * current;
+    currentSquares += current * current;
+    previousSquares += previous * previous;
   }
+  const denominator = Math.sqrt(currentSquares * previousSquares);
   if (!Number.isFinite(denominator) || denominator === 0) return null;
   return round(numerator / denominator);
 }
