@@ -1,0 +1,104 @@
+/**
+ * E2 — selezione degli scenari.
+ *
+ * Non definiamo nuove regole biologiche: gli scenari E2.0/E2.1 riutilizzano
+ * la tabella E1, che e' gia' deterministica e documentata. Le fasi successive
+ * potranno aggiungere scenari E2 dedicati senza toccare E1.
+ */
+import { buildScenarios, type ScenarioBuildOptions } from "../e1/scenarios";
+import type { ScenarioSpec } from "../e1/runner";
+
+/** Scenari E1 riutilizzati nel pilota E2.1. */
+export const E2_PILOT_SCENARIO_IDS = [
+  "S01_stability_baseline",
+  "S02_scarcity_dense",
+  "S06_predator_prey_mixed",
+  "S08_recovery_after_cull80",
+] as const;
+
+export interface E2PilotOptions {
+  seeds: number[];
+  ticks: number;
+  sampleEvery: number;
+}
+
+export interface E2ScenarioRationale {
+  e1Id: string;
+  role: string;
+  question: string;
+  phase: "E2-A" | "E2-B" | "E2-E";
+}
+
+/** Perche' ogni scenario e' nel pilota. */
+export const E2_PILOT_RATIONALE: E2ScenarioRationale[] = [
+  {
+    e1Id: "S01_stability_baseline",
+    role: "controllo demografico",
+    question: "La popolazione baseline raggiunge un equilibrio stabile e quanto varia tra seed?",
+    phase: "E2-A",
+  },
+  {
+    e1Id: "S02_scarcity_dense",
+    role: "trattamento scarsita'/densita'",
+    question: "La limitazione delle risorse riduce la stabilita' e aumenta il rischio di collasso?",
+    phase: "E2-A",
+  },
+  {
+    e1Id: "S06_predator_prey_mixed",
+    role: "sistema preda-predatore",
+    question: "Carnivori ed erbivori mostrano risposte demografiche sfalsate o cicli?",
+    phase: "E2-B",
+  },
+  {
+    e1Id: "S08_recovery_after_cull80",
+    role: "perturbazione demografica",
+    question: "Dopo un cull dell'80% la popolazione ritorna al livello pre-perturbazione?",
+    phase: "E2-E",
+  },
+];
+
+/** Costruisce il pilota E2.1 partendo dalla tabella E1, senza modificarla. */
+export function buildE2PilotScenarios(options: E2PilotOptions): ScenarioSpec[] {
+  const buildOptions: ScenarioBuildOptions = {
+    seeds: options.seeds,
+    ticks: options.ticks,
+    sampleEvery: options.sampleEvery,
+    habitatControls: false,
+  };
+  const allowed = new Set<string>(E2_PILOT_SCENARIO_IDS);
+  return buildScenarios(buildOptions).filter((spec) => allowed.has(spec.id));
+}
+
+/** Matrice concettuale E2.1–E2.6, usata nel report e nei controlli di copertura. */
+export const E2_MATRIX = {
+  "E2-A": {
+    title: "Stabilita' demografica",
+    scenarios: ["S01", "S02", "S03", "S04", "S05", "S07", "S12"],
+    status: "pilota parziale" as const,
+  },
+  "E2-B": {
+    title: "Dinamiche preda-predatore",
+    scenarios: ["S04", "S05", "S06"],
+    status: "pilota parziale" as const,
+  },
+  "E2-C": {
+    title: "Competizione e coesistenza",
+    scenarios: ["S01", "S06", "S09", "S10", "S13", "S14"],
+    status: "pianificato" as const,
+  },
+  "E2-D": {
+    title: "Biodiversita' e complessita'",
+    scenarios: ["S01", "S06", "S09", "S10", "S12"],
+    status: "pianificato" as const,
+  },
+  "E2-E": {
+    title: "Resilienza e perturbazioni",
+    scenarios: ["S08"],
+    status: "pilota parziale" as const,
+  },
+  "E2-F": {
+    title: "Evoluzione e speciazione",
+    scenarios: ["S01", "S11", "S12"],
+    status: "pianificato" as const,
+  },
+} as const;
