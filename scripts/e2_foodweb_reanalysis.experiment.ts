@@ -42,12 +42,20 @@ describe("E2.2 review reanalysis", () => {
   it(
     "rebuilds corrected scientific reports from the original block results",
     () => {
-      const blocks = [
-        { name: "main", block: readBlock(process.env.E2_FOODWEB_REANALYSIS_MAIN, "E2_FOODWEB_REANALYSIS_MAIN") },
-        { name: "seed", block: readBlock(process.env.E2_FOODWEB_REANALYSIS_SEED, "E2_FOODWEB_REANALYSIS_SEED") },
-        { name: "duration", block: readBlock(process.env.E2_FOODWEB_REANALYSIS_DURATION, "E2_FOODWEB_REANALYSIS_DURATION") },
-        { name: "sampling", block: readBlock(process.env.E2_FOODWEB_REANALYSIS_SAMPLING, "E2_FOODWEB_REANALYSIS_SAMPLING") },
-      ];
+      const only = process.env.E2_FOODWEB_REANALYSIS_ONLY?.split(",")
+        .map((name) => name.trim())
+        .filter(Boolean);
+      const candidates = [
+        { name: "main", envName: "E2_FOODWEB_REANALYSIS_MAIN" },
+        { name: "seed", envName: "E2_FOODWEB_REANALYSIS_SEED" },
+        { name: "duration", envName: "E2_FOODWEB_REANALYSIS_DURATION" },
+        { name: "sampling", envName: "E2_FOODWEB_REANALYSIS_SAMPLING" },
+      ].filter(({ name }) => !only || only.includes(name));
+      if (candidates.length === 0) throw new Error("E2_FOODWEB_REANALYSIS_ONLY selected no known block");
+      const blocks = candidates.map(({ name, envName }) => ({
+        name,
+        block: readBlock(process.env[envName], envName),
+      }));
       const outputs: Record<string, { artifact: string; sha256: string; runs: number; scenarios: number }> = {};
       for (const { name, block } of blocks) {
         const source = block.payload;
