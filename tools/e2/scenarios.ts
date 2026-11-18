@@ -69,6 +69,46 @@ export function buildE2PilotScenarios(options: E2PilotOptions): ScenarioSpec[] {
   return buildScenarios(buildOptions).filter((spec) => allowed.has(spec.id));
 }
 
+/** Scenari E1 riutilizzati in E2.2 (food web). */
+export const E2_FOODWEB_SCENARIO_IDS = [
+  "S04_herbivore_monoculture",
+  "S05_carnivore_stress",
+  "S06_predator_prey_mixed",
+] as const;
+
+/** Perché ogni scenario è in E2.2. */
+export const E2_FOODWEB_RATIONALE: E2ScenarioRationale[] = [
+  {
+    e1Id: "S04_herbivore_monoculture",
+    role: "controllo senza predazione attesa",
+    question: "Con tutti i fondatori a carnivory=0.05, quante kills sono registrate (A04)?",
+    phase: "E2-B",
+  },
+  {
+    e1Id: "S05_carnivore_stress",
+    role: "stress carnivoro senza prede idonee",
+    question: "Con tutti i fondatori a carnivory=0.6, la predazione tra conspecifici è impossibile (A04): le kills restano nulle?",
+    phase: "E2-B",
+  },
+  {
+    e1Id: "S06_predator_prey_mixed",
+    role: "sistema preda-predatore (geometria e densità diverse)",
+    question: "Il tratto carnivoro segue il tratto erbivoro con un lag positivo e i due tratti coesistono?",
+    phase: "E2-B",
+  },
+];
+
+/** Costruisce il blocco E2.2 partendo dalla tabella E1 immutata. */
+export function buildE2FoodWebScenarios(options: E2PilotOptions & { scenarioIds?: readonly string[] }): ScenarioSpec[] {
+  const allowed = new Set<string>(options.scenarioIds ?? E2_FOODWEB_SCENARIO_IDS);
+  return buildScenarios({
+    seeds: options.seeds,
+    ticks: options.ticks,
+    sampleEvery: options.sampleEvery,
+    habitatControls: false,
+  }).filter((spec) => allowed.has(spec.id));
+}
+
 /** Matrice concettuale E2.1–E2.6, usata nel report e nei controlli di copertura. */
 export const E2_MATRIX = {
   "E2-A": {
@@ -79,7 +119,7 @@ export const E2_MATRIX = {
   "E2-B": {
     title: "Dinamiche preda-predatore",
     scenarios: ["S04", "S05", "S06"],
-    status: "pilota parziale" as const,
+    status: "eseguito (E2.2)" as const,
   },
   "E2-C": {
     title: "Competizione e coesistenza",

@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** E2.1 completata con review scientifica (48 corse pilota + 96 corse di isolamento); in attesa di review indipendente prima di E2.2. E2.2–E2.6 restano pianificate.
+**Stato:** E2.1 completata con review scientifica (48 corse pilota + 96 corse di isolamento); E2.2 eseguita (120 corse: 36 primarie + 36 replica seed + 36 durata + 12 campionamento), report e dataset in preparazione. Entrambe in attesa di review indipendente. E2.3–E2.6 restano pianificate.
 
 Questo documento definisce le domande, i disegni e i criteri di decisione delle sottofasi E2. Le fasi successive possono essere riorganizzate se i dati E2.1 mostrano che un'altra sequenza è scientificamente più corretta. Nessun risultato è anticipato: i risultati appartengono ai report di fase.
 
@@ -37,7 +37,7 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | ID | Fase | Domanda centrale | Scenari E1 riusati | Durata | Stato |
 |---|---|---|---|---|---|
 | E2.1 | Population Stability | Le popolazioni raggiungono equilibri stabili e quali variabili spiegano le differenze osservate? | S01, S02, S06, S08; bracci I0/IG/ID/IGD; S09, S10, S13, S14 | 900 tick | Completata (review) |
-| E2.2 | Food Web Dynamics | I predatori dipendono realmente dalle prede e con quali ritardi? | S04, S05, S06 | 2700 tick | Pianificata |
+| E2.2 | Food Web Dynamics | I predatori dipendono realmente dalle prede e con quali ritardi? | S04, S05, S06 | 2700 tick | Eseguita (report e dataset in preparazione) |
 | E2.3 | Competition & Coexistence | La competizione produce esclusione o coesistenza? | S01, S06, S09, S10, S13, S14 | 900-2700 tick | Pianificata |
 | E2.4 | Biodiversity & Complexity | La biodiversità è persistente e correlata alla stabilità? | S01, S06, S09, S10, S12 | 2700 tick | Pianificata |
 | E2.5 | Resilience & Perturbation | L'ecosistema recupera dopo cull e shock di risorse? | S08 + S01 appaiato (+ S13/S14 come controllo risorse) | 900-1800 tick | Classificazione appaiata completata in E2.1; estensione pianificata |
@@ -84,10 +84,10 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | **Durata** | 2700 tick (verifica se i cicli emergono solo su scale lunghe); `sampleEvery=10` |
 | **Protocollo** | nuovo script `scripts/e2_foodweb.experiment.ts` (additivo); riutilizza `compareCrossCorrelations` e `analyzeTrophicCorrelation` già introdotti nella review E2.1. `maxLag` è in tick: con `sampleEvery=10`, 50 tick corrispondono a 5 campioni |
 | **Metriche** | lag ottimale in tick, correlazione massima, conteggio uccisioni cumulativo, tempo al primo collasso di prede/predatori |
-| **Risultati** | Da produrre |
-| **Limiti** | La classificazione carnivoro/erbivoro usa soglia `carnivory ≥ 0.35`, non il ruolo effettivo in un attacco; nessun ID predatore/preda; i bucket non toroidali (A01) possono alterare la caccia ai bordi; l'immunità apicale (A04) tronca le catene |
+| **Risultati** | Audit [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md), matrice [E2_2_EXPERIMENTAL_MATRIX.md](E2_2_EXPERIMENTAL_MATRIX.md), report [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md); dataset `e2.2-foodweb` (120 corse) |
+| **Limiti** | La classificazione carnivoro/erbivoro usa soglia `carnivory ≥ 0.35`, non il ruolo effettivo in un attacco; nessun ID predatore/preda; i bucket non toroidali (A01) possono alterare la caccia ai bordi; l'immunità apicale (A04) tronca le catene; S06 è 160×160/180 foundation vs 128×128/150 di S04/S05 ⇒ confronto confuso; kills ≠ mortalità totale (A07) |
 | **Interpretazione** | Un lag è evidenza di sequenzialità temporale, non di causalità; la causalità richiederebbe manipolazione delle popolazioni, non disponibile |
-| **Conclusione** | Da produrre |
+| **Conclusione** | Vedere [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md): sequenzialità e persistenza classificate con limiti espliciti; in attesa di review indipendente |
 
 ---
 
