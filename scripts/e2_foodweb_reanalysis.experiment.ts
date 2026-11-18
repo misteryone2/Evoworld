@@ -98,6 +98,6 @@ describe("E2.2 review reanalysis", () => {
       }
       process.stdout.write(`${JSON.stringify(outputs, null, 2)}\n`);
     },
-    600_000,
+    1_800_000,
   );
 });
