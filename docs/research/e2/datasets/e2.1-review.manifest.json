@@ -1,0 +1,61 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.1-review.json.gz",
+  "payloadSha256": "cbbcce2576e2f1e74f5ca4587ac621498ee6613ecad08e947e4e9fd4f4c2a3fe",
+  "archiveSha256": "d5cb5cee1934f00245650adf1a03b627e87f75e8ad8015fd12a2bec5cb4b8b89",
+  "phase": "E2.1-review",
+  "experiment": "E2.1 reviewed population stability, variable isolation, correlation and resilience",
+  "codeCommit": "44c69e8bcf3bbbd0a995e8d3fe66908101ac863d",
+  "workingTreeDirty": false,
+  "sourceSha256": "627e79d5b79c03e486f3538013369eb07b9c2760d2de12c1701d03fd4dfad2ec",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-18T11:00:00.000Z",
+  "scenarioIds": [
+    "I0_control_128x128_150",
+    "ID_density_only_128x128_220",
+    "IGD_combined_64x64_220",
+    "IG_geometry_only_64x64_38",
+    "S01_stability_baseline",
+    "S02_scarcity_dense",
+    "S06_predator_prey_mixed",
+    "S08_recovery_after_cull80",
+    "S09_poor_habitat",
+    "S10_rich_habitat",
+    "S13_poor_position_rich_resources",
+    "S14_rich_position_poor_resources"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 144,
+  "reproduction": {
+    "env": {
+      "E2_PILOT_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E2_PILOT_TICKS": "900",
+      "E2_PILOT_SAMPLE_EVERY": "10",
+      "E2_ISOLATION_SEEDS": "1,2,3,4,5,6,7,8,9,10,11,12",
+      "E2_ISOLATION_TICKS": "900",
+      "E2_ISOLATION_SAMPLE_EVERY": "10",
+      "E2_CORRELATION_MAX_LAG": "50",
+      "E2_DATASET_REVIEW_LABEL": "e2.1-review",
+      "E2_DATASET_REVIEW_CODE_COMMIT": "<commit>"
+    },
+    "command": "E2_PILOT_OUT=<pilot>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_population_pilot.experiment.ts\nE2_ISOLATION_OUT=<isolation>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_variable_isolation.experiment.ts\nE2_CORRELATION_INPUT=<pilot>.json E2_CORRELATION_OUT=<correlation>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_correlation_review.experiment.ts\nE2_RESILIENCE_INPUT=<pilot>.json E2_RESILIENCE_OUT=<resilience>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_resilience_review.experiment.ts\nE2_DATASET_REVIEW_* npx vitest run --config vitest.experiment.config.ts scripts/e2_dataset_review.experiment.ts"
+  },
+  "note": "Dataset E2.1 revisionato: include pilota, isolamento variabili, correlazione detrendizzata e resilienza appaiata; sorgenti E2 e E1 tracciati separatamente."
+}

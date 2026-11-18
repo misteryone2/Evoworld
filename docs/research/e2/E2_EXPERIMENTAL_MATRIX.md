@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** disegno approvato per esecuzione autonoma; E2.1 completata (pilota), E2.2–E2.6 pianificate.
+**Stato:** E2.1 completata con review scientifica (48 corse pilota + 96 corse di isolamento); in attesa di review indipendente prima di E2.2. E2.2–E2.6 restano pianificate.
 
 Questo documento definisce le domande, i disegni e i criteri di decisione delle sottofasi E2. Le fasi successive possono essere riorganizzate se i dati E2.1 mostrano che un'altra sequenza è scientificamente più corretta. Nessun risultato è anticipato: i risultati appartengono ai report di fase.
 
@@ -36,11 +36,11 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 
 | ID | Fase | Domanda centrale | Scenari E1 riusati | Durata | Stato |
 |---|---|---|---|---|---|
-| E2.1 | Population Stability | Le popolazioni raggiungono equilibri stabili? | S01, S02, S06, S08 (pilota) | 900 tick | Completata (pilota) |
+| E2.1 | Population Stability | Le popolazioni raggiungono equilibri stabili e quali variabili spiegano le differenze osservate? | S01, S02, S06, S08; bracci I0/IG/ID/IGD; S09, S10, S13, S14 | 900 tick | Completata (review) |
 | E2.2 | Food Web Dynamics | I predatori dipendono realmente dalle prede e con quali ritardi? | S04, S05, S06 | 2700 tick | Pianificata |
 | E2.3 | Competition & Coexistence | La competizione produce esclusione o coesistenza? | S01, S06, S09, S10, S13, S14 | 900-2700 tick | Pianificata |
 | E2.4 | Biodiversity & Complexity | La biodiversità è persistente e correlata alla stabilità? | S01, S06, S09, S10, S12 | 2700 tick | Pianificata |
-| E2.5 | Resilience & Perturbation | L'ecosistema recupera dopo cull e shock di risorse? | S08 (+ S13/S14 come controllo risorse) | 900-1800 tick | Pilota parziale in E2.1 |
+| E2.5 | Resilience & Perturbation | L'ecosistema recupera dopo cull e shock di risorse? | S08 + S01 appaiato (+ S13/S14 come controllo risorse) | 900-1800 tick | Classificazione appaiata completata in E2.1; estensione pianificata |
 | E2.6 | Evolution & Speciation | Mutazione, deriva e speciazione sono distinguibili? | S01, S11, S12 | 2700-5000 tick | Pianificata |
 
 ---
@@ -50,21 +50,21 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | Campo | Contenuto |
 |---|---|
 | **ID** | E2.1 |
-| **Titolo** | Stabilità demografica in condizioni baseline, scarsità, sistema misto e post-cull |
-| **Domanda scientifica** | Le popolazioni di EvoWorld raggiungono equilibri persistenti o oscillano/collassano in modo seed-dipendente? |
-| **Ipotesi** | H1: la popolazione baseline converge a un equilibrio con bassa variabilità residua; H2: scarsità/densità aumenta il coefficiente di variazione e il rischio di estinzione; H3: il sistema misto mostra maggiore variabilità del baseline; H4: dopo cull80 non si verifica recupero completo entro la fine dell'orizzonte |
-| **Variabile indipendente** | scenario (S01 controllo, S02 scarsità/densa, S06 misto, S08 cull80); una sola differenza rispetto al controllo per confronto alla volta |
-| **Variabili dipendenti** | popolazione finale, CV della popolazione, trend lineare, autocorrelazione lag-1, ampiezza/periodo delle oscillazioni, AUC, tasso di estinzione, taxon/specie dominante, vegetazione occupata |
-| **Controllo** | S01_stability_baseline, stesso seed, stessa geometria, stessa durata |
-| **Condizioni iniziali** | tabella E1 `buildScenarios`; 128×128 per S01/S06/S08, geometria S02 per scarsità/densità; setup `baseline`/`scarcity_dense`/`mixed`/`cull80` |
-| **Seed** | 1–12 (48 corse nel pilota) |
+| **Titolo** | Stabilità demografica, isolamento variabili, correlazione detrendizzata e resilienza appaiata |
+| **Domanda scientifica** | Le popolazioni raggiungono equilibri stabili? Quali differenze sopravvivono all'isolamento di geometria, densità e risorse? Le correlazioni trofiche resistono al detrending? S08 recupera rispetto a S01 appaiato? |
+| **Ipotesi** | H1: equilibrio baseline stabile; H2: scarsità/densità riduce popolazione e aumenta variabilità; H3: sistema misto più variabile; H4: recupero dopo cull80 entro 450 tick. La review non conferma H2 come effetto della scarsità |
+| **Variabile indipendente** | Pilota: scenario S01/S02/S06/S08. Review: una variabile alla volta — geometria (I0 vs IG), densità (I0 vs ID), combinazione (I0 vs IGD), risorse/posizione (S09/S10/S13/S14) |
+| **Variabili dipendenti** | popolazione finale, frazione di sopravvivenza, CV, trend, lag-1, oscillazioni, AUC, estinzione, speciazione, biodiversità, vegetazione occupata, correlazione originale/detrendizzata, esiti di recupero |
+| **Controllo** | S01 per il pilota e per S08; `I0_control_128x128_150` per geometria/densità; S09/S13/S14 per risorse/posizione; sempre appaiato per seed |
+| **Condizioni iniziali** | tabelle E1 immutate; bracci custom costruiti tramite `ScenarioSpec` pubblico; S13/S14 abilitati con `habitatControls: true`; cull deterministico a tick 450 |
+| **Seed** | 1–12; 48 corse pilota + 96 corse isolamento = 144 corse |
 | **Durata** | 900 tick, campionamento ogni 10 tick (91 punti/corsa) |
-| **Protocollo** | `E2_PILOT_SEEDS=1,...,12 E2_PILOT_TICKS=900 E2_PILOT_SAMPLE_EVERY=10 npx vitest run --config vitest.experiment.config.ts scripts/e2_population_pilot.experiment.ts` |
-| **Metriche** | `tools/e2/metrics.ts`, `tools/e2/timeseries.ts`; 4 confronti appaiati in `buildPilotComparisons` |
-| **Risultati** | Vedere [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) e dataset `e2.1-pilot.json.gz` |
-| **Limiti** | 12 seed non randomizzati; 900 tick possono essere troppo brevi per equilibri evolutivi; `deaths` esclude `predationKills`; la vegetazione osservata è solo nelle celle occupate materializzate |
-| **Interpretazione** | Confronti descrittivi per seed; distinctiveness di regime valutata su distribuzioni complete, non su singole corse |
-| **Conclusione** | Vedere [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) §6: equilibrio non supportato a 900 tick, con classificazioni esplicite |
+| **Protocollo** | `scripts/e2_population_pilot.experiment.ts`, `scripts/e2_variable_isolation.experiment.ts`, `scripts/e2_correlation_review.experiment.ts` (`E2_CORRELATION_MAX_LAG=50`), `scripts/e2_resilience_review.experiment.ts`, `scripts/e2_dataset_review.experiment.ts` |
+| **Metriche** | `tools/e2/metrics.ts`, `tools/e2/timeseries.ts` (con detrending), `tools/e2/isolation.ts`, `tools/e2/correlationReview.ts`, `tools/e2/resilience.ts`, `tools/e2/resilienceReview.ts`; 4 confronti pilota + 10 confronti isolamento |
+| **Risultati** | [Report revisionato](E2_1_PILOT_REPORT.md); dataset [e2.1-review.json.gz](datasets/e2.1-review.json.gz) e [manifest](datasets/e2.1-review.manifest.json) |
+| **Limiti** | 12 seed non randomizzati; 900 tick possono essere troppo brevi; nessuno scalar globale per le risorse; geometria-only approssima la densità dell'1,3%; lag stimabili solo multipli di 10; le categorie di recupero sono entro l'orizzonte |
+| **Interpretazione** | Confronti descrittivi per seed; nessuna correlazione o differenza è interpretata come causalità; S02 grezzo è classificato come confuso |
+| **Conclusione** | Vedere [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) §9: equilibrio non supportato, attribuzione alla scarsità non dimostrata, in attesa di review indipendente |
 
 ---
 
@@ -82,7 +82,7 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | **Condizioni iniziali** | tabelle E1 S04/S05/S06; stessa geometria e popolazione iniziale |
 | **Seed** | 1–12 |
 | **Durata** | 2700 tick (verifica se i cicli emergono solo su scale lunghe); `sampleEvery=10` |
-| **Protocollo** | nuovo script `scripts/e2_foodweb.experiment.ts` (additivo), con `crossCorrelation` e `bestCrossCorrelation` di `tools/e2/timeseries.ts` |
+| **Protocollo** | nuovo script `scripts/e2_foodweb.experiment.ts` (additivo); riutilizza `compareCrossCorrelations` e `analyzeTrophicCorrelation` già introdotti nella review E2.1. `maxLag` è in tick: con `sampleEvery=10`, 50 tick corrispondono a 5 campioni |
 | **Metriche** | lag ottimale in tick, correlazione massima, conteggio uccisioni cumulativo, tempo al primo collasso di prede/predatori |
 | **Risultati** | Da produrre |
 | **Limiti** | La classificazione carnivoro/erbivoro usa soglia `carnivory ≥ 0.35`, non il ruolo effettivo in un attacco; nessun ID predatore/preda; i bucket non toroidali (A01) possono alterare la caccia ai bordi; l'immunità apicale (A04) tronca le catene |
@@ -151,9 +151,9 @@ Questo documento definisce le domande, i disegni e i criteri di decisione delle 
 | **Condizioni iniziali** | snapshot a metà corsa; cull con quota totale stratificata per specie e selezione deterministica per hash |
 | **Seed** | 1–12 |
 | **Durata** | 900 tick nel pilota; 1800 tick per distinguere recupero lento da mancato recupero |
-| **Protocollo** | `tools/e2/metrics.ts` → `resilience`; Pilota E2.1 già esegue S08; estensione con `cull95` e shock risorse in script dedicato |
+| **Protocollo** | `tools/e2/metrics.ts` → `resilience` più `tools/e2/resilience.ts` e `tools/e2/resilienceReview.ts` (classificazione assoluta, relativa al controllo, parziale, non osservata) introdotti nella review E2.1; estensione futura con `cull95` e shock risorse in script dedicato |
 | **Metriche** | `returnTime`, `baselineBefore`, drop fraction, `PerturbationReport` |
-| **Risultati** | Parziale nel report E2.1; estensione da produrre |
+| **Risultati** | Review E2.1: 0/12 assoluti, 0/12 relativi al controllo, 1/12 parziali, 11/12 senza recupero osservato entro 900 tick; estensione `cull95`/shock risorse da produrre |
 | **Limiti** | `World.fromSnapshot()` azzera alcuni flag (A09); cull è genome-blind, quindi non testa selezione; nessun helper E1 per shock di risorse a metà corsa |
 | **Interpretazione** | Mancato recupero va riportato come risultato, non come difetto; l'assenza di recupero entro 900 tick non prova irreversibilità |
 | **Conclusione** | Da produrre |
