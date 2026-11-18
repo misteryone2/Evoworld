@@ -1,0 +1,50 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.2-foodweb-inferential-hardening.json.gz",
+  "payloadSha256": "cf3834f616df6b66014598ba47ca6313ba851886182e5e10ed646a97df4463e9",
+  "archiveSha256": "54c6ad5dfd8d5cd972bccf33b5a13a114e737c5cb01b8fb44ceb46e8b1223e3e",
+  "phase": "E2.2.1-foodweb-inferential-hardening",
+  "experiment": "E2.2 food web dynamics: independent inferential hardening, QA-gated IAAFT, FPR calibration and multiple-testing control",
+  "codeCommit": "70e4f5bd15f36d8456b8b0934d20a54d1121a4e5",
+  "workingTreeDirty": false,
+  "sourceSha256": "496fefc739b439c56ac020d713bc3175332a18297b1013ab29c1eac065faed06",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-18T20:30:00.000Z",
+  "scenarioIds": [
+    "S04_herbivore_monoculture",
+    "S05_carnivore_stress",
+    "S06_predator_prey_mixed"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 120,
+  "reproduction": {
+    "env": {
+      "E2_HARDENING_CALIBRATION_EXECUTED_AT": "2026-11-18T16:30:00.000Z",
+      "E2_HARDENING_QA_EXECUTED_AT": "2026-11-18T16:15:00.000Z",
+      "E2_HARDENING_SYNTHETIC_EXECUTED_AT": "2026-11-18T17:00:00.000Z",
+      "E2_HARDENING_STABILITY_EXECUTED_AT": "2026-11-18T17:00:00.000Z",
+      "E2_HARDENING_REANALYSIS_EXECUTED_AT": "2026-11-18T20:00:00.000Z",
+      "E2_HARDENING_COMBINE_EXECUTED_AT": "2026-11-18T20:15:00.000Z",
+      "E2_HARDENING_DATASET_EXECUTED_AT": "2026-11-18T20:30:00.000Z"
+    },
+    "command": "# Raw 120 simulation outputs remain byte-identical; only E2 inference is regenerated.\nE2_HARDENING_QA_OUT=<validation>/qa-sensitivity.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_qa_sensitivity.experiment.ts\nE2_HARDENING_CALIBRATION_CHUNK=<chunk> E2_HARDENING_CALIBRATION_OUT=<validation>/calibration-<chunk>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_calibration.experiment.ts\nE2_HARDENING_AGGREGATE_INPUT_DIR=<validation> E2_HARDENING_AGGREGATE_OUT=<validation>/calibration-aggregate.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_aggregate.experiment.ts\nE2_HARDENING_STABILITY_CHUNK=<chunk> E2_HARDENING_STABILITY_OUT=<validation>/stability-<chunk>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_stability.experiment.ts\nE2_HARDENING_SYNTHETIC_CHUNK=<chunk> E2_HARDENING_SYNTHETIC_OUT=<validation>/synthetic-<chunk>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_synthetic.experiment.ts\nE2_HARDENING_REANALYSIS_ONLY=<block> E2_HARDENING_REANALYSIS_OUT=<validation>/hardened-<block>.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_reanalysis.experiment.ts\nE2_HARDENING_COMBINE_* E2_HARDENING_COMBINE_OUT=<validation>/hardened-combined.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_reanalysis_combine.experiment.ts\nE2_HARDENING_DATASET_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_hardening_dataset.experiment.ts"
+  },
+  "note": "E2.2.1: nessuna simulazione biologica rieseguita. Stesse 120 corse grezze; IAAFT a lunghezza esatta con QA per-surrogato, degrado NON_VALUTABILE, calibrazione Monte Carlo con 1000 dataset/cella, Holm/BH pre-dichiarati e validazione sintetica separata. Correlazione e significatività non identificano causalità."
+}
