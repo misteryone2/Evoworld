@@ -14,7 +14,7 @@
  * significatività non implica causalità.
  */
 import { summarize, type NumericSummary } from "../e1/statistics";
-import { amplitudeSpectrum, fft, ifftReal } from "./fourier";
+import { exactAmplitudeSpectrum, exactIfftReal, exactTransform } from "./fourier";
 import {
   bestCrossCorrelation,
   crossCorrelation,
@@ -55,6 +55,32 @@ export const DISABLED_SURROGATE_CONFIG: SurrogateConfig = {
   enabled: false,
 };
 
+/**
+ * Criterio di convergenza IAAFT: dopo ogni rank-remapping si calcola
+ * l'errore spettrale normalizzato
+ * `sqrt(Σ(|FFT(surrogato)|−|FFT(serie)|)² / Σ|FFT(serie)|²)`.
+ * Il surrogato si ferma quando l'errore è <= `IAAFT_AMPLITUDE_TOLERANCE`;
+ * altrimenti esegue tutte le iterazioni richieste. Il numero effettivo di
+ * iterazioni e l'errore finale sono registrati nei risultati.
+ */
+export const IAAFT_AMPLITUDE_TOLERANCE = 1e-3;
+
+export interface IAAFTConvergenceSummary {
+  criterion: string;
+  tolerance: number;
+  maxIterations: number;
+  iterations: { min: number; mean: number; max: number };
+  finalRelativeSpectralError: { mean: number; max: number };
+  bestRelativeSpectralError: { mean: number; max: number };
+  convergedSurrogates: number;
+  totalSurrogates: number;
+}
+
+export interface IAAFTSurrogateResult {
+  surrogates: number[][];
+  convergence: IAAFTConvergenceSummary;
+}
+
 export interface SurrogateNullTest {
   method: "IAAFT";
   pairId: string;
@@ -71,6 +97,8 @@ export interface SurrogateNullTest {
   observedLag: number | null;
   observedMaxAbs: number | null;
   nullMaxAbs: NumericSummary;
+  /** Criterio, tolleranza e numero effettivo di iterazioni dell'IAAFT a lunghezza esatta. */
+  convergence: IAAFTConvergenceSummary;
   /** p = (1 + #{nullMaxAbs >= observedMaxAbs}) / (B + 1): corretto per la ricerca su tutti i lag. */
   pValue: number;
   significantWithinRun: boolean;
@@ -156,30 +184,66 @@ export function minimumOverlapFor(seriesA: Point[], seriesB: Point[], requested:
 }
 
 /**
- * Genera surrogati IAAFT: lo spettro di ampiezza target è quello dei valori
- * originali; il rank-remapping finale conserva esattamente la distribuzione.
+ * Genera surrogati IAAFT alla lunghezza esatta e registra la convergenza.
+ *
+ * Lo spettro di ampiezza target è quello della serie originale; ogni
+ * iterazione usa la DFT esatta su N campioni, conserva le fasi, applica
+ * l'anti-trasformata esatta e riordina i valori secondo la distribuzione
+ * empirica originale. Non esiste padding, troncamento o cambio di lunghezza.
  */
-export function iaaftSurrogates(
+export function iaaftSurrogatesDetailed(
   values: number[],
   count: number,
   rng: () => number,
-  iterations = 12,
-): number[][] {
+  iterations = DEFAULT_SURROGATE_CONFIG.iterations,
+): IAAFTSurrogateResult {
   const n = values.length;
-  if (count <= 0 || n < 4) return [];
-  const targetAmplitude = amplitudeSpectrum(values);
+  const maxIterations = Math.max(1, Math.floor(iterations));
+  const emptyConvergence = (): IAAFTConvergenceSummary => ({
+    criterion: "relative amplitude-spectrum error after rank remapping",
+    tolerance: IAAFT_AMPLITUDE_TOLERANCE,
+    maxIterations,
+    iterations: { min: 0, mean: 0, max: 0 },
+    finalRelativeSpectralError: { mean: 0, max: 0 },
+    bestRelativeSpectralError: { mean: 0, max: 0 },
+    convergedSurrogates: 0,
+    totalSurrogates: 0,
+  });
+  if (count <= 0 || n < 4) return { surrogates: [], convergence: emptyConvergence() };
+  if (!values.every((value) => Number.isFinite(value))) {
+    throw new Error("IAAFT requires finite input values");
+  }
+
+  const targetAmplitude = exactAmplitudeSpectrum(values);
+  const targetEnergy = targetAmplitude.reduce((sum, value) => sum + value * value, 0);
   const sorted = [...values].sort((a, b) => a - b);
   const allEqual = sorted.every((value) => value === sorted[0]);
 
+  const relativeSpectralError = (series: number[]): number => {
+    if (targetEnergy === 0) return 0;
+    const spectrum = exactAmplitudeSpectrum(series);
+    let errorEnergy = 0;
+    for (let index = 0; index < n; index++) {
+      const delta = spectrum[index] - targetAmplitude[index];
+      errorEnergy += delta * delta;
+    }
+    return Math.sqrt(errorEnergy / targetEnergy);
+  };
+
+  /** Riordina sempre esattamente N valori: nessun taglio della ricostruzione. */
   const remapRanks = (series: number[]): number[] => {
-    const truncated = series.slice(0, n);
-    const order = truncated.map((_, index) => index).sort((a, b) => truncated[a] - truncated[b] || a - b);
+    const order = series.map((_, index) => index).sort((a, b) => series[a] - series[b] || a - b);
     const result = new Array<number>(n);
     for (let rank = 0; rank < n; rank++) result[order[rank]] = sorted[rank];
     return result;
   };
 
   const surrogates: number[][] = [];
+  const usedIterations: number[] = [];
+  const finalErrors: number[] = [];
+  const bestErrors: number[] = [];
+  let convergedSurrogates = 0;
+
   for (let replicate = 0; replicate < count; replicate++) {
     const shuffled = [...values];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -188,11 +252,19 @@ export function iaaftSurrogates(
     }
     if (allEqual) {
       surrogates.push(shuffled);
+      usedIterations.push(0);
+      finalErrors.push(0);
+      bestErrors.push(0);
+      convergedSurrogates++;
       continue;
     }
+
     let current = shuffled;
-    for (let iteration = 0; iteration < Math.max(1, iterations); iteration++) {
-      const spectrum = fft(current);
+    let used = maxIterations;
+    let finalError = Number.POSITIVE_INFINITY;
+    let bestError = Number.POSITIVE_INFINITY;
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      const spectrum = exactTransform(current);
       const shaped = spectrum.map((value, index) => {
         const magnitude = Math.hypot(value.re, value.im);
         const phase = magnitude === 0 ? 0 : Math.atan2(value.im, value.re);
@@ -201,11 +273,59 @@ export function iaaftSurrogates(
           im: targetAmplitude[index] * Math.sin(phase),
         };
       });
-      current = remapRanks(ifftReal(shaped));
+      current = remapRanks(exactIfftReal(shaped));
+      finalError = relativeSpectralError(current);
+      bestError = Math.min(bestError, finalError);
+      if (finalError <= IAAFT_AMPLITUDE_TOLERANCE) {
+        used = iteration;
+        convergedSurrogates++;
+        break;
+      }
+    }
+    if (!current.every((value) => Number.isFinite(value))) {
+      throw new Error("IAAFT produced a non-finite surrogate");
     }
     surrogates.push(current);
+    usedIterations.push(used);
+    finalErrors.push(finalError);
+    bestErrors.push(bestError);
   }
-  return surrogates;
+
+  const average = (entries: number[]): number =>
+    entries.length === 0 ? 0 : entries.reduce((sum, value) => sum + value, 0) / entries.length;
+  return {
+    surrogates,
+    convergence: {
+      criterion: "relative amplitude-spectrum error after rank remapping",
+      tolerance: IAAFT_AMPLITUDE_TOLERANCE,
+      maxIterations,
+      iterations: {
+        min: usedIterations.length ? Math.min(...usedIterations) : 0,
+        mean: average(usedIterations),
+        max: usedIterations.length ? Math.max(...usedIterations) : 0,
+      },
+      finalRelativeSpectralError: {
+        mean: average(finalErrors),
+        max: finalErrors.length ? Math.max(...finalErrors) : 0,
+      },
+      bestRelativeSpectralError: {
+        mean: average(bestErrors),
+        max: bestErrors.length ? Math.max(...bestErrors) : 0,
+      },
+      convergedSurrogates,
+      totalSurrogates: surrogates.length,
+    },
+  };
+}
+
+/** Compatibilità con i chiamanti esistenti: restituisce solo i surrogati. */
+export function iaaftSurrogates(
+  values: number[],
+  count: number,
+  rng: () => number,
+  iterations = DEFAULT_SURROGATE_CONFIG.iterations,
+): number[][] {
+  return iaaftSurrogatesDetailed(values, count, rng, iterations).surrogates;
 }
 
 const meanOrNull = (values: number[]): number | null =>
@@ -239,8 +359,30 @@ export function runSurrogateNullTest(
 
   const rngA = mulberry32(deriveSurrogateSeed(config.seed, pairId, seed, 1));
   const rngB = mulberry32(deriveSurrogateSeed(config.seed, pairId, seed, 2));
-  const surrogatesA = iaaftSurrogates(detrendedA.residuals.map((p) => p.value), config.surrogates, rngA, config.iterations);
-  const surrogatesB = iaaftSurrogates(detrendedB.residuals.map((p) => p.value), config.surrogates, rngB, config.iterations);
+  const detailedA = iaaftSurrogatesDetailed(detrendedA.residuals.map((p) => p.value), config.surrogates, rngA, config.iterations);
+  const detailedB = iaaftSurrogatesDetailed(detrendedB.residuals.map((p) => p.value), config.surrogates, rngB, config.iterations);
+  const surrogatesA = detailedA.surrogates;
+  const surrogatesB = detailedB.surrogates;
+  const convergence: IAAFTConvergenceSummary = {
+    criterion: detailedA.convergence.criterion,
+    tolerance: detailedA.convergence.tolerance,
+    maxIterations: detailedA.convergence.maxIterations,
+    iterations: {
+      min: Math.min(detailedA.convergence.iterations.min, detailedB.convergence.iterations.min),
+      mean: (detailedA.convergence.iterations.mean + detailedB.convergence.iterations.mean) / 2,
+      max: Math.max(detailedA.convergence.iterations.max, detailedB.convergence.iterations.max),
+    },
+    finalRelativeSpectralError: {
+      mean: (detailedA.convergence.finalRelativeSpectralError.mean + detailedB.convergence.finalRelativeSpectralError.mean) / 2,
+      max: Math.max(detailedA.convergence.finalRelativeSpectralError.max, detailedB.convergence.finalRelativeSpectralError.max),
+    },
+    bestRelativeSpectralError: {
+      mean: (detailedA.convergence.bestRelativeSpectralError.mean + detailedB.convergence.bestRelativeSpectralError.mean) / 2,
+      max: Math.max(detailedA.convergence.bestRelativeSpectralError.max, detailedB.convergence.bestRelativeSpectralError.max),
+    },
+    convergedSurrogates: detailedA.convergence.convergedSurrogates + detailedB.convergence.convergedSurrogates,
+    totalSurrogates: detailedA.convergence.totalSurrogates + detailedB.convergence.totalSurrogates,
+  };
 
   const nullMaxima: number[] = [];
   const surrogateTrendR2: number[] = [];
@@ -300,6 +442,7 @@ export function runSurrogateNullTest(
     observedLag: observedPeak?.lag ?? null,
     observedMaxAbs: observedMaxAbs === null ? null : round(observedMaxAbs),
     nullMaxAbs: summarize(nullMaxima),
+    convergence,
     pValue: roundProbability(pValue),
     significantWithinRun: pValue < config.alpha,
     properties: {
@@ -332,7 +475,7 @@ export function runSurrogateNullTest(
         maximumSortedDeviation: round(maximumSortedDeviation),
       },
     },
-    note: "p two-sided del massimo |r| su tutti i lag accettati, con surrogati IAAFT indipendenti per le due serie; non è una prova causale.",
+    note: "p two-sided del massimo |r| su tutti i lag accettati, con surrogati IAAFT a lunghezza esatta e fasi indipendenti per le due serie; non è una prova causale.",
   };
 }
 

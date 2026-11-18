@@ -208,7 +208,7 @@ describe("E2.2 sensitivity", () => {
             duration: duration.payload.review?.sourceBlockSha256 ?? null,
             sampling: sampling.payload.review?.sourceBlockSha256 ?? null,
           },
-          note: "Le righe comparative usano i report rigenerati con null IAAFT; le varianti derivate vengono rielaborate con la stessa configurazione surrogate dichiarata.",
+          note: "Le righe comparative usano i report rigenerati con null IAAFT a lunghezza esatta; le varianti derivate vengono rielaborate con la stessa configurazione surrogate dichiarata.",
         },
         note: "Sensibilità descrittiva: nessun confronto tra seed è randomizzato. I lag sono in tick; con sampleEvery=20 solo multipli di 20 sono stimabili. L'accoppiamento di composizione separa la covarianza demografica condivisa dalla covarianza delle frazioni.",
       };

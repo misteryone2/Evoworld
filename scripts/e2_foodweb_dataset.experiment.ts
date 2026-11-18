@@ -31,6 +31,13 @@ const ORIGINAL_DATASET = {
   executedAt: "2026-11-18T12:30:00.000Z",
 } as const;
 
+const PRIOR_REVIEW_DATASET = {
+  manifest: "docs/research/e2/datasets/e2.2-foodweb-review.manifest.json",
+  archive: "docs/research/e2/datasets/e2.2-foodweb-review.json.gz",
+  payloadSha256: "14798d7a2188e3cf5aafdac9e82d75584ef07961791e8fb64ab93b68cd05475f",
+  archiveSha256: "47298821e188c53f6e677a69d336006193d48e5955b282ef4674d7aa39b8ef84",
+} as const;
+
 const readJson = <T extends { schema: string }>(value: string | undefined, name: string, expectedSchema: string): {
   payload: T;
   text: string;
@@ -62,8 +69,17 @@ describe("E2.2 review food-web dataset", () => {
         throw new Error("Original e2.2-foodweb dataset changed: refusing to write the review dataset");
       }
 
+      const priorReview = readDataset(
+        resolveOutputPath(process.env.E2_FOODWEB_DATASET_PRIOR_ARCHIVE ?? PRIOR_REVIEW_DATASET.archive),
+        resolveOutputPath(process.env.E2_FOODWEB_DATASET_PRIOR_MANIFEST ?? PRIOR_REVIEW_DATASET.manifest),
+      );
+      if (priorReview.payloadSha256 !== PRIOR_REVIEW_DATASET.payloadSha256
+        || priorReview.manifest?.archiveSha256 !== PRIOR_REVIEW_DATASET.archiveSha256) {
+        throw new Error("Prior e2.2-foodweb-review dataset changed: refusing to supersede it");
+      }
+
       const outDir = resolveOutputPath(process.env.E2_FOODWEB_DATASET_OUT_DIR ?? "docs/research/e2/datasets");
-      const label = process.env.E2_FOODWEB_DATASET_LABEL ?? "e2.2-foodweb-review";
+      const label = process.env.E2_FOODWEB_DATASET_LABEL ?? "e2.2-foodweb-iaaft-review";
       const codeCommit = process.env.E2_FOODWEB_DATASET_CODE_COMMIT;
       if (!codeCommit) throw new Error("E2_FOODWEB_DATASET_CODE_COMMIT is required");
       const dirtyFlag = process.env.E2_FOODWEB_DATASET_WORKING_TREE_DIRTY ?? "1";
@@ -85,8 +101,9 @@ describe("E2.2 review food-web dataset", () => {
           E2_FOODWEB_REANALYSIS_SEED: "<raw>/e2.2-seed.json",
           E2_FOODWEB_REANALYSIS_DURATION: "<raw>/e2.2-duration.json",
           E2_FOODWEB_REANALYSIS_SAMPLING: "<raw>/e2.2-sampling.json",
-          E2_FOODWEB_REANALYSIS_EXECUTED_AT: "2026-11-18T13:00:00.000Z",
-          E2_FOODWEB_SENS_EXECUTED_AT: "2026-11-18T13:10:00.000Z",
+          E2_FOODWEB_REANALYSIS_EXECUTED_AT: "2026-11-18T14:10:00.000Z",
+          E2_FOODWEB_SENS_EXECUTED_AT: "2026-11-18T14:20:00.000Z",
+          E2_FOODWEB_VALIDATION_EXECUTED_AT: "2026-11-18T14:30:00.000Z",
         },
         command: [
           "# Original 120 executed runs are unchanged; see the e2.2-foodweb archive.",
@@ -98,14 +115,20 @@ describe("E2.2 review food-web dataset", () => {
       };
 
       const review = {
-        schema: "evoworld.e2.foodweb-review.v1",
+        schema: "evoworld.e2.foodweb-review.v2",
         surrogate: main.payload.protocol.surrogate ?? null,
         originalDataset: {
-          artifact: `${label}.json.gz`.replace("-review", ""),
+          artifact: "e2.2-foodweb.json.gz",
           payloadSha256: ORIGINAL_DATASET.payloadSha256,
           archiveSha256: ORIGINAL_DATASET.archiveSha256,
           codeCommit: ORIGINAL_DATASET.codeCommit,
           executedAt: ORIGINAL_DATASET.executedAt,
+          unchanged: true,
+        },
+        supersededReviewDataset: {
+          artifact: "e2.2-foodweb-review.json.gz",
+          payloadSha256: PRIOR_REVIEW_DATASET.payloadSha256,
+          archiveSha256: PRIOR_REVIEW_DATASET.archiveSha256,
           unchanged: true,
         },
         originalInputHashes: {
@@ -119,21 +142,23 @@ describe("E2.2 review food-web dataset", () => {
             "Conteggi kills descrittivi, persistenza/coesistenza, identità strutturale delle frazioni e determinismo del troncamento A->900.",
             "Direzione descrittiva del picco erbivori->kills a lag positivo nei quattro blocchi.",
           ],
-          downgraded: [
-            "La sequenzialità erbivori->kills non deriva più da 12/12 seed o |r|>=0.5: richiede p-value IAAFT corretto per il massimo su tutti i lag e direzione esplicita.",
-            "La classificazione erbivori->carnivori resta NON_DIMOSTRATO ma ora separa descrittivo, statistico, sequenzialità e causalità.",
+          updated: [
+            "Il nullo IAAFT usa una DFT alla lunghezza esatta: nessun padding a potenza di due e nessun troncamento della ricostruzione dentro l'iterazione.",
+            "Tutti i p-values surrogati e i verdicts sono stati rigenerati dalle stesse 120 corse grezze; l'errore spettrale è misurato esplicitamente alle lunghezze 100, 160, 271, 256 e 512.",
+            "Il criterio di early stopping e il numero effettivo di iterazioni sono registrati nei test surrogati; l'autocorrelazione lag-1 non è usata come prova di conservazione spettrale.",
           ],
           rejected: [
             "Qualsiasi significatività da soglia arbitraria |r|>=0.5 o concordanza tra seed.",
             "Trattare i tick di una corsa come osservazioni indipendenti.",
             "Equiparare correlazione negativa forte a sequenzialità positiva.",
+            "IAAFT con zero-padding seguito da troncamento e affermazioni di conservazione spettrale basate solo su lag-1.",
           ],
         },
       };
 
       const manifest = writeDataset(outDir, label, {
         phase: "E2.2-foodweb-review",
-        experiment: "E2.2 food web dynamics: corrected sign-aware, autocorrelation-aware and lag-corrected inference",
+        experiment: "E2.2 food web dynamics: sign-aware, lag-corrected inference with exact-length IAAFT",
         env,
         scientificReport,
         results: [
@@ -148,7 +173,7 @@ describe("E2.2 review food-web dataset", () => {
         sourceSha256: checksumSources(e2SourceFiles()),
         e1SourceSha256: checksumSources(e1SourceFiles()),
         runtime: { node: process.version, v8: process.versions.v8 },
-        note: "Dataset E2.2 review: stesse 120 corse dell'archivio originale, analisi scientifica rigenerata. Segno di r e del lag separati, null IAAFT su residui detrendizzati, p-value del massimo su tutti i lag e combinazione Fisher cross-seed. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità.",
+        note: "Dataset E2.2 review P1: stesse 120 corse grezze, analisi rigenerata con IAAFT a lunghezza esatta (Cooley-Tukey/Rader), nessun padding/troncamento, errore spettrale verificato, criterio di convergenza e iterazioni registrati. Segno di r e del lag separati, p-value del massimo su tutti i lag, Fisher cross-seed. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità.",
         reproduction,
         auxiliary: {
           inputs: {

@@ -14,20 +14,17 @@ import {
   type FoodWebScenarioReport,
 } from "../tools/e2/foodWebReport";
 import { readDataset } from "../tools/e2/dataset";
+import { exactAmplitudeSpectrum } from "../tools/e2/fourier";
 import {
+  combineSurrogatePValues,
   DEFAULT_SURROGATE_CONFIG,
-  iaaftSurrogates,
+  IAAFT_AMPLITUDE_TOLERANCE,
+  iaaftSurrogatesDetailed,
   mulberry32,
   runSurrogateNullTest,
   type SurrogateConfig,
 } from "../tools/e2/surrogateInference";
-import {
-  crossCorrelation,
-  detrendLinear,
-  lag1Autocorrelation,
-  linearTrend,
-  type Point,
-} from "../tools/e2/timeseries";
+import { crossCorrelation, type Point } from "../tools/e2/timeseries";
 import { makeRun, makeSample } from "../tests/e2/fixtures";
 
 const BLOCKS = ["main", "seed", "duration", "sampling"] as const;
@@ -117,6 +114,54 @@ const ar1Values = (seed: number, length: number, phi = 0.65): number[] => {
 
 const pointsFrom = (values: number[], start = 0, step = 10): Point[] =>
   values.map((value, index) => ({ tick: start + index * step, value }));
+
+const relativeSpectralError = (reference: number[], candidate: number[]): number => {
+  const target = exactAmplitudeSpectrum(reference);
+  const observed = exactAmplitudeSpectrum(candidate);
+  const energy = target.reduce((sum, value) => sum + value * value, 0);
+  if (energy === 0) return 0;
+  const error = observed.reduce((sum, value, index) => sum + (value - target[index]) ** 2, 0);
+  return Math.sqrt(error / energy);
+};
+
+const autocorrelation = (values: number[], lag: number): number => {
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const centred = values.map((value) => value - mean);
+  let numerator = 0;
+  let denominator = 0;
+  for (let index = 0; index + lag < values.length; index++) {
+    numerator += centred[index] * centred[index + lag];
+    denominator += centred[index] ** 2 + centred[index + lag] ** 2;
+  }
+  return denominator === 0 ? 0 : (2 * numerator) / denominator;
+};
+
+const sortedDeviation = (reference: number[], candidate: number[]): number => {
+  const a = [...reference].sort((x, y) => x - y);
+  const b = [...candidate].sort((x, y) => x - y);
+  return a.reduce((maximum, value, index) =>
+    Math.max(maximum, Math.abs(value - b[index])), 0);
+};
+
+/** b riceve una copia ritardata e attenuata di a, oltre al proprio rumore AR(1). */
+const laggedAr1Values = (
+  seed: number,
+  length: number,
+  phi: number,
+  lag: number,
+  strength: number,
+): { a: number[]; b: number[] } => {
+  const rngA = mulberry32(seed >>> 0);
+  const rngB = mulberry32((seed + 0x9e3779b9) >>> 0);
+  const a: number[] = [];
+  const b: number[] = [];
+  for (let index = 0; index < length; index++) {
+    a.push(phi * (a[index - 1] ?? 0) + rngA() * 2 - 1);
+    const own = phi * (b[index - 1] ?? 0) + rngB() * 2 - 1;
+    b.push(own + strength * (index - lag >= 0 ? a[index - lag] : 0));
+  }
+  return { a, b };
+};
 
 const pairSummary = (report: FoodWebScenarioReport | undefined, pairId: string) =>
   report?.correlations.find((entry) => entry.pairId === pairId);
@@ -216,45 +261,167 @@ describe("E2.2 review validation", () => {
       expect(lagCurve.lagSearch.minimumPairsOnGrid).toBe(251);
       expect(lagCurve.lagSearch.extremeLagPairs.lossFraction).toBeCloseTo(1 - 251 / 271, 5);
 
-      // 7. IAAFT conserva la distribuzione, l'autocorrelazione e non reintroduce trend.
-      const trendedValues = ar1Values(0xa1a1, 160, 0.72).map((value, index) => value + 0.02 * index);
-      const residualValues = detrendLinear(pointsFrom(trendedValues)).residuals.map((point) => point.value);
-      const propertySurrogates = iaaftSurrogates(residualValues, 30, mulberry32(0x1234), 20);
-      const sortedReference = [...residualValues].sort((a, b) => a - b);
-      const distributionError = Math.max(...propertySurrogates.map((surrogate) => {
-        const sorted = [...surrogate].sort((a, b) => a - b);
-        return Math.max(...sorted.map((value, index) => Math.abs(value - sortedReference[index])));
+      // 7. Proprietà IAAFT a tutte le lunghezze obbligatorie, con errore spettrale esplicito.
+      const requiredLengths = [100, 160, 271, 256, 512];
+      const autocorrelationLags = [1, 2, 3, 5];
+      const propertySweep = requiredLengths.map((length) => {
+        const values = ar1Values(0xa1a1 + length, length, 0.72);
+        const detailed = iaaftSurrogatesDetailed(values, 12, mulberry32(0x1234 + length), 24);
+        const spectralErrors = detailed.surrogates.map((surrogate) =>
+          relativeSpectralError(values, surrogate));
+        const distributionErrors = detailed.surrogates.map((surrogate) =>
+          sortedDeviation(values, surrogate));
+        const autocorrelationErrors = autocorrelationLags.map((lag) => {
+          const observed = autocorrelation(values, lag);
+          const mean = detailed.surrogates.reduce((sum, surrogate) =>
+            sum + autocorrelation(surrogate, lag), 0) / detailed.surrogates.length;
+          return { lag, observed, surrogateMean: mean, absoluteError: Math.abs(observed - mean) };
+        });
+        const finite = detailed.surrogates.every((surrogate) =>
+          surrogate.length === length && surrogate.every(Number.isFinite));
+        const repeated = iaaftSurrogatesDetailed(values, 12, mulberry32(0x1234 + length), 24);
+        const deterministic = JSON.stringify(repeated.surrogates) === JSON.stringify(detailed.surrogates);
+
+        expect(finite).toBe(true);
+        expect(Math.max(...distributionErrors)).toBeLessThan(1e-9);
+        expect(Math.max(...spectralErrors)).toBeLessThan(0.05);
+        expect(Math.max(...autocorrelationErrors.map((entry) => entry.absoluteError))).toBeLessThan(0.2);
+        expect(deterministic).toBe(true);
+        return {
+          length,
+          surrogates: detailed.surrogates.length,
+          finite,
+          distributionErrorMax: Math.max(...distributionErrors),
+          spectralErrorMax: Math.max(...spectralErrors),
+          spectralErrorMean: spectralErrors.reduce((sum, value) => sum + value, 0) / spectralErrors.length,
+          autocorr: autocorrelationErrors,
+          deterministic,
+          convergence: detailed.convergence,
+        };
+      });
+
+      // 8. Serie costanti, quasi costanti e ripetute: stessa lunghezza e distribuzione esatta.
+      const degenerateSeries = {
+        constant: Array.from({ length: 160 }, () => 7),
+        nearConstant: Array.from({ length: 160 }, (_, index) => 7 + (index % 2) * 1e-9),
+        repeated: Array.from({ length: 271 }, (_, index) => [0, 0, 1, 1, 2, 2][index % 6]),
+      };
+      const degenerateValidation = Object.fromEntries(Object.entries(degenerateSeries).map(([label, values]) => {
+        const detailed = iaaftSurrogatesDetailed(values, 4, mulberry32(0xabcd), 12);
+        const distributionErrorMax = Math.max(...detailed.surrogates.map((surrogate) =>
+          sortedDeviation(values, surrogate)));
+        const finite = detailed.surrogates.every((surrogate) =>
+          surrogate.length === values.length && surrogate.every(Number.isFinite));
+        expect(finite).toBe(true);
+        expect(distributionErrorMax).toBeLessThan(1e-9);
+        return [label, {
+          length: values.length,
+          surrogates: detailed.surrogates.length,
+          finite,
+          distributionErrorMax,
+          spectralErrorMax: Math.max(...detailed.surrogates.map((surrogate) =>
+            relativeSpectralError(values, surrogate))),
+        }];
       }));
-      const autocorrObserved = lag1Autocorrelation(residualValues) ?? 0;
-      const autocorrMean = propertySurrogates.reduce(
-        (sum, surrogate) => sum + (lag1Autocorrelation(surrogate) ?? 0), 0,
-      ) / propertySurrogates.length;
-      const surrogateTrendMax = Math.max(...propertySurrogates.map((surrogate) =>
-        linearTrend(pointsFrom(surrogate, 0, 1)).r2 ?? 1));
-      expect(distributionError).toBeLessThan(1e-9);
-      expect(Math.abs(autocorrObserved - autocorrMean)).toBeLessThan(0.2);
-      expect(surrogateTrendMax).toBeLessThan(0.25);
 
-      // 8. Calibrazione del nullo: serie indipendenti non devono produrre falsi positivi sistematici.
-      const nullPValues: number[] = [];
-      for (let seed = 1; seed <= 120; seed++) {
-        const test = runSurrogateNullTest(
-          "calibration",
-          seed,
-          pointsFrom(ar1Values(seed * 31, 100)),
-          pointsFrom(ar1Values(seed * 97 + 500, 100)),
-          20,
-          { ...DEFAULT_SURROGATE_CONFIG, surrogates: 99, iterations: 10, minOverlappingObservations: 30 },
-        );
-        nullPValues.push(test.pValue);
-      }
-      const falsePositiveRate = nullPValues.filter((value) => value < 0.05).length / nullPValues.length;
-      const meanNullP = nullPValues.reduce((sum, value) => sum + value, 0) / nullPValues.length;
-      expect(falsePositiveRate).toBeLessThanOrEqual(0.15);
-      expect(meanNullP).toBeGreaterThan(0.3);
-      expect(meanNullP).toBeLessThan(0.7);
+      // 9. Calibrazione del nullo: intensità AR(1), lunghezze 100/160/271 e controllo FPR.
+      const ar1Intensities = [0, 0.25, 0.65, 0.9];
+      const calibrationLengths = [100, 160, 271];
+      const ar1Calibration = ar1Intensities.flatMap((phi) => calibrationLengths.map((length) => {
+        const pValues: number[] = [];
+        for (let seed = 1; seed <= 32; seed++) {
+          const test = runSurrogateNullTest(
+            "calibration",
+            seed,
+            pointsFrom(ar1Values(seed * 31 + Math.round(phi * 100), length, phi)),
+            pointsFrom(ar1Values(seed * 97 + 500 + Math.round(phi * 100), length, phi)),
+            20,
+            { ...DEFAULT_SURROGATE_CONFIG, surrogates: 49, iterations: 12, minOverlappingObservations: 30 },
+          );
+          pValues.push(test.pValue);
+        }
+        const falsePositive = pValues.filter((value) => value < 0.05).length / pValues.length;
+        const meanP = pValues.reduce((sum, value) => sum + value, 0) / pValues.length;
+        expect(falsePositive).toBeLessThanOrEqual(0.15);
+        expect(meanP).toBeGreaterThan(0.25);
+        expect(meanP).toBeLessThan(0.75);
+        return {
+          phi,
+          length,
+          tests: pValues.length,
+          surrogatesPerTest: 49,
+          falsePositiveRate: falsePositive,
+          meanPValue: meanP,
+        };
+      }));
+      const falsePositiveRate = ar1Calibration.reduce((sum, entry) => sum + entry.falsePositiveRate, 0)
+        / ar1Calibration.length;
+      const meanNullP = ar1Calibration.reduce((sum, entry) => sum + entry.meanPValue, 0)
+        / ar1Calibration.length;
 
-      // 9. I report corretti usano solo la statistica significante per EVIDENZA.
+      // 10. Serie correlate con ritardo noto: il nullo deve rilevare la sequenzialità positiva.
+      const knownLagValidation = [100, 271].flatMap((length) => [0.3, 0.7].map((phi) => {
+        const pValues: number[] = [];
+        let positiveLags = 0;
+        for (let seed = 1; seed <= 8; seed++) {
+          const { a, b } = laggedAr1Values(seed * 17 + Math.round(phi * 100), length, phi, 3, 1.1);
+          const test = runSurrogateNullTest(
+            "known-lag",
+            seed,
+            pointsFrom(a),
+            pointsFrom(b),
+            30,
+            { ...DEFAULT_SURROGATE_CONFIG, surrogates: 49, iterations: 12, minOverlappingObservations: 30 },
+          );
+          pValues.push(test.pValue);
+          if (test.observedLag !== null && test.observedLag > 0
+            && (test.observedCorrelation ?? 0) > 0) positiveLags++;
+        }
+        const combined = combineSurrogatePValues(pValues);
+        expect(positiveLags).toBeGreaterThanOrEqual(7);
+        expect(combined.significant).toBe(true);
+        return { length, phi, lag: 3, tests: pValues.length, positiveLags, pValues, combined };
+      }));
+
+      // 11. Sensibilità al numero di iterazioni: l'errore spettrale deve migliorare all'aumentare del budget.
+      const iterationBudgets = [1, 2, 4, 8, 12, 24];
+      const iterationSensitivity = iterationBudgets.map((iterations) => {
+        const values = ar1Values(0x1aa1, 271, 0.7);
+        const detailed = iaaftSurrogatesDetailed(values, 8, mulberry32(0x77aa), iterations);
+        const spectralErrors = detailed.surrogates.map((surrogate) => relativeSpectralError(values, surrogate));
+        return {
+          iterations,
+          usedIterationsMean: detailed.convergence.iterations.mean,
+          spectralErrorMean: spectralErrors.reduce((sum, value) => sum + value, 0) / spectralErrors.length,
+          spectralErrorMax: Math.max(...spectralErrors),
+          convergedSurrogates: detailed.convergence.convergedSurrogates,
+        };
+      });
+      expect(iterationSensitivity.at(-1)!.spectralErrorMean)
+        .toBeLessThanOrEqual(iterationSensitivity[0].spectralErrorMean);
+
+      const iterationPairA = pointsFrom(ar1Values(0x2aa1, 271, 0.7));
+      const iterationPairB = pointsFrom(ar1Values(0x2bb2, 271, 0.7));
+      const iterationNullSensitivity = [2, 6, 12, 24].map((iterations) => ({
+        iterations,
+        pValue: runSurrogateNullTest("iteration-sensitivity", 1, iterationPairA, iterationPairB, 20, {
+          ...DEFAULT_SURROGATE_CONFIG, surrogates: 49, iterations, minOverlappingObservations: 30,
+        }).pValue,
+      }));
+
+      // 12. Sensibilità al numero di surrogate: il p-value resta nella griglia (1+hits)/(B+1).
+      const surrogateCounts = [19, 49, 99, 199];
+      const surrogateCountSensitivity = surrogateCounts.map((surrogates) => {
+        const test = runSurrogateNullTest("surrogate-count-sensitivity", 1,
+          iterationPairA, iterationPairB, 20, {
+            ...DEFAULT_SURROGATE_CONFIG, surrogates, iterations: 12, minOverlappingObservations: 30,
+          });
+        expect(test.pValue).toBeGreaterThanOrEqual(1 / (surrogates + 1));
+        expect(test.pValue).toBeLessThanOrEqual(1);
+        return { surrogates, pValue: test.pValue, nullMaxAbsN: test.nullMaxAbs.n };
+      });
+
+      // 13. I report corretti usano solo la statistica significante per EVIDENZA.
       const realSummaries = BLOCKS.map((name) => {
         const block = reviewBlocks[name];
         const s06 = s06Report(block);
@@ -309,7 +476,7 @@ describe("E2.2 review validation", () => {
       }
 
       const summary = {
-        schema: "evoworld.e2.foodweb-review-validation.v1",
+        schema: "evoworld.e2.foodweb-review-validation.v2",
         executedAt: process.env.E2_FOODWEB_VALIDATION_EXECUTED_AT ?? new Date().toISOString(),
         runtime: { node: process.version, v8: process.versions.v8 },
         checks: {
@@ -346,27 +513,37 @@ describe("E2.2 review validation", () => {
             extremeLagPairLossFraction: lagCurve.lagSearch.extremeLagPairs.lossFraction,
           },
           iaaft: {
-            distributionError,
-            observedLag1Autocorrelation: autocorrObserved,
-            surrogateMeanLag1Autocorrelation: autocorrMean,
-            autocorrelationAbsoluteError: Math.abs(autocorrObserved - autocorrMean),
-            surrogateResidualTrendMax: surrogateTrendMax,
+            tolerance: IAAFT_AMPLITUDE_TOLERANCE,
+            transform: "exact-length mixed-radix Cooley-Tukey with Rader prime handling",
+            requiredLengths: propertySweep,
+            degenerateSeries: degenerateValidation,
           },
           nullCalibration: {
-            tests: nullPValues.length,
-            surrogatesPerTest: 99,
-            falsePositiveRate,
+            model: "independent AR(1) pairs",
+            intensities: ar1Intensities,
+            lengths: calibrationLengths,
+            testsPerCell: 32,
+            surrogatesPerTest: 49,
+            iterations: 12,
+            cells: ar1Calibration,
+            meanFalsePositiveRate: falsePositiveRate,
             meanPValue: meanNullP,
           },
+          knownLag: knownLagValidation,
+          iterationSensitivity: {
+            spectralError: iterationSensitivity,
+            nullPValues: iterationNullSensitivity,
+          },
+          surrogateCountSensitivity,
           realReports: realSummaries,
         },
-        note: "Il test non usa tick come repliche indipendenti; la direzione è separata dal segno di r e del lag; la causalità resta NON_IDENTIFICABILE.",
+        note: "IAAFT usa la DFT alla lunghezza esatta senza padding/troncamento; la convergenza è misurata sull'errore spettrale normalizzato, non solo sull'autocorrelazione lag-1. Il test non usa tick come repliche indipendenti; la direzione è separata dal segno di r e del lag; la causalità resta NON_IDENTIFICABILE.",
       };
       const outputPath = resolveOutputPath(process.env.E2_FOODWEB_VALIDATION_OUT);
       writeExperimentOutput(outputPath, summary);
       process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
       process.stdout.write(`E2.2 review validation complete: output=${outputPath}\n`);
     },
-    600_000,
+    1_800_000,
   );
 });

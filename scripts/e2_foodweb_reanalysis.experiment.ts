@@ -73,7 +73,8 @@ describe("E2.2 review reanalysis", () => {
             sourceLabel: source.label,
             sourceExecutedAt: source.executedAt,
             surrogateConfig,
-            note: "Risultati grezzi invarianti; solo analisi scientifica rigenerata con segno r/lag separato, diagnostica dei lag e null IAAFT con massimo su tutti i lag.",
+            note: "Risultati grezzi invarianti; solo analisi scientifica rigenerata con segno r/lag separato, diagnostica dei lag e null IAAFT a lunghezza esatta (Cooley-Tukey/Rader, nessun padding o troncamento) con massimo su tutti i lag.",
+            surrogateTransform: "exact-length DFT; convergence criterion: normalized amplitude-spectrum error after rank remapping, tolerance 1e-3, iteration budget recorded per test",
           },
         };
         const outputPath = resolveOutputPath(process.env[`E2_FOODWEB_REANALYSIS_${name.toUpperCase()}_OUT`]);
