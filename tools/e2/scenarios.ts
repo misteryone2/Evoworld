@@ -39,8 +39,8 @@ export const E2_PILOT_RATIONALE: E2ScenarioRationale[] = [
   },
   {
     e1Id: "S02_scarcity_dense",
-    role: "trattamento scarsita'/densita'",
-    question: "La limitazione delle risorse riduce la stabilita' e aumenta il rischio di collasso?",
+    role: "confronto confuso (geometria + densita')",
+    question: "Il confronto grezzo S02−S01 e' descrittivo: quale effetto e' dovuto a geometria, densita' o risorse? Vedere E2.1 review.",
     phase: "E2-A",
   },
   {
