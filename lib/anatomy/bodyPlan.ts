@@ -12,6 +12,14 @@ import { hashToUint } from "./util";
 export type Placement = "lateral" | "dorsal" | "ventral" | "terminal-front" | "terminal-rear" | "radial";
 export type Orientation = "down" | "outward" | "up" | "forward" | "back";
 export type LocomotionPlan = "legged" | "undulatory" | "radial" | "sessile" | "amorphous" | "appendage-driven";
+/**
+ * Come gestire un numero dispari di appendici in un gruppo.
+ * - `auto`: laterale + simmetria bilaterale → `staggered`; terminale → `center-line`; il resto è distribuito senza accoppiamento.
+ * - `center-line`: coppie + una appendice mediana (solo se anatomicamente plausibile).
+ * - `staggered`: distribuzione alternata sui lati, senza appendice mediana.
+ * - `omit`: si emettono solo le coppie; il conteggio mancante è dichiarato come anomalia.
+ */
+export type OddAppendagePolicy = "auto" | "center-line" | "staggered" | "omit";
 
 export interface SegmentSpec {
   readonly id: string;
@@ -45,6 +53,8 @@ export interface AppendageGroupSpec {
   readonly span: number;
   /** Offset verticale in frazioni della semialtezza del segmento ospite. */
   readonly yOffset: number;
+  /** Strategia esplicita per i conteggi dispari (default `auto`). */
+  readonly oddPolicy: OddAppendagePolicy;
 }
 
 export interface BodyPlanSpec {
@@ -62,12 +72,13 @@ type SegExtra = { dy?: number; at?: readonly [number, number, number] };
 const seg = (id: string, role: SegmentRole, shape: SegmentShape, parent: string | null, length: number, width: number, height: number, extra: SegExtra = {}): SegmentSpec =>
   Object.freeze({ id, role, shape, parent, length, width, height, ...extra });
 
-interface GrpOpts { variant?: string; min?: number; max?: number; sections?: 1 | 2 | 3; joint?: JointType; span?: number; yOffset?: number }
+interface GrpOpts { variant?: string; min?: number; max?: number; sections?: 1 | 2 | 3; joint?: JointType; span?: number; yOffset?: number; oddPolicy?: OddAppendagePolicy }
 const grp = (id: string, kind: AppendageKind, attach: string, placement: Placement, orientation: Orientation, count: number, length: number, radius: number, o: GrpOpts = {}): AppendageGroupSpec =>
   Object.freeze({
     id, kind, ...(o.variant ? { variant: o.variant } : {}), attach, placement, orientation, count,
     minCount: o.min ?? 0, maxCount: o.max ?? 40, length, radius,
     sections: o.sections ?? 1, joint: o.joint ?? "fixed", span: o.span ?? 0.7, yOffset: o.yOffset ?? 0,
+    oddPolicy: o.oddPolicy ?? "auto",
   });
 
 const plan = (p: Omit<BodyPlanSpec, "segments" | "groups"> & { segments: SegmentSpec[]; groups?: AppendageGroupSpec[] }): BodyPlanSpec =>
@@ -189,6 +200,9 @@ export function validateBodyPlanSpec(spec: BodyPlanSpec): string[] {
     if (!spec.segments.some((s) => s.id === g.attach || s.role === g.attach)) errs.push(`unknown-attach:${g.id}->${g.attach}`);
     if (!(g.minCount >= 0 && g.minCount <= g.count && g.count <= g.maxCount)) errs.push(`bad-count-range:${g.id}`);
     if (!(g.length > 0 && g.radius > 0)) errs.push(`bad-appendage-dimensions:${g.id}`);
+    if (!["auto", "center-line", "staggered", "omit"].includes(g.oddPolicy)) errs.push(`bad-odd-policy:${g.id}`);
+    if (!(g.span > 0 && g.span <= 1)) errs.push(`bad-span:${g.id}`);
+    if (!(g.yOffset >= -1 && g.yOffset <= 1)) errs.push(`bad-y-offset:${g.id}`);
     maxTotal += g.count;
   }
   if (maxTotal > MAX_APPENDAGES) errs.push(`too-many-default-appendages:${maxTotal}`);
