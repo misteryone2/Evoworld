@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -55,6 +55,21 @@ describe("E2 dataset", () => {
       expect(verified.payloadSha256).toBe(manifest.payloadSha256);
       expect(verified.manifest?.archiveSha256).toBe(manifest.archiveSha256);
       expect(verified.dataset.protocol.seeds).toEqual([1, 2]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is byte-reproducible for a fixed source", () => {
+    const dir = mkdtempSync(join(tmpdir(), "e2-repro-"));
+    try {
+      const fixed = source();
+      const first = writeDataset(dir, "e2-repro-first", fixed);
+      const second = writeDataset(dir, "e2-repro-second", fixed);
+      expect(second.payloadSha256).toBe(first.payloadSha256);
+      expect(second.archiveSha256).toBe(first.archiveSha256);
+      expect(readFileSync(join(dir, second.artifact))).toEqual(readFileSync(join(dir, first.artifact)));
+      expect(readFileSync(join(dir, "e2-repro-second.manifest.json"), "utf8")).toContain(first.payloadSha256);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

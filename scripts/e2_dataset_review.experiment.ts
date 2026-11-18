@@ -41,6 +41,8 @@ describe("E2.1 reviewed dataset", () => {
       if (!codeCommit) throw new Error("E2_DATASET_REVIEW_CODE_COMMIT is required");
       const dirtyFlag = process.env.E2_DATASET_REVIEW_WORKING_TREE_DIRTY ?? "1";
       const workingTreeDirty = dirtyFlag === "1" || dirtyFlag.toLowerCase() === "true";
+      // Timestamp fissabile: senza override la generazione non e' bit-riproducibile.
+      const executedAt = process.env.E2_DATASET_REVIEW_EXECUTED_AT ?? new Date().toISOString();
 
       const pilot = readJson(pilotPath, "evoworld.e2.pilot.v1");
       const isolation = readJson(isolationPath, "evoworld.e2.isolation.v1");
@@ -83,7 +85,7 @@ describe("E2.1 reviewed dataset", () => {
         env: pilotEnv,
         scientificReport,
         results: [...pilotResults, ...isolationResults],
-        executedAt: new Date().toISOString(),
+        executedAt,
         codeCommit,
         workingTreeDirty,
         sourceSha256: checksumSources(e2SourceFiles()),
