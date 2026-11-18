@@ -46,6 +46,30 @@ export interface CrossCorrelationEntry {
   correlation: number | null;
 }
 
+export interface DetrendedSeries {
+  original: Point[];
+  trend: Trend;
+  residuals: Point[];
+}
+
+export interface LagSensitivityEntry {
+  lag: number;
+  original: number | null;
+  detrended: number | null;
+  delta: number | null;
+}
+
+export interface CorrelationComparison {
+  originalAtLagZero: number | null;
+  detrendedAtLagZero: number | null;
+  deltaAtLagZero: number | null;
+  originalPeak: CrossCorrelationEntry | null;
+  detrendedPeak: CrossCorrelationEntry | null;
+  lagSensitivity: LagSensitivityEntry[];
+  commonTrendDetected: boolean;
+  spuriousTrendRisk: boolean;
+}
+
 export interface ReturnTime {
   baseline: number;
   tolerance: number;
@@ -133,6 +157,117 @@ export function linearTrend(points: Point[]): Trend {
   }
   const r2 = syy === 0 ? null : round(1 - ssRes / syy);
   return { n: points.length, slope: round(slope), intercept: round(intercept), r2 };
+}
+
+/**
+ * Rimuove una tendenza lineare e restituisce i residui sugli stessi tick.
+ * I residui sono serie additive: non modificano la fonte E1 ne' i dati grezzi.
+ */
+export function detrendLinear(points: Point[]): DetrendedSeries {
+  const trend = linearTrend(points);
+  const residuals = points.map((point) => ({
+    tick: point.tick,
+    value: round(point.value - (trend.intercept + trend.slope * point.tick)),
+  }));
+  return { original: points, trend, residuals };
+}
+
+/** Correlazione di Pearson sui tick presenti in entrambe le serie. */
+export function pearsonCorrelation(a: Point[], b: Point[]): number | null {
+  const bByTick = new Map(b.map((p) => [p.tick, p.value]));
+  const pairs: Array<[number, number]> = [];
+  for (const point of a) {
+    const other = bByTick.get(point.tick);
+    if (other !== undefined && Number.isFinite(point.value) && Number.isFinite(other)) {
+      pairs.push([point.value, other]);
+    }
+  }
+  if (pairs.length < 3) return null;
+  const xs = pairs.map((p) => p[0]);
+  const ys = pairs.map((p) => p[1]);
+  const mx = mean(xs);
+  const my = mean(ys);
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (let i = 0; i < pairs.length; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    sxy += dx * dy;
+    sxx += dx * dx;
+    syy += dy * dy;
+  }
+  return sxx > 0 && syy > 0 ? round(sxy / Math.sqrt(sxx * syy)) : null;
+}
+
+/** Cross-correlazione calcolata sui residui di due serie detrendizzate. */
+export function detrendedCrossCorrelation(
+  a: Point[],
+  b: Point[],
+  maxLag: number,
+): CrossCorrelationEntry[] {
+  return crossCorrelation(detrendLinear(a).residuals, detrendLinear(b).residuals, maxLag);
+}
+
+const isNonZeroFinite = (value: number): boolean => Number.isFinite(value) && value !== 0;
+
+/**
+ * Confronta correlazioni originali e detrendizzate su piu' lag.
+ *
+ * `spuriousTrendRisk` e' un'euristica descrittiva: trend lineari forti e
+ * concordi, correlazione originale alta e correlazione residua debole o
+ * assente. Non dimostra casualita' ne' assenza di relazione.
+ */
+export function compareCrossCorrelations(
+  a: Point[],
+  b: Point[],
+  maxLag: number,
+): CorrelationComparison {
+  const original = crossCorrelation(a, b, maxLag);
+  const detrended = detrendedCrossCorrelation(a, b, maxLag);
+  const detrendedByLag = new Map(detrended.map((entry) => [entry.lag, entry.correlation]));
+
+  const lagSensitivity = original.map((entry) => {
+    const detrendedCorrelation = detrendedByLag.get(entry.lag) ?? null;
+    const delta = entry.correlation !== null && detrendedCorrelation !== null
+      ? round(detrendedCorrelation - entry.correlation)
+      : null;
+    return {
+      lag: entry.lag,
+      original: entry.correlation,
+      detrended: detrendedCorrelation,
+      delta,
+    };
+  });
+
+  const trendA = linearTrend(a);
+  const trendB = linearTrend(b);
+  const commonTrendDetected = trendA.r2 !== null
+    && trendB.r2 !== null
+    && trendA.r2 >= 0.5
+    && trendB.r2 >= 0.5
+    && isNonZeroFinite(trendA.slope)
+    && isNonZeroFinite(trendB.slope)
+    && Math.sign(trendA.slope) === Math.sign(trendB.slope);
+
+  const originalAtLagZero = original.find((entry) => entry.lag === 0)?.correlation ?? null;
+  const detrendedAtLagZero = detrended.find((entry) => entry.lag === 0)?.correlation ?? null;
+  const strongOriginal = originalAtLagZero !== null && Math.abs(originalAtLagZero) >= 0.8;
+  const weakDetrended = detrendedAtLagZero === null || Math.abs(detrendedAtLagZero) <= 0.3;
+  const spuriousTrendRisk = commonTrendDetected && strongOriginal && weakDetrended;
+
+  return {
+    originalAtLagZero,
+    detrendedAtLagZero,
+    deltaAtLagZero: originalAtLagZero !== null && detrendedAtLagZero !== null
+      ? round(detrendedAtLagZero - originalAtLagZero)
+      : null,
+    originalPeak: bestCrossCorrelation(original),
+    detrendedPeak: bestCrossCorrelation(detrended),
+    lagSensitivity,
+    commonTrendDetected,
+    spuriousTrendRisk,
+  };
 }
 
 /**
