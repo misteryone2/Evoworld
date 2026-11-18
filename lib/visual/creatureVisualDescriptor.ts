@@ -109,9 +109,14 @@ export function stableVariation01(organismId: number): number {
   return hash01(organismId);
 }
 
+/** Converte la variazione stabile già calcolata nello spostamento di tinta (~±7°). */
+export function hueShiftFromVariation(variation: number): number {
+  return (variation - 0.5) * 14;
+}
+
 /** Spostamento di tinta per individuo, in gradi (~±7) intorno alla tinta di specie. */
 export function organismHueShift(organismId: number): number {
-  return (hash01(organismId) - 0.5) * 14;
+  return hueShiftFromVariation(hash01(organismId));
 }
 
 function smoothstep(edge0: number, edge1: number, x: number): number {

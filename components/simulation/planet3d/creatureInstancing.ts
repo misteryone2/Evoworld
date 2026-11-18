@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { RenderFrame } from "../../../types";
 import { speciesHue } from "../../../lib/speciesColor";
-import { organismHueShift, stableVariation01 } from "../../../lib/visual/creatureVisualDescriptor";
+import { hueShiftFromVariation, stableVariation01 } from "../../../lib/visual/creatureVisualDescriptor";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../../lib/creatureAnatomy";
 import type { Heading } from "../../../lib/creatureHeading";
 import { createVisualMotion, stepVisualMotion } from "../../../lib/naturalMotion";
@@ -398,10 +398,11 @@ export function updateCreatureInstances(
     // organismo, stesso aspetto a ogni frame (nessun random a runtime), così la
     // popolazione non è una fila di cloni dello stesso colore di specie.
     const jitter = stableVariation01(organismsId[i]);
-    const baseHue = (speciesHue(organismsSpecies[i]) + organismHueShift(organismsId[i]) + 360) % 360;
+    // setHSL applica già euclideanModulo(h, 1): niente modulo aggiuntivo qui.
+    const baseHue = (speciesHue(organismsSpecies[i]) + hueShiftFromVariation(jitter)) / 360;
     const baseSat = Math.min(0.95, 0.7 + (1 - anatomy.aggression) * 0.14 + (jitter - 0.5) * 0.06);
     const baseLight = Math.min(0.72, Math.max(0.44, 0.6 + (jitter - 0.5) * 0.1));
-    tmpColor.setHSL(baseHue / 360, baseSat, baseLight);
+    tmpColor.setHSL(baseHue, baseSat, baseLight);
     if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
       tmpColor.lerp(AGGRO_TINT, anatomy.aggression * 0.35);
     }
