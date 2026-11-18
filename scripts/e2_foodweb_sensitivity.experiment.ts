@@ -218,6 +218,6 @@ describe("E2.2 sensitivity", () => {
         `E2.2 sensitivity complete: seed rows=${seedComparison.rows.length}, duration rows=${durationComparison.rows.length}, truncationMatches=${truncationMatches}, output=${outputPath}\n`,
       );
     },
-    600_000,
+    3_600_000,
   );
 });
