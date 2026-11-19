@@ -176,7 +176,7 @@ La versione iniziale dell'audit usava `|r| >= 0.5` e la concordanza di seed come
 
 ## 10. Aggiornamento P1: IAAFT a lunghezza esatta
 
-La review ha identificato un difetto P1 nel modulo statistico: la IAAFT usava una FFT radix-2 che arrotondava `N` alla potenza di due successiva e troncava l'anti-trasformata. Per `N=271`, `100` e `160` questo alterava la lunghezza effettiva dei surrogati. La correzione è contenuta nel commit `23778c4e8a29f0bf2e2d968a9322b50b5907f2c8` e non tocca il motore biologico.
+La review ha identificato un difetto P1 nel modulo statistico: la IAAFT usava una FFT radix-2 che arrotondava `N` alla potenza di due successiva e troncava l'anti-trasformata. Per `N=271`, `100` e `160` questo alterava la lunghezza effettiva dei surrogati. La correzione è contenuta nei commit di codice `cbcb9fd7b121b1449cfdd773bffd831c5c09ce89` (`fix(e2.2): use exact-length IAAFT transform`) e `d1c3de5fc9586f97fdc99c9e1cf0b4aa0c45f371` (`perf(e2.2): direct exact DFT kernels for moderate lengths`); documentazione e dataset rigenerati sono nel commit `7caf056db09beed4d2b3f9aa8ecc87f0850cab99`. Il riferimento storico a `23778c4e8a29f0bf2e2d968a9322b50b5907f2c8` era errato: quel commit modifica solo il timeout di un test di sensitività. La correzione non tocca il motore biologico. Vedi [IV1_FINAL_DOCUMENTATION_ADDENDUM.md](../../release/IV1_FINAL_DOCUMENTATION_ADDENDUM.md).
 
 Regole ora applicate alla IAAFT:
 

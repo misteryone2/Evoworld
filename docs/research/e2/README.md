@@ -8,11 +8,13 @@ Questa cartella contiene la documentazione scientifica, i protocolli e i dataset
 |---|---|---|
 | E2.0 — Engine Ecology Audit | Completata | [E2_0_ENGINE_ECOLOGY_AUDIT.md](E2_0_ENGINE_ECOLOGY_AUDIT.md) |
 | E2.1 — Population Stability | Completata (review; in attesa di review indipendente) | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
-| E2.2 — Food Web Dynamics | Eseguita (report e dataset in preparazione; in attesa di review indipendente) | [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md) |
+| E2.2 — Food Web Dynamics | Eseguita (report e dataset IAAFT-corretti disponibili; in attesa di review indipendente) | [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md) |
 | E2.3 / E2.3.1 — Ecological Observability | Completata (correzioni da review indipendente; validazione tecnica; in attesa di review) | [E2_3_OBSERVABILITY_REPORT.md](E2_3_OBSERVABILITY_REPORT.md) · [schema v2](E2_3_EVENT_SCHEMA.md) |
 | E2.4 — Biodiversity & Complexity | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
 | E2.5 — Resilience & Perturbation | Classificazione appaiata completata in E2.1; estensione pianificata | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
 | E2.6 — Evolution & Speciation | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
+
+**Successione E2.3 → E2.3.1:** E2.3 è il pilota storico; E2.3.1 è la revisione indipendente che ne corregge l'integrità (schema evento v2, ruoli genitoriali espliciti, predazione verificata, nuovo pilota). Dove i due documenti confliggono, prevale la sezione N del [report E2.3](E2_3_OBSERVABILITY_REPORT.md). Nessuna delle due produce conclusioni ecologiche. Vedi [IV1_FINAL_DOCUMENTATION_ADDENDUM.md](../../release/IV1_FINAL_DOCUMENTATION_ADDENDUM.md).
 
 ## Dataset E2.1 review
 

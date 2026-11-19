@@ -4,7 +4,7 @@
 **Branch:** `research/e2-ecosystem-dynamics`
 **Base:** `main` @ `d330c12f345ab26ab7405b908c729e2e2f6bcc22`
 **Data:** 2026-11-18
-**Stato:** E2.1 completata con review scientifica (48 corse pilota + 96 corse di isolamento); E2.2 eseguita (120 corse: 36 primarie + 36 replica seed + 36 durata + 12 campionamento), report e dataset in preparazione. Entrambe in attesa di review indipendente. E2.3–E2.6 restano pianificate.
+**Stato (aggiornato 2026-11-19):** E2.1 completata con review scientifica (48 corse pilota + 96 corse di isolamento); E2.2 eseguita (120 corse: 36 primarie + 36 replica seed + 36 durata + 12 campionamento), report e dataset IAAFT-corretti disponibili; E2.3 eseguita e successivamente corretta come E2.3.1 (validazione tecnica, nessuna conclusione ecologica); E2.4–E2.6 restano pianificate. La formulazione storica di questa riga è conservata in [IV1_FINAL_DOCUMENTATION_ADDENDUM.md](../../release/IV1_FINAL_DOCUMENTATION_ADDENDUM.md), che documenta anche la successione E2.3 → E2.3.1.
 
 Questo documento definisce le domande, i disegni e i criteri di decisione delle sottofasi E2. Le fasi successive possono essere riorganizzate se i dati E2.1 mostrano che un'altra sequenza è scientificamente più corretta. Nessun risultato è anticipato: i risultati appartengono ai report di fase.
 

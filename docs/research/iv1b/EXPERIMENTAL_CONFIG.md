@@ -73,7 +73,7 @@ new InMemoryEventSink({
   runId: `iv1b-${population}-${config}-${seed}`,
   profile: "scientific_full",
   snapshotEveryTicks: 0,          // snapshot diagnostici disattivati per limitare la memoria
-  batchWriter: measuringWriter,   // writer no-op che cronometra writeBatch
+  batchWriter: measuringWriter,   // writer SINTETICO: property scan in memoria, nessun I/O su disco
   flushEveryEvents: 5000,
   releaseAfterFlush: true,        // config produttiva-safe: buffer limitato a 5000 eventi
 })
