@@ -1,5 +1,5 @@
 /**
- * IV1-A — script riproducibile della matrice di invarianza.
+ * IV1-A / IV1-A-R1 — script riproducibile della matrice di invarianza.
  *
  * Uso:
  *   IV1_A_CODE_COMMIT=<sha> IV1_A_OUT=docs/research/iv1-a \
@@ -8,11 +8,16 @@
  * Genera un report JSON con configurazione, hash finali, confronti tick-per-tick,
  * lista divergenze (vuota in caso di successo) e diagnosi tecnica. Nessun dato
  * grafico o temporale entra nei fingerprint; elapsedMs non viene scritto.
+ *
+ * R1: la fingerprint e' acquisita DOPO il rendering, ultimo tick incluso. Lo
+ * script include anche le prove di sensibilita' (mutazione artificiale a meta'
+ * run e sull'ultimo tick) che dimostrano la chiusura della finestra.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { World } from "../simulation/core/world";
 import { stableStringify } from "../tools/e1/dataset";
 import {
   caseId,
@@ -61,7 +66,7 @@ function summarizeRun(result: IV1RunResult): Record<string, unknown> {
     seed: result.config.seed,
     repetition: result.config.repetition,
     rendering: result.config.rendering,
-    observability: result.config.observability,
+    observabilityMode: result.config.observability,
     completedTicks: result.completedTicks,
     fingerprintTicks: result.ticks.length,
     finalSha256: result.finalSha256,
@@ -76,6 +81,7 @@ function summarizeRun(result: IV1RunResult): Record<string, unknown> {
     chunksInFingerprint: planet.chunks?.length ?? 0,
     eventCountsByType: result.eventCountsByType,
     reproductionModes: result.reproductionModes,
+    observability: result.observability,
     adaptiveRenderingActive: result.renderCounters?.adaptive === true,
   };
 }
@@ -151,6 +157,83 @@ describe("IV1-A reproducible invariance matrix", () => {
     const rendered = runs.filter((run) => run.config.rendering === "ON");
     const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 
+    // R1 — prove di sensibilita': la finestra post-render e' chiusa anche
+    // sull'ultimo tick. Le corse di controllo non fanno parte della matrice.
+    const controlSeed = IV1_SEEDS[0];
+    const controlRepetition = IV1_REPETITIONS[0];
+    const lastTick = IV1_DEFAULTS.ticks;
+    const intermediateTick = Math.floor(IV1_DEFAULTS.ticks / 2);
+    const reference = runs.find(
+      (run) =>
+        run.config.seed === controlSeed &&
+        run.config.repetition === controlRepetition &&
+        run.config.rendering === "ON" &&
+        run.config.observability === "ON",
+    )!;
+    const mutateBiology = (world: World): void => {
+      const target = world.organisms[0];
+      target.energy += 1;
+      target.genome.lifespan += 1;
+    };
+    const intermediateMutant = runInvarianceCase({
+      seed: controlSeed,
+      repetition: controlRepetition,
+      rendering: "ON",
+      observability: "ON",
+      postRenderMutation: (world, tick) => {
+        if (tick === intermediateTick) mutateBiology(world);
+      },
+    });
+    const lastTickMutant = runInvarianceCase({
+      seed: controlSeed,
+      repetition: controlRepetition,
+      rendering: "ON",
+      observability: "ON",
+      capturePreRenderFingerprint: true,
+      postRenderMutation: (world, tick) => {
+        if (tick === lastTick) mutateBiology(world);
+      },
+    });
+    const noMutationControl = runInvarianceCase({
+      seed: controlSeed,
+      repetition: controlRepetition,
+      rendering: "ON",
+      observability: "ON",
+      capturePreRenderFingerprint: true,
+      postRenderMutation: () => {
+        /* nessuna mutazione */
+      },
+    });
+    const intermediateComparison = compareRuns(reference, intermediateMutant);
+    const lastTickComparison = compareRuns(reference, lastTickMutant);
+    const controlComparison = compareRuns(reference, noMutationControl);
+    const lastTickObservation = lastObservation(lastTickMutant);
+
+    const postRenderIntegrity = {
+      description:
+        "Mutazione biologica iniettata dopo il rendering e prima della fingerprint: deve essere rilevata, ultimo tick incluso.",
+      intermediateMutationTick: intermediateTick,
+      intermediateMutation: {
+        detected: intermediateComparison.diverged,
+        firstDivergenceTick: intermediateComparison.tick,
+      },
+      lastTickMutation: {
+        detected: lastTickComparison.diverged,
+        firstDivergenceTick: lastTickComparison.tick,
+        baselineFingerprintAtLastTick: reference.finalSha256,
+        preRenderFingerprintAtLastTick: lastTickObservation.preRenderSha256 ?? null,
+        postRenderFingerprintAtLastTick: lastTickObservation.sha256,
+        oldOrderWouldMiss: lastTickObservation.preRenderSha256 === reference.finalSha256,
+        newOrderDetects: lastTickObservation.sha256 !== reference.finalSha256,
+      },
+      noMutationControl: {
+        diverged: controlComparison.diverged,
+        preEqualsPostAtEveryTick: noMutationControl.ticks
+          .slice(1)
+          .every((observation) => observation.preRenderSha256 === observation.sha256),
+      },
+    };
+
     const checks: Record<string, boolean> = {
       matrixComplete: runs.length === IV1_SEEDS.length * IV1_REPETITIONS.length * IV1_CONFIGURATIONS.length,
       tickCoverage: runs.every(
@@ -178,6 +261,13 @@ describe("IV1-A reproducible invariance matrix", () => {
           (run.eventCountsByType.HUNT_ATTEMPT ?? 0) > 0 &&
           (run.eventCountsByType.ECOSYSTEM_SNAPSHOT ?? 0) === IV1_DEFAULTS.ticks,
       ),
+      observabilityComplete: observed.every(
+        (run) =>
+          run.observability?.completeness === "COMPLETE" &&
+          run.observability.sampled === 0 &&
+          run.observability.droppedNonCritical === 0 &&
+          run.observability.criticalDropped === 0,
+      ),
       renderingActive: rendered.every(
         (run) =>
           run.renderCounters?.adaptive === true &&
@@ -186,13 +276,25 @@ describe("IV1-A reproducible invariance matrix", () => {
       renderAbsentWhenOff: runs
         .filter((run) => run.config.rendering === "OFF")
         .every((run) => run.renderCounters === null),
+      postRenderWindowClosed:
+        postRenderIntegrity.lastTickMutation.detected &&
+        postRenderIntegrity.lastTickMutation.firstDivergenceTick === lastTick &&
+        postRenderIntegrity.lastTickMutation.oldOrderWouldMiss &&
+        postRenderIntegrity.lastTickMutation.newOrderDetects,
+      intermediateMutationDetected:
+        postRenderIntegrity.intermediateMutation.detected &&
+        postRenderIntegrity.intermediateMutation.firstDivergenceTick === intermediateTick,
+      noFalsePositive:
+        postRenderIntegrity.noMutationControl.diverged === false &&
+        postRenderIntegrity.noMutationControl.preEqualsPostAtEveryTick,
     };
 
     const sourceHashes: Record<string, string> = {};
     for (const file of SOURCE_FILES) sourceHashes[file] = sha256(readFileSync(join(REPO, file)));
 
     const report: Record<string, unknown> = {
-      schema: "evoworld.iv1-a.results.v1",
+      schema: "evoworld.iv1-a.results.v2",
+      revision: "IV1-A-R1",
       branch: BRANCH,
       codeCommit: CODE_COMMIT,
       baseBranches: {
@@ -203,6 +305,8 @@ describe("IV1-A reproducible invariance matrix", () => {
       fingerprint: {
         schema: IV1_SCHEMA,
         algorithm: "sha256(stableStringify(canonicalBiologicalState))",
+        acquisitionOrder: "world.step -> buildRenderFrame -> updateCreatureInstances -> postRenderMutation -> fingerprint",
+        postRender: true,
         orderIndependentCollections: ["organisms", "speciesRegistry", "planet.chunks"],
         included: [
           "tick",
@@ -232,7 +336,8 @@ describe("IV1-A reproducible invariance matrix", () => {
         configurations: IV1_CONFIGURATIONS,
         initialCondition:
           "Identical deterministic transform on all cases: founder energy=220, fertility=20, age=ceil(lifespan*0.25). No RNG consumed.",
-        observabilitySink: "scientific_full, all event types, snapshotEveryTicks=1, samplingSeed=1",
+        observabilitySink:
+          "scientific_full, all event types, snapshotEveryTicks=1, samplingSeed=1, no sampling; events tallied and released via batchWriter+releaseAfterFlush to bound memory on 120-tick runs",
         rendering: "G3.1 adaptive ON with farStride=4, nearDistanceScales=8, anatomy source and periodic viewport refresh",
       },
       summary: {
@@ -240,6 +345,9 @@ describe("IV1-A reproducible invariance matrix", () => {
         comparisons: comparisons.length,
         divergences: divergences.length,
         firstDivergenceTick: divergences.length ? divergences[0].tick : null,
+        ticksPerRun: IV1_DEFAULTS.ticks,
+        fingerprintSamplesPerRun: IV1_DEFAULTS.ticks + 1,
+        controlRuns: 3,
         totalBiologicalEvents: {
           births: sum(baselines.map((run) => lastObservation(run).cumulativeBirths)),
           deaths: sum(baselines.map((run) => lastObservation(run).cumulativeDeaths)),
@@ -248,15 +356,17 @@ describe("IV1-A reproducible invariance matrix", () => {
         },
       },
       checks,
+      postRenderIntegrity,
       runs: runs.map(summarizeRun),
       comparisons,
       divergences,
       diagnosis: divergences.length
         ? divergences.map((divergence) => String(divergence.diagnosis))
         : [
-            "Nessuna divergenza rilevata: tutti i fingerprint biologici coincidono tick per tick in tutte le 60 corse.",
+            `Nessuna divergenza rilevata: tutti i fingerprint biologici post-render coincidono tick per tick in tutte le ${runs.length} corse.`,
             "Il sink E2.3.1 emette eventi reali ma non consuma il RNG del motore e non modifica lo stato.",
             "Il percorso G3.1 adaptive legge il RenderFrame e scrive solo mesh/contatori di rendering.",
+            "R1: una mutazione iniettata dopo il rendering viene rilevata, anche sull'ultimo tick; con il vecchio ordine (fingerprint pre-render) la mutazione dell'ultimo tick non sarebbe stata vista (pre-render == baseline).",
           ],
       provenance: {
         sourceSha256: sha256(SOURCE_FILES.map((file) => `${file}:${sourceHashes[file]}`).join("\n")),

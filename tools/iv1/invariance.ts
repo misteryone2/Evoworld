@@ -20,7 +20,7 @@ import { World } from "../../simulation/core/world";
 import {
   ECOLOGICAL_EVENT_TYPES,
   InMemoryEventSink,
-  type EcologicalEventType,
+  type EcologicalEvent,
 } from "../../simulation/ecology/observability";
 import type { Genome, SimulationStats, WorldSnapshot } from "../../types";
 import { sha256, stableStringify } from "../e1/dataset";
@@ -45,11 +45,11 @@ export const IV1_DEFAULTS: Readonly<IV1Settings> = Object.freeze({
   width: 32,
   height: 32,
   population: 60,
-  ticks: 40,
+  ticks: 120,
   initialEnergy: 220,
   fertility: 20,
   founderMaturityFraction: 0.25,
-  renderCapacity: 192,
+  renderCapacity: 384,
   farStride: 4,
   nearDistanceScales: 8,
 });
@@ -60,6 +60,13 @@ export const IV1_REPETITIONS = Object.freeze([1, 2, 3]);
 export type RenderingMode = "OFF" | "ON";
 export type ObservabilityMode = "OFF" | "ON";
 
+/**
+ * Hook diagnostico: muta lo stato biologico dopo lo step e dopo il rendering,
+ * ma prima della fingerprint post-render. Serve solo ai test di sensibilità;
+ * la matrice di invarianza non lo usa.
+ */
+export type PostRenderMutation = (world: World, tick: number) => void;
+
 export interface IV1CaseConfig {
   readonly seed: number;
   readonly repetition: number;
@@ -67,9 +74,20 @@ export interface IV1CaseConfig {
   readonly observability: ObservabilityMode;
   readonly ticks?: number;
   readonly anatomySource?: boolean;
+  /** Muta lo stato biologico nella finestra post-render / pre-fingerprint. */
+  readonly postRenderMutation?: PostRenderMutation;
+  /** Cattura anche la fingerprint pre-render, per dimostrare la finestra corretta. */
+  readonly capturePreRenderFingerprint?: boolean;
 }
 
-export type ResolvedIV1CaseConfig = IV1Settings & Required<IV1CaseConfig>;
+export type ResolvedIV1CaseConfig = IV1Settings &
+  Required<
+    Pick<
+      IV1CaseConfig,
+      "seed" | "repetition" | "rendering" | "observability" | "ticks" | "anatomySource" | "capturePreRenderFingerprint"
+    >
+  > &
+  Pick<IV1CaseConfig, "postRenderMutation">;
 
 export interface CanonicalState {
   readonly schema: string;
@@ -89,6 +107,8 @@ export interface CanonicalState {
 export interface TickObservation {
   readonly tick: number;
   readonly sha256: string;
+  /** Solo nei run di controllo: fingerprint acquisita PRIMA del rendering. */
+  readonly preRenderSha256?: string;
   readonly population: number;
   readonly randomState: number;
   readonly births: number;
@@ -102,6 +122,16 @@ export interface TickObservation {
   readonly speciesTotalEver: number;
 }
 
+export interface ObservabilityInfo {
+  readonly total: number;
+  readonly retainedAtEnd: number;
+  readonly completeness: string;
+  readonly sampled: number;
+  readonly droppedNonCritical: number;
+  readonly criticalDropped: number;
+  readonly enabledTypeCount: number;
+}
+
 export interface IV1RunResult {
   readonly config: ResolvedIV1CaseConfig;
   readonly ticks: readonly TickObservation[];
@@ -110,6 +140,7 @@ export interface IV1RunResult {
   readonly completedTicks: number;
   readonly eventCountsByType: Readonly<Record<string, number>>;
   readonly reproductionModes: Readonly<{ ASEXUAL: number; SEXUAL: number }>;
+  readonly observability: ObservabilityInfo | null;
   readonly renderCounters: Readonly<Record<string, unknown>> | null;
   /** Variabile: mai inclusa in fingerprint, report canonico o confronto. */
   readonly elapsedMs: number;
@@ -248,9 +279,10 @@ function observationFrom(
   world: World,
   fingerprint: ReturnType<typeof fingerprintWorld>,
   cumulative: CumulativeCounts,
+  preRenderSha256?: string,
 ): TickObservation {
   const stats = world.getStats();
-  return {
+  const observation: TickObservation = {
     tick: fingerprint.tick,
     sha256: fingerprint.sha256,
     population: world.organisms.length,
@@ -265,6 +297,7 @@ function observationFrom(
     speciesExtinct: stats.speciesExtinct,
     speciesTotalEver: stats.speciesTotalEver,
   };
+  return preRenderSha256 === undefined ? observation : { ...observation, preRenderSha256 };
 }
 
 function applyInitialCondition(world: World, cfg: ResolvedIV1CaseConfig): void {
@@ -297,12 +330,13 @@ function createRenderingRefs(cfg: ResolvedIV1CaseConfig): {
   return { refs, source };
 }
 
-/** Esegue un caso completo restituendo hash biologici tick-per-tick. */
+/** Esegue un caso completo restituendo hash biologici post-render tick-per-tick. */
 export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
   const started = Date.now();
   const cfg: ResolvedIV1CaseConfig = {
     ...IV1_DEFAULTS,
     anatomySource: true,
+    capturePreRenderFingerprint: false,
     ...input,
   };
 
@@ -313,6 +347,13 @@ export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
   );
   applyInitialCondition(world, cfg);
 
+  // Il sink resta quello reale E2.3.1 (InMemoryEventSink, profilo scientific_full,
+  // tutti i tipi abilitati, nessun campionamento). Su run lunghi gli eventi non
+  // critici sono numerosissimi: per non esaurire la memoria li contiamo e li
+  // rilasciamo con un batchWriter + releaseAfterFlush. Questo non cambia la
+  // copertura dichiarata (resta COMPLETE) ne' il percorso del motore: il sink
+  // riceve comunque ogni evento.
+  const reproductionModes = { ASEXUAL: 0, SEXUAL: 0 };
   let sink: InMemoryEventSink | null = null;
   if (cfg.observability === "ON") {
     sink = new InMemoryEventSink({
@@ -325,6 +366,17 @@ export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
       ticksPerYear: 400,
       snapshotEveryTicks: 1,
       samplingSeed: 1,
+      flushEveryEvents: 4096,
+      releaseAfterFlush: true,
+      batchWriter: {
+        writeBatch: (batch: readonly EcologicalEvent[]) => {
+          for (const event of batch) {
+            if (event.eventType !== "REPRODUCTION") continue;
+            const mode = (event.payload as { mode?: unknown }).mode;
+            if (mode === "ASEXUAL" || mode === "SEXUAL") reproductionModes[mode]++;
+          }
+        },
+      },
     });
     world.setEventSink(sink);
   }
@@ -344,11 +396,9 @@ export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
     cumulative.deaths += tickStats.deaths;
     cumulative.predationKills += tickStats.predationKills;
 
-    // La fingerprint e' SEMPRE calcolata sullo stato dopo lo step, prima e
-    // indipendentemente da qualsiasi chiamata al renderer.
-    const fingerprint = fingerprintWorld(world);
-    finalState = fingerprint.state;
-    observations.push(observationFrom(world, fingerprint, cumulative));
+    // Solo per i run di controllo: fingerprint PRIMA del rendering, cosi' si
+    // puo' dimostrare che l'ordine precedente non vedeva la mutazione iniettata.
+    const preRenderSha256 = cfg.capturePreRenderFingerprint ? fingerprintWorld(world).sha256 : undefined;
 
     if (rendering) {
       // Cambio periodico di viewport: esercita il refresh completo G3.1.
@@ -368,17 +418,30 @@ export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
         rendering.source,
       );
     }
+
+    // Finestra che IV1-A non copriva: qualunque mutazione biologica prodotta
+    // dalla fase di rendering (o iniettata qui dai test) deve entrare nella
+    // fingerprint. L'ultimo tick non fa eccezione.
+    cfg.postRenderMutation?.(world, world.tick);
+
+    const fingerprint = fingerprintWorld(world);
+    finalState = fingerprint.state;
+    observations.push(observationFrom(world, fingerprint, cumulative, preRenderSha256));
   }
 
   if (sink) sink.flush();
   const summary = sink?.summary();
-  const events = sink?.eventsSnapshot() ?? [];
-  const reproductionModes = { ASEXUAL: 0, SEXUAL: 0 };
-  for (const event of events) {
-    if (event.eventType !== "REPRODUCTION") continue;
-    const mode = (event.payload as { mode?: unknown }).mode;
-    if (mode === "ASEXUAL" || mode === "SEXUAL") reproductionModes[mode]++;
-  }
+  const observability: ObservabilityInfo | null = summary
+    ? {
+        total: summary.total,
+        retainedAtEnd: summary.retained,
+        completeness: summary.completeness,
+        sampled: summary.sampled,
+        droppedNonCritical: summary.droppedNonCritical,
+        criticalDropped: summary.criticalDropped,
+        enabledTypeCount: summary.enabledTypes.length,
+      }
+    : null;
   const counters = rendering?.refs.creatureRenderStats
     ? { ...rendering.refs.creatureRenderStats, poolGrowth: undefined }
     : null;
@@ -391,6 +454,7 @@ export function runInvarianceCase(input: IV1CaseConfig): IV1RunResult {
     completedTicks: world.tick,
     eventCountsByType: summary ? { ...summary.byType } : {},
     reproductionModes,
+    observability,
     renderCounters: counters,
     elapsedMs: Date.now() - started,
   };

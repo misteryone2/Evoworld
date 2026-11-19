@@ -1,10 +1,14 @@
 /**
- * IV1-A — test automatici di invarianza biologica.
+ * IV1-A / IV1-A-R1 — test automatici di invarianza biologica post-render.
  *
  * A: stessa configurazione ripetuta => stesso stato tick per tick.
  * B: osservabilita' ON/OFF => stesso RNG, stessa evoluzione, stessa mortalita'.
  * C: quattro configurazioni (OFF/OFF, ON/OFF, OFF/ON, ON/ON).
- * D: 5 seed x 3 ripetizioni, 40 tick, confronto tick per tick e primo tick divergente.
+ * D: 5 seed x 3 ripetizioni, 120 tick, confronto tick per tick e primo tick divergente.
+ *
+ * R1: la fingerprint e' acquisita DOPO il rendering (incluso l'ultimo tick) e
+ * i test di mutazione artificiale dimostrano che una mutazione in quella
+ * finestra viene rilevata, mentre il vecchio ordine l'avrebbe mancata.
  *
  * La matrice viene eseguita una sola volta in beforeAll e condivisa dai test.
  */
@@ -142,6 +146,11 @@ describe("IV1-A — matrice di invarianza", () => {
     expect(on.eventCountsByType.DEATH ?? 0).toBeGreaterThan(0);
     expect(on.eventCountsByType.HUNT_ATTEMPT ?? 0).toBeGreaterThan(0);
     expect(on.eventCountsByType.ECOSYSTEM_SNAPSHOT ?? 0).toBe(IV1_DEFAULTS.ticks);
+    // Nessun campionamento, nessuna perdita: la copertura resta COMPLETE.
+    expect(on.observability?.completeness).toBe("COMPLETE");
+    expect(on.observability?.sampled).toBe(0);
+    expect(on.observability?.droppedNonCritical).toBe(0);
+    expect(on.observability?.criticalDropped).toBe(0);
   });
 
   it("C — le quattro configurazioni producono lo stesso stato biologico", () => {
@@ -210,5 +219,75 @@ describe("IV1-A — matrice di invarianza", () => {
     expect(comparison.tick).toBe(12);
     expect(comparison.suspectedFields).toContain("population");
     expect(comparison.diagnosis).toContain("tick 12");
+  });
+});
+
+describe("IV1-A-R1 — integrita' post-render", () => {
+  /** Mutazione biologica deterministica, senza consumo di RNG. */
+  const mutateBiology = (world: World): void => {
+    const target = world.organisms[0];
+    target.energy += 1;
+    target.genome.lifespan += 1;
+  };
+
+  it("una mutazione durante il rendering viene rilevata in un tick intermedio", () => {
+    const baseline = run(IV1_SEEDS[0], 1, "ON", "ON");
+    const mutated = runInvarianceCase({
+      seed: IV1_SEEDS[0],
+      repetition: 1,
+      rendering: "ON",
+      observability: "ON",
+      postRenderMutation: (world, tick) => {
+        if (tick === 50) mutateBiology(world);
+      },
+    });
+    const comparison = compareRuns(baseline, mutated);
+    expect(comparison.diverged).toBe(true);
+    expect(comparison.tick).toBe(50);
+  });
+
+  it("una mutazione nell'ULTIMO tick viene rilevata (finestra chiusa da R1)", () => {
+    const baseline = run(IV1_SEEDS[0], 1, "ON", "ON");
+    const lastTick = IV1_DEFAULTS.ticks;
+    const mutated = runInvarianceCase({
+      seed: IV1_SEEDS[0],
+      repetition: 1,
+      rendering: "ON",
+      observability: "ON",
+      capturePreRenderFingerprint: true,
+      postRenderMutation: (world, tick) => {
+        if (tick === lastTick) mutateBiology(world);
+      },
+    });
+    const comparison = compareRuns(baseline, mutated);
+    expect(comparison.diverged).toBe(true);
+    expect(comparison.tick).toBe(lastTick);
+
+    // Prova che il test fallirebbe con il vecchio ordine: la fingerprint
+    // pre-render dell'ultimo tick coincide col baseline, quindi non avrebbe
+    // rilevato la mutazione; quella post-render invece diverge.
+    const lastObservation = mutated.ticks[mutated.ticks.length - 1];
+    expect(lastObservation.preRenderSha256).toBe(baseline.finalSha256);
+    expect(lastObservation.sha256).not.toBe(baseline.finalSha256);
+  });
+
+  it("il rilevatore non produce falsi positivi e il rendering da solo non muta nulla", () => {
+    const baseline = run(IV1_SEEDS[0], 1, "ON", "ON");
+    const control = runInvarianceCase({
+      seed: IV1_SEEDS[0],
+      repetition: 1,
+      rendering: "ON",
+      observability: "ON",
+      capturePreRenderFingerprint: true,
+      postRenderMutation: () => {
+        /* nessuna mutazione iniettata */
+      },
+    });
+    expect(compareRuns(baseline, control).diverged).toBe(false);
+    // Con rendering ON e nessuna mutazione, pre-render e post-render coincidono
+    // a ogni tick: la fase di rendering non tocca lo stato biologico.
+    for (const observation of control.ticks.slice(1)) {
+      expect(observation.preRenderSha256, `tick ${observation.tick}`).toBe(observation.sha256);
+    }
   });
 });
