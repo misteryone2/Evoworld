@@ -323,7 +323,7 @@ where they conflict with this section, **this section prevails**.
 | E2.3 implementation commit | `6fedffd07faa29945ff5e1dfc257e460868994e5` |
 | E2.3 dataset commit | `f2957b965eb8a741e9747839a95c8592eec55923` |
 | E2.3.1 implementation commit | `cbb4f3bee5b9326f10e7879c87e130a513211b69` (`fix(e2.3.1): harden observability integrity after independent review`) |
-| E2.3.1 final artifact commit | `<<ARTIFACT_COMMIT>>` |
+| E2.3.1 final artifact commit | `0949a942f70f07f9b33210e301eb6f8597728197` |
 | Merge / PR / branch deletion / filone G | none |
 | `tools/e1/**` and `main` | untouched |
 
@@ -562,10 +562,10 @@ Commit hashes:
 | E2.3 implementation | `6fedffd07faa29945ff5e1dfc257e460868994e5` |
 | E2.3 dataset | `f2957b965eb8a741e9747839a95c8592eec55923` |
 | E2.3.1 implementation (code + tests + schema + preliminary report) | `cbb4f3bee5b9326f10e7879c87e130a513211b69` |
-| E2.3.1 final artifact + report | `<<ARTIFACT_COMMIT>>` |
+| E2.3.1 final artifact + report | `0949a942f70f07f9b33210e301eb6f8597728197` |
 | `main` / `origin/main` | `d330c12f345ab26ab7405b908c729e2e2f6bcc22`, unchanged |
 | Merge / PR / branch deletion | none |
 
-After the artifact commit, `git status` still shows only the report hash
-recording edit until it is committed; the branch remains ahead of origin and
-was **not pushed automatically**.
+The commit hashes above are the complete review trail on this branch. A final
+documentation-only commit records the artifact hash in this report; the branch
+remains ahead of origin and was **not pushed automatically**.
