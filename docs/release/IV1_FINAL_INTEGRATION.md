@@ -2,7 +2,7 @@
 
 **Data:** 2026-11-19
 **Branch di integrazione:** `integration/e2-g3-iv1-final`
-**Stato:** integrazione tecnica completata e verificata; PR verso `main` aperta, in attesa di approvazione per il merge finale (fasi 11–12).
+**Stato:** integrazione tecnica completata e verificata; **PR #3** (`https://github.com/misteryone2/Evoworld/pull/3`) aperta verso `main`, mergeable (`mergeable_state=clean`), in attesa di approvazione per il merge finale (fasi 11–12).
 
 ---
 
@@ -47,7 +47,7 @@ Lo stesso controllo tra A-R1 e B-R1 dà `exit 0`: i due rami condividono alberi 
 
 ### PR
 
-- PR di integrazione `integration/e2-g3-iv1-final → main`: da aprire/pubblicare con questo report.
+- **PR #3** — `integration/e2-g3-iv1-final → main`: `https://github.com/misteryone2/Evoworld/pull/3`. Head `4597deedeb36b056076c7b0daa382cd7d3f773e5`, base `d330c12f345ab26ab7405b908c729e2e2f6bcc22`, 187 file modificati, +81410/−1353. Stato `open`, `mergeable=true`, `mergeable_state=clean`, 0 review. `main` non protetto da branch protection; il merge è stato comunque sospeso in attesa di approvazione esplicita.
 - PR #1 (G1): aperta, **non utilizzata** come percorso di integrazione; da chiudere come *superseded* solo dopo il merge su `main`.
 - PR #2 (E1): già chiusa/merged.
 - `main` non è stato modificato direttamente; nessun force push.
@@ -185,9 +185,9 @@ I report scientifici originali, hash, dataset e conclusioni storiche restano inv
 | 7 — Verifica codice di produzione | **completata** (diff exit 0) |
 | 8 — Test e validazione | **completata** |
 | 9 — Report di integrazione | **completata** |
-| 10 — PR verso `main` | **da pubblicare** |
+| 10 — PR verso `main` | **completata** (PR #3, mergeable) |
 | 11 — Merge su `main` + tag `iv1-r1-approved` | **in attesa di approvazione** |
 | 12 — Chiusura PR #1 e pulizia branch | **in attesa del merge su `main`** |
 | 13 — Verifica finale | **parziale** |
 
-**FINAL STATUS (momentaneo): `INTEGRATION BLOCKED`** — blocco esclusivamente procedurale: in attesa di approvazione della PR di integrazione. Nessun problema tecnico, nessun failure nuovo, nessun contributo perso.
+**FINAL STATUS (momentaneo): `INTEGRATION BLOCKED`** — blocco esclusivamente procedurale: PR #3 pubblicata e mergeable, in attesa di approvazione per il merge su `main`. Nessun problema tecnico, nessun failure nuovo, nessun contributo perso.
