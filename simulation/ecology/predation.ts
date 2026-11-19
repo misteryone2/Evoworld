@@ -6,6 +6,7 @@ import { recordDangerMemory } from "./behavior";
 import { areTouching, maxContactCells } from "./collision";
 import { phenotypeOf, BURST_POWER_BONUS, BURST_ENERGY_COST, DEFENSE_BRACKET_CAP } from "../biology/geneExpression";
 import { MAX_ENERGY } from "../biology/energy";
+import { NULL_EVENT_SINK, type EcologicalEventSink } from "./observability";
 
 
 /** Below this carnivory value, an organism never attempts to hunt. */
@@ -97,12 +98,21 @@ function nearbyCandidates(predator: Organism, buckets: Map<string, Organism[]>, 
  *
  * Returns the number of successful kills, for statistics.
  */
-export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tick = 0, collisions = false): number {
+export function huntPrey(
+  organisms: Organism[],
+  planet: Planet,
+  rng: Random,
+  tick = 0,
+  collisions = false,
+  sink: EcologicalEventSink = NULL_EVENT_SINK,
+): number {
   // v1.9.1 — con le collisioni, due corpi grossi non possono stare più vicini della somma dei raggi: chi si tocca
   // può sempre cacciare, anche se il raggio di caccia in celle è più corto. Le ricerche dei vicini si allargano di conseguenza.
   const bucketSize = collisions ? Math.max(HUNT_RADIUS, maxContactCells(organisms, planet)) : HUNT_RADIUS;
   const buckets = buildBuckets(organisms, bucketSize);
   let kills = 0;
+  // E2.3 — contatore puramente osservativo per ID di correlazione deterministici.
+  let attemptSeq = 0;
 
   for (const predator of organisms) {
     if (!predator.alive) continue;
@@ -132,6 +142,9 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
     }
     if (!target) continue;
 
+    // E2.3 — osservazione passiva: tutti i valori sono Already-computed dal motore.
+    const predatorEnergyBefore = predator.energy;
+
     // Hunting has a real cost: the attempt itself burns energy regardless
     // of whether it succeeds.
     predator.energy -= HUNT_ENERGY_COST;
@@ -140,6 +153,8 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
     const burstCostPrey = BURST_ENERGY_COST * phenotypeOf(target.genome).burstPower;
     if (burstCostPredator > 0) predator.energy = Math.max(0, predator.energy - burstCostPredator);
     if (burstCostPrey > 0) target.energy = Math.max(0, target.energy - burstCostPrey);
+    const predatorEnergyAfterCost = predator.energy;
+    const preyEnergyAtOutcome = target.energy;
 
     const predatorPower = huntingPower(predator);
     const preyPower = defensivePower(target);
@@ -150,6 +165,37 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
     const interference = rivalPredators / (availablePrey + 1);
     const successChance = baseChance / (1 + interference);
 
+    // E2.3 — correlazione deterministica (nessun RNG aggiuntivo).
+    const attemptId = `hunt:${tick}:${attemptSeq++}`;
+    const commonPayload = {
+      predatorId: predator.id,
+      preyId: target.id,
+      predatorSpeciesId: predator.speciesId,
+      preySpeciesId: target.speciesId,
+      predatorEnergyBefore,
+      predatorEnergyAfterCost,
+      preyEnergyAtOutcome,
+      attemptCost: HUNT_ENERGY_COST,
+      burstCostPredator,
+      burstCostPrey,
+      predatorPower,
+      preyPower,
+      baseChance,
+      interference,
+      rivalPredators,
+      availablePrey,
+      successChance,
+      distance: bestDistance,
+      predatorPositionX: predator.position.x,
+      predatorPositionY: predator.position.y,
+      preyPositionX: target.position.x,
+      preyPositionY: target.position.y,
+      predatorCarnivory: predator.genome.carnivory,
+      preyCarnivory: target.genome.carnivory,
+      predatorAge: predator.age,
+      preyAge: target.age,
+    };
+
     if (rng.chance(successChance)) {
       const predatorPhenotype = phenotypeOf(predator.genome);
       // FIS-02: la digestione efficiente vale anche per la carne; FIS-01: tetto di energia
@@ -157,12 +203,67 @@ export function huntPrey(organisms: Organism[], planet: Planet, rng: Random, tic
       predator.energy = Math.min(MAX_ENERGY * predatorPhenotype.energyCapFactor, predator.energy + energyGained);
       target.alive = false;
       kills++;
+
+      // E2.3 — un solo record per tentativo; esito e predazione sono viste.
+      sink.record({
+        type: "HUNT_ATTEMPT",
+        tick,
+        entityIds: [predator.id, target.id],
+        source: "simulation/ecology/predation.ts:huntPrey",
+        correlationId: attemptId,
+        payload: {
+          ...commonPayload,
+          outcome: "SUCCESS",
+          energyTransferred: energyGained,
+          predatorEnergyAfter: predator.energy,
+          preyEnergyAtKill: preyEnergyAtOutcome,
+          preyDeathCorrelationId: `${attemptId}:death`,
+          digestionFactor: predatorPhenotype.digestionFactor,
+          energyCapFactor: predatorPhenotype.energyCapFactor,
+        },
+      });
+      // Morte per predazione: emessa qui, dove la causa è nota, prima del filtro
+      // che rimuove l'organismo. Non viene duplicata nel ciclo mortalità.
+      sink.record({
+        type: "DEATH",
+        tick,
+        entityIds: [target.id],
+        source: "simulation/ecology/predation.ts:huntPrey",
+        correlationId: `${attemptId}:death`,
+        payload: {
+          cause: "PREDATION",
+          causeCount: 1,
+          speciesId: target.speciesId,
+          age: target.age,
+          energy: preyEnergyAtOutcome,
+          positionX: target.position.x,
+          positionY: target.position.y,
+          predatorId: predator.id,
+          predatorSpeciesId: predator.speciesId,
+          huntCorrelationId: attemptId,
+          lifespan: target.genome.lifespan,
+        },
+      });
     } else {
       // The target survives a real attempt on its life (v0.5): it remembers
       // where this happened, which biases its future movement away from
       // the spot — a lightweight "close call" learning signal, separate
       // from the genetic evasion trait.
       recordDangerMemory(target, tick);
+      sink.record({
+        type: "HUNT_ATTEMPT",
+        tick,
+        entityIds: [predator.id, target.id],
+        source: "simulation/ecology/predation.ts:huntPrey",
+        correlationId: attemptId,
+        payload: {
+          ...commonPayload,
+          outcome: "FAILURE",
+          energyTransferred: 0,
+          predatorEnergyAfter: predator.energy,
+          preyEnergyAfter: target.energy,
+        },
+      });
     }
   }
 

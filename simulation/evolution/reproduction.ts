@@ -8,6 +8,7 @@ import { createOrganism, STARTING_ENERGY } from "../biology/organism";
 import { Planet } from "../planet/planet";
 import { buildOrganismBuckets, nearbyOrganisms, distanceWrapped as bucketDistanceWrapped } from "../ecology/spatialIndex";
 import { areTouching, maxContactCells } from "../ecology/collision";
+import { NULL_EVENT_SINK, type EcologicalEventSink } from "../ecology/observability";
 
 const REPRODUCTION_ENERGY_THRESHOLD = 130;
 const REPRODUCTION_ENERGY_COST = 55;
@@ -72,6 +73,9 @@ export function reproduceOrganisms(
   collisions = false,
   /** v1.11.0 — se vero, i figli ricevono (ereditano e mutano) i geni estesi (`ext`); se falso restano senza (comportamento v1.10). */
   advancedGenome = false,
+  /** E2.3 — osservabilità: parametri trailing opzionali, nessun cambiamento biologico. */
+  tick = 0,
+  sink: EcologicalEventSink = NULL_EVENT_SINK,
 ): Organism[] {
   const offspring: Organism[] = [];
   const eligible = organisms.filter(
@@ -116,6 +120,10 @@ export function reproduceOrganisms(
     let childGenome;
     let childBrain;
     let geneParents: { a: Genome; b: Genome; clone: boolean } | null = null;
+    // E2.3 — osservazioni passive dei costi reali, senza ricalcolare formule.
+    let mateId: number | null = null;
+    let mateEnergyBefore: number | null = null;
+    let mateEnergyAfter: number | null = null;
     // v1.11.0 — REP-01: energia del nato = 50 × fattore (media dei genitori); il genitore paga 55 + 1,1 × (energia del nato − 50). Neutro = 50 / 55.
     let offspringFactor = phenotypeOf(organism.genome).offspringEnergyFactor;
     let brainStd = phenotypeOf(organism.genome).brainMutationStd;
@@ -126,7 +134,10 @@ export function reproduceOrganisms(
       offspringFactor = (offspringFactor + phenotypeOf(mate.genome).offspringEnergyFactor) / 2;
       brainStd = (brainStd + phenotypeOf(mate.genome).brainMutationStd) / 2; // COG-02: fedeltà neurale dei genitori
       childBrain = inheritBrain(organism.brain, mate.brain, rng, brainStd);
+      mateId = mate.id;
+      mateEnergyBefore = mate.energy;
       mate.energy -= parentCost(offspringFactor);
+      mateEnergyAfter = mate.energy;
       if (advancedGenome) geneParents = { a: organism.genome, b: mate.genome, clone: false };
     } else {
       // Asexual fallback so isolated populations are not permanently stuck,
@@ -139,7 +150,9 @@ export function reproduceOrganisms(
       if (advancedGenome) geneParents = { a: organism.genome, b: organism.genome, clone: true };
     }
 
+    const organismEnergyBefore = organism.energy;
     organism.energy -= parentCost(offspringFactor);
+    const organismEnergyAfter = organism.energy;
 
     const child = createOrganism(
       nextId(),
@@ -156,6 +169,37 @@ export function reproduceOrganisms(
       child.genome.ext = geneParents.clone ? cloneExt(geneParents.a, geneRng) : inheritExt(geneParents.a, geneParents.b, geneRng);
     }
     offspring.push(child);
+
+    // E2.3 — evento di nascita reale: genitori, modalità e costi energetici
+    // sono tutti valori già calcolati dal motore in questo punto.
+    const parentIds = mateId === null ? [organism.id] : [organism.id, mateId];
+    sink.record({
+      type: "REPRODUCTION",
+      tick,
+      entityIds: parentIds.concat(child.id),
+      source: "simulation/evolution/reproduction.ts:reproduceOrganisms",
+      correlationId: `birth:${tick}:${child.id}`,
+      payload: {
+        offspringId: child.id,
+        parentIds: parentIds.join(","),
+        parentCount: parentIds.length,
+        mode: mateId === null ? "ASEXUAL" : "SEXUAL",
+        mateId,
+        parentEnergyCost: organismEnergyBefore - organismEnergyAfter,
+        parentEnergyBefore: organismEnergyBefore,
+        parentEnergyAfter: organismEnergyAfter,
+        mateEnergyCost: mateEnergyBefore === null || mateEnergyAfter === null ? 0 : mateEnergyBefore - mateEnergyAfter,
+        mateEnergyBefore,
+        mateEnergyAfter,
+        offspringEnergy: child.energy,
+        offspringFactor,
+        speciesId: child.speciesId,
+        parentSpeciesId: organism.speciesId,
+        positionX: child.position.x,
+        positionY: child.position.y,
+        advancedGenome,
+      },
+    });
   }
 
   return offspring;
