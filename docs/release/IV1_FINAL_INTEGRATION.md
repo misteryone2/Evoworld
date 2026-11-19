@@ -2,7 +2,7 @@
 
 **Data:** 2026-11-19
 **Branch di integrazione:** `integration/e2-g3-iv1-final`
-**Stato:** integrazione tecnica completata e verificata; **PR #3** (`https://github.com/misteryone2/Evoworld/pull/3`) aperta verso `main`, mergeable (`mergeable_state=clean`), in attesa di approvazione per il merge finale (fasi 11–12).
+**Stato:** integrazione **completata**. PR #3 approvata e mergata su `main` il 2026-11-19: merge commit `dbb114ecf849b90c74cf776f171e27a45e427ead`. Tag `iv1-r1-approved` pubblicato, PR #1 chiusa come *superseded*. Verifica finale post-merge eseguita con esito positivo.
 
 ---
 
@@ -33,6 +33,8 @@
 | `713922a7553390642a41a9de4f3041c6fa391bd0` | `merge --no-ff` di IV1-A-R1 (52 commit avanti rispetto a `main`) |
 | `dc9873ffe9c289247e9c0c41eb773be61e2dc896` | `merge --no-ff` di IV1-B-R1 (57 commit avanti) |
 | `bb3ace8` | allineamento documentale E2/R1 (addendum datato) |
+| `4597dee` / `aac7516` | report finale di integrazione e dettagli PR |
+| **`dbb114ecf849b90c74cf776f171e27a45e427ead`** | **merge di PR #3 su `main`** (approvazione esplicita dell'utente) |
 
 **Conflitti:** nessuno. **Modifiche al codice di produzione:** nessuna.
 
@@ -47,10 +49,11 @@ Lo stesso controllo tra A-R1 e B-R1 dà `exit 0`: i due rami condividono alberi 
 
 ### PR
 
-- **PR #3** — `integration/e2-g3-iv1-final → main`: `https://github.com/misteryone2/Evoworld/pull/3`. Head `4597deedeb36b056076c7b0daa382cd7d3f773e5`, base `d330c12f345ab26ab7405b908c729e2e2f6bcc22`, 187 file modificati, +81410/−1353. Stato `open`, `mergeable=true`, `mergeable_state=clean`, 0 review. `main` non protetto da branch protection; il merge è stato comunque sospeso in attesa di approvazione esplicita.
-- PR #1 (G1): aperta, **non utilizzata** come percorso di integrazione; da chiudere come *superseded* solo dopo il merge su `main`.
+- **PR #3** — `integration/e2-g3-iv1-final → main`: `https://github.com/misteryone2/Evoworld/pull/3`. Head finale `aac75163572da86d93d94d85a14fe8f6c26abc28`, base `d330c12f345ab26ab7405b908c729e2e2f6bcc22`, 187 file modificati, +81410/−1353. Era `mergeable=true`, `mergeable_state=clean`. **Mergata** con merge commit `dbb114ecf849b90c74cf776f171e27a45e427ead` dopo approvazione esplicita.
+- PR #1 (G1): **chiusa come *superseded* senza merge** dopo il merge di PR #3; il suo contenuto resta nel tag `archive/g1-pr1-remote`.
 - PR #2 (E1): già chiusa/merged.
-- `main` non è stato modificato direttamente; nessun force push.
+- `main` non è stato modificato direttamente prima dell'approvazione; nessun force push, nessun aggiramento di branch protection (la branch non era protetta, ma il merge è stato sospeso fino all'approvazione).
+- Verifica post-merge: `main` e `aac7516` hanno lo **stesso albero** (`1bbc11708222f7784b91b90d7aad57385fe9b959`), `git diff --exit-code aac7516 main` → exit 0.
 
 ---
 
@@ -121,7 +124,21 @@ I 6 failure sono **identici per file e nome di test** nei due contesti:
 - `tests/reproduction.test.ts` — ereditarietà genomi e costo energetico (2 test)
 - `tests/vibeGenomeV1110.test.ts` — registry geni comportamentali e PER-03 (2 test)
 
-Nessun nuovo failure. Nessun test modificato o soglia allentata. Il numero storico di 10 failure (report E2.3) e 15 (E2.3.1, con timeout load-sensitive) è legato a sessioni diverse: in questa sessione sia baseline che integrazione mostrano 6 failure nella stessa area.
+Nessun nuovo failure deterministico. Nessun test modificato o soglia allentata. Il numero storico di 10 failure (report E2.3) e 15 (E2.3.1, con timeout load-sensitive) è legato a sessioni diverse: nella sessione di integrazione sia baseline che branch mostravano 6 failure nella stessa area.
+
+### Verifica post-merge su `main` (dopo `dbb114e`)
+
+| Verifica | Risultato |
+|---|---|
+| `main` locale/remoto | `dbb114ecf849b90c74cf776f171e27a45e427ead` |
+| Albero `main` vs `aac7516` | identico: `1bbc11708222f7784b91b90d7aad57385fe9b959`, `diff exit 0` |
+| `tsc --noEmit` | exit 0 |
+| IV1-A / IV1-B | 10/10 · 33/33 |
+| E2 + G3/G3.1 (eseguiti insieme) | **30 file, 300/300**, exit 0 |
+| `next build --webpack` | OK, 3 pagine statiche |
+| Suite completa | 1096–1097 passati, 1 skipped, 7–8 failed in due esecuzioni |
+
+I failure aggiuntivi rispetto ai 6 deterministici sono **timeout di 5000 ms** in `tests/planet.test.ts` (2 test), che in isolamento passano **24/24 in 4,11 s**. Nelle stesse condizioni di carico il baseline storico `e936756` ha mostrato **10 failure, di cui 5 timeout**, inclusi gli stessi due test `planet.test.ts` (oltre a `settlementDefaults` e due test `vibeGenomeV1110`). I timeout sono quindi load-sensitive e pre-esistenti, non regressioni dell'integrazione; il codice di `main` è byte-identico al branch validato.
 
 ---
 
@@ -138,6 +155,9 @@ Tag annotati creati, pubblicati su `origin` e verificati (`git ls-remote --tags 
 | `archive/g1-pr1-remote` | `8c48c7dac5c34ee2a14c9ee931803517222b0ea2` |
 | `archive/baseline-e1` | `db86444f5aa9b83a19d46ea8a57a6d979af21882` |
 | `archive/baseline-iv1-a` | `e936756c5764b9b354bdd303d297ec97a33b1966` |
+| **`iv1-r1-approved`** | **`dbb114ecf849b90c74cf776f171e27a45e427ead`** (tag object `3a439efcddf94563f9fa0901b8804fbfa78af446`) |
+
+Il tag approvato è stato creato sul merge commit, pubblicato e verificato su `origin` (`git ls-remote --tags` mostra sia l'oggetto tag sia il commit peeled). Nessun tag esistente è stato sovrascritto.
 
 ### 8 file G1 conservati
 
@@ -186,8 +206,14 @@ I report scientifici originali, hash, dataset e conclusioni storiche restano inv
 | 8 — Test e validazione | **completata** |
 | 9 — Report di integrazione | **completata** |
 | 10 — PR verso `main` | **completata** (PR #3, mergeable) |
-| 11 — Merge su `main` + tag `iv1-r1-approved` | **in attesa di approvazione** |
-| 12 — Chiusura PR #1 e pulizia branch | **in attesa del merge su `main`** |
-| 13 — Verifica finale | **parziale** |
+| 11 — Merge su `main` + tag `iv1-r1-approved` | **completata** (`dbb114e`, tag `3a439ef`) |
+| 12 — Chiusura PR #1 e pulizia branch | **completata** (PR #1 closed, `merged=false`; branch di integrazione rimosso; worktree conservati) |
+| 13 — Verifica finale | **completata** (test essenziali + build + suite completa su `main`) |
 
-**FINAL STATUS (momentaneo): `INTEGRATION BLOCKED`** — blocco esclusivamente procedurale: PR #3 pubblicata e mergeable, in attesa di approvazione per il merge su `main`. Nessun problema tecnico, nessun failure nuovo, nessun contributo perso.
+**FINAL STATUS: `INTEGRATION COMPLETE`** — PR #3 approvata e mergata su `main` (`dbb114e`), tag `iv1-r1-approved` pubblicato, PR #1 chiusa come *superseded* senza merge, verifica post-merge positiva. Nessun contenuto perso: tutto è su `main` o nei tag archivistici. Nessun test modificato, nessun force push.
+
+### Pulizia
+
+- Branch remoto `integration/e2-g3-iv1-final`: rimosso dopo il merge (contenuto integralmente su `main`).
+- Branch locale `integration/e2-g3-iv1-final`: rimosso dopo il merge.
+- Branch di validazione e worktree esistenti: **conservati**, in accordo con la regola di non rimuovere automaticamente i worktree. Il loro contenuto è comunque presente su `main` e/o nei tag `archive/*`.
