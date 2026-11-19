@@ -23,7 +23,31 @@ export type LocomotionMode =
   | "sessile" | "amorphous" | "undulatory" | "limbless" | "bipedal" | "quadrupedal" | "hexapodal" | "multipedal" | "radial" | "appendage-driven";
 export type DetailTier = 0 | 1 | 2 | 3;
 
+/** Stato di un controllo anatomico: solo INVALID rende il descriptor inaccettabile. */
+export type AnatomyStatus = "VALID" | "WARNING" | "INVALID";
+export type GroundClearanceStatus = "determined" | "undetermined";
+
+/** Anomalia diagnostica: codice stabile, motivazione e (quando noto) elemento coinvolto. */
+export interface AnatomyDiagnostic {
+  readonly code: string;
+  readonly status: Exclude<AnatomyStatus, "VALID">;
+  readonly message: string;
+  readonly target?: string;
+}
+
 export interface Vec3 { readonly x: number; readonly y: number; readonly z: number }
+
+/**
+ * AABB della geometria G2. `size`/`min`/`max`/`center` sono in spazio unitario; `scaledSize`
+ * applica `proportions.sizeScale` (il renderer resta libero di applicare la scala come preferisce).
+ */
+export interface AnatomyExtents {
+  readonly min: Vec3;
+  readonly max: Vec3;
+  readonly center: Vec3;
+  readonly size: Vec3;
+  readonly scaledSize: Vec3;
+}
 
 export interface Segment {
   readonly id: string;
@@ -71,10 +95,27 @@ export interface AnatomyProportions {
   readonly sizeScale: number;
   /** 0..1, 0,5 neutro. */
   readonly robustness: number;
+  /** AABB dei soli segmenti (corpo). */
+  readonly bodyExtents: AnatomyExtents;
+  /** AABB di segmenti + appendici (organismo completo). */
+  readonly anatomicalExtents: AnatomyExtents;
+  /** Legacy: bodyExtents.size.z */
   readonly bodyLength: number;
+  /** Legacy: bodyExtents.size.x */
   readonly bodyWidth: number;
+  /** Legacy: bodyExtents.size.y */
   readonly bodyHeight: number;
-  readonly groundClearance: number;
+  /** Altezza totale della geometria generata (appendici incluse). */
+  readonly totalHeight: number;
+  /**
+   * Distanza corpo↔terreno dedotta da un piano d'appoggio di zampe coplanari.
+   * `null` = non determinabile dalla sola anatomia: nessun valore viene inventato.
+   */
+  readonly groundClearance: number | null;
+  readonly groundClearanceStatus: GroundClearanceStatus;
+  readonly groundClearanceReason: string;
+  /** Lunghezza massima di una zampa: misura distinta, mai sinonimo di ground clearance. */
+  readonly maxLimbLength: number;
 }
 
 export interface AnatomySurface {
@@ -88,7 +129,8 @@ export interface AnatomySurface {
 export interface AnatomyLocomotion {
   readonly mode: LocomotionMode;
   readonly supportingLimbs: number;
-  readonly groundClearance: number;
+  /** Copia di `proportions.groundClearance`; `null` se non determinabile. */
+  readonly groundClearance: number | null;
 }
 
 export interface AnatomyComplexity {
@@ -124,6 +166,8 @@ export interface AnatomyDescriptor {
   /** Provenienza per caratteristica (chiavi in REQUIRED_PROVENANCE_KEYS). */
   readonly provenance: Readonly<Record<string, DataSource>>;
   readonly phenotypeIssues: readonly string[];
+  /** Anomalie strutturali dichiarate dal generatore (es. appendici dispari): non vengono nascoste. */
+  readonly declaredAnomalies: readonly AnatomyDiagnostic[];
 }
 
 export const REQUIRED_PROVENANCE_KEYS: readonly string[] = Object.freeze([

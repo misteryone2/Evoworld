@@ -1,7 +1,7 @@
 "use client";
 
-import type { SimulationStats, TraitName } from "../../types";
-import { TRAIT_LABELS } from "../../lib/traitLabels";
+import type { SimulationStats } from "../../types";
+import { formatAverageGenome } from "../../lib/formatAverageGenome";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
 
 interface Props {
@@ -19,6 +19,8 @@ export function StatsPanel({ stats }: Props) {
   if (!stats) {
     return <div className="stats-panel">Inizializzazione del mondo…</div>;
   }
+
+  const genomeRows = formatAverageGenome(stats.averageGenome);
 
   return (
     <div className="stats-panel">
@@ -53,10 +55,10 @@ export function StatsPanel({ stats }: Props) {
         <div className="genome-section">
           <h3>Genoma medio della popolazione</h3>
           <ul className="genome-list">
-            {Object.entries(stats.averageGenome).map(([trait, value]) => (
-              <li key={trait}>
-                <span>{TRAIT_LABELS[trait as TraitName] ?? trait}</span>
-                <span>{(value as number).toFixed(2)}</span>
+            {genomeRows.map((row) => (
+              <li key={row.key}>
+                <span>{row.label}</span>
+                <span>{row.value}</span>
               </li>
             ))}
           </ul>

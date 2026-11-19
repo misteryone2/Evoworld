@@ -159,3 +159,15 @@ export function buildCreatureVisualDescriptorsBatch(...): CreatureVisualDescript
 - Nessuna modifica a `simulation/*` logica, a formati snapshot/salvataggio, né a semantica di `WorkerCommand/WorkerEvent` esistenti (eventuali estensioni solo additive e approvate).
 - Nessun asset esterno o dipendenza nuova richiesta in questa fase di design.
 - Nessuna “intelligenza visiva” che inventi comportamenti non presenti nei dati.
+
+## 8. Addendum - implementazione effettiva (2026-11-16)
+
+Il contratto implementato in lib/visual/creatureVisualDescriptor.ts e una versione ridotta e concreta di questa bozza:
+
+- CreatureSurface espone baseHue + hueShift (gradi, +-7) invece di un oggetto HSL annidato: la tinta di specie resta identificabile, la variazione per individuo e un campo separato e deterministico.
+- morphology.scale e un suggerimento LOD, non ancora la scala definitiva del renderer (il 3D usa creatureScale/anatomia esistenti).
+- lod.renderParts e derivato da QualityProfile + distanza camera in scale + selezione; il renderer attuale usa ancora i propri flag detail, quindi l'adozione e parziale.
+- cues.alert e costante 0 (nessun segnale reale nel frame). feeding/resting usano solo segnali disponibili e sono documentati come euristiche visuali read-only.
+- Helper condivisi stableVariation01(id) e organismHueShift(id): unica fonte del look per-individuo, gia usata dal renderer 3D.
+
+Dettagli, limiti e stato di verifica: G1_IMPLEMENTATION_REPORT.md.

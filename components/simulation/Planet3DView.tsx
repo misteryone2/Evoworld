@@ -4,24 +4,17 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RenderFrame, ViewportFrame, ViewportRequest } from "../../types";
-import { speciesHue } from "../../lib/speciesColor";
-import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../lib/creatureAnatomy";
-import { headingBlendForDt, nextHeading, wrappedDelta, type Heading, type MutableHeading } from "../../lib/creatureHeading";
+import { MAX_SPIKES } from "../../lib/creatureAnatomy";
+import { GENERIC_RENDER_SLOTS, type CreatureAnatomyRenderSource, type CreatureRenderPartKey } from "../../lib/visual/anatomyRenderPlan";
+import { createRuntimeAnatomyRenderSource, type RuntimeAnatomyRenderSource } from "../../lib/visual/runtimeAnatomyRenderSource";
+import { wrappedDelta } from "../../lib/creatureHeading";
 import { createMotionBuffer, ingestMotionFrame, interpolatedFrame } from "../../lib/motionInterpolation";
-import { createVisualMotion, stepVisualMotion, type VisualMotion } from "../../lib/naturalMotion";
-import { advancePhase, computeBodyPose, createBodyPose, normalizedSpeed } from "../../lib/bodyAnimation";
-import { applyLivingPose, createLivingState, stepLiving, type LivingState } from "../../lib/livingBehavior";
 import { shouldDrawCreatures } from "../../lib/animationScheduler";
-import { createLodDetail, createLodWeights, lodDetail, lodWeights, FULL_DETAIL } from "../../lib/animationLod";
-import { collectNearbyOrganisms, ensureCandidateBuffer } from "../../lib/followCull";
-import { FOLLOW_CREATURE_RANGE_UNITS, creatureScale } from "../../lib/worldScale";
-import { WORLD_RADIUS_UNITS, bodyRadiusUnits } from "../../simulation/core/scale";
-import { pushOutOfTrunks, type XY } from "../../lib/trunkAvoid";
+import { FOLLOW_CREATURE_RANGE_UNITS } from "../../lib/worldScale";
 import { terrainColorRGB, applyWaterOverlayRGB, applySeasonalTintRGB, applyRockBySlopeRGB, applyMicroVariationRGB } from "../../lib/terrainColor";
 import { createWaveNormalTexture } from "../../lib/waveNormals";
 import { TICKS_PER_YEAR } from "../../simulation/core/constants";
-import { projectToSphere, projectToSphereInto, type SpherePoint, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean, sampleViewportElevationNearest } from "../../lib/sphereProjection";
-import { computeRenderStride } from "../../lib/renderSampling";
+import { projectToSphere, elevationDisplacement, sampleViewportChannelBilinear, sampleViewportTerrainIsOcean } from "../../lib/sphereProjection";
 import {
   computeFollowPose,
   clampCameraRadius,
@@ -31,127 +24,46 @@ import {
   directionToGrid,
   type Vec3,
 } from "../../lib/followCamera";
-import { nearestOrganismId } from "../../lib/followTarget";
-import { createLocalScene, type LocalScene } from "./localScene";
-import { groundContains, groundRadius, isLocalViewport, localPatchRadiusCells } from "../../lib/localGround";
+import { createLocalScene } from "./localScene";
+import { isLocalViewport, localPatchRadiusCells } from "../../lib/localGround";
 import { QUALITY_PROFILES, shouldDowngrade, type QualityProfile } from "../../lib/qualityProfile";
+import { addBellyGradient, configureInstancedMesh, updateCreatureInstances } from "./planet3d/creatureInstancing";
+import { PLANET_RADIUS, CREATURE_BUFFER_SLACK, LEGS_PER_CREATURE, CONE_BASE_RADIUS } from "./planet3d/constants";
+import { CLOUD_COUNTS, CLOUD_HEIGHT, CLOUD_SPREAD, CLOUD_WIND, SKY_COLOR, createCloudTexture, createSkyDome } from "./planet3d/sky";
+import { SUN_ORBIT_POSITION, placeFollowSun, setSunShadowExtent } from "./planet3d/sun";
+import { applyFollowDrag, createFollowState, panFreeCamera, resetFollowState, updateFollowCamera, updateFreeCamera, type FollowState } from "./planet3d/cameraRig";
+import { pickTerrainLodTier, tiersForProfile, TERRAIN_LOD_CHECK_INTERVAL_MS, TERRAIN_LOD_TIERS } from "./planet3d/terrainTiers";
+import { updateSelectionRing } from "./planet3d/selectionRing";
+import type { CreatureTrack, HeightmapSample, SceneRefs } from "./planet3d/types";
 
-const PLANET_RADIUS = WORLD_RADIUS_UNITS;
-/**
- * v1.6.0 — Modalità leggera. How many creatures get an instance, how detailed
- * each one is, the resolution of the screen buffer and of the terrain all come
- * from the active QualityProfile (lib/qualityProfile.ts) instead of fixed
- * constants. Above the profile's maxCreatures the renderer draws a
- * deterministic stride-sampled subset (see lib/renderSampling.ts, v1.0.2):
- * the simulation engine has no population cap and never will; this only
- * bounds what gets drawn. Instance buffers are sized to that same number
- * (plus a little slack for striding), so a light profile also uses far less
- * memory than a full one.
- */
-const CREATURE_BUFFER_SLACK = 16;
+// UP resta nel componente per l'orientamento della camera; le creature hanno
+// una copia privata nel modulo (nessuno stato scrivibile condiviso).
+const UP = new THREE.Vector3(0, 1, 0);
+
+// G1-b — il componente riesporta l'API storica: test e chiamanti restano invariati.
+export type { CreatureTrack, SceneRefs } from "./planet3d/types";
+export { createCloudTexture, createSkyDome } from "./planet3d/sky";
+export { placeFollowSun, setSunShadowExtent } from "./planet3d/sun";
+export { applyFollowDrag, createFollowState, panFreeCamera, resetFollowState, updateFollowCamera, updateFreeCamera } from "./planet3d/cameraRig";
+export type { FollowState } from "./planet3d/cameraRig";
+export { addBellyGradient, configureInstancedMesh, updateCreatureInstances } from "./planet3d/creatureInstancing";
+
 /** v1.7.0 — piano vicino della camera: da vicino al suolo serve molto più piccolo di quello della vista dall'alto. */
 const FOLLOW_NEAR_PLANE = 0.03;
 const ORBIT_NEAR_PLANE = 0.1;
-/** v1.7.0 — costante di tempo (ms) dello smorzamento della camera: abbastanza alta da assorbire i salti tra un frame e l'altro. */
-const FOLLOW_SMOOTHING_MS = 140;
-/** v1.7.0 — dopo quanto tempo senza tocchi la camera torna dietro l'animale, e con che costante di tempo. */
-const FOLLOW_RECENTER_DELAY_MS = 2500;
-const FOLLOW_RECENTER_TIME_MS = 600;
-/** v1.7.0 — se l'animale seguito sparisce (morto) per più di così, si passa al più vicino. */
-const FOLLOW_LOST_TARGET_MS = 1500;
-/** v1.7.0 — se la nuova posa dista più di così dalla camera attuale (altro animale lontano), la camera salta invece di attraversare il pianeta. */
-const FOLLOW_SNAP_DISTANCE = 2.5;
-/** v1.8.0 — colori del cielo (terza persona) e dello spazio (vista dall'alto), e foschia atmosferica. */
-const SKY_COLOR = 0x9cc3e6;
-const SPACE_COLOR = 0x05070a;
-/** v1.10.6 — Cielo: colore dello zenit e dell'orizzonte (il cielo in terza persona non è più un colore piatto). */
-const SKY_ZENITH = 0x4f83c0;
-const SKY_HORIZON = 0xd7e4ef;
-/** v1.10.6 — Nuvole: quante per livello di qualità, a che altezza, quanto è grande l'area in cui vivono e quanto vento. */
-const CLOUD_COUNTS: Record<QualityProfile["level"], number> = { "2d": 0, basso: 0, medio: 8, alto: 14 };
-const CLOUD_HEIGHT = 7;
-const CLOUD_SPREAD = 22;
-const CLOUD_WIND = 0.12; // unità del mondo al secondo
 const FOLLOW_FOG_NEAR = 1.2;
 const FOLLOW_FOG_FAR = 5.2;
-const SUN_ORBIT_POSITION: [number, number, number] = [6, 4, 8];
+/** Sfondo della vista dall'alto (lo spazio), distinto dal cielo della terza persona. */
+const SPACE_COLOR = 0x05070a;
 /** v1.8.0 — terreno locale: mezza larghezza (unità del mondo 3D) dell'area richiesta, ritmo delle richieste. */
 const LOCAL_PATCH_HALF_UNITS = 3;
 const LOCAL_CHECK_INTERVAL_MS = 400;
 const LOCAL_MIN_INTERVAL_MS = 400;
 const LOCAL_REFRESH_MS = 2500;
 const LOCAL_RECENTER_FRACTION = 0.3;
-const LEGS_PER_CREATURE = 4;
-/** v1.7.0 — radianti per pixel trascinato. */
-const FOLLOW_YAW_PER_PX = 0.006;
-const FOLLOW_PITCH_PER_PX = 0.004;
-const FOLLOW_PITCH_MIN = -0.3;
-const FOLLOW_PITCH_MAX = 1.0;
-/** Below this normalized carnivory value, no aggression tint is applied (matches the 2D drawCreature threshold). */
-const AGGRESSION_VISIBLE_THRESHOLD = 0.15;
 /** Pointer movement (px) below which a pointerdown+pointerup is treated as a tap/click rather than a drag-to-rotate (v1.0.4). */
 const TAP_MOVEMENT_THRESHOLD_PX = 6;
-/**
- * v1.10.8 — Camera libera: velocità del punto d'osservazione verso il punto toccato (unità del mondo
- * al secondo). v1.10.8b — la "scala" qui sotto non è quella di una creatura: decide distanza E punto
- * guardato (target a scala*1.1 dal suolo). Con 2.2 la camera guardava un punto a 2,4 unità d'altezza:
- * solo cielo. Con 0.55 la distanza resta al massimo (2,2 unità, vista panoramica) e il punto guardato
- * sta a ~0,6 dal suolo: si vede il terreno e le creature attorno.
- */
-const FREE_MOVE_UNITS_PER_SEC = 2.4;
-const FREE_CAMERA_SCALE = 0.55;
-/**
- * v1.10.9 — movimento fluido in vista libera: il punto d'osservazione non parte e non arriva più a scatto.
- * Accelera dolcemente (unità/s²) e frena in proporzionalità inversa alla distanza che resta (v = √(2·a·d)),
- * così l'arrivo è morbido qualunque sia la lunghezza del viaggio.
- */
-const FREE_ACCEL_UNITS_PER_S2 = 3;
-const FREE_BRAKE_UNITS_PER_S2 = 3.5;
-/**
- * v1.10.10 — SCORRIMENTO: in vista libera trascinare (mouse premuto su PC, dito su telefono) sposta il
- * punto d'osservazione nella direzione del gesto, come su una mappa. Quanti unità del mondo per pixel
- * trascinati (a ~2,2 unità di distanza della camera, mezzo schermo ≈ qualche unità di terreno).
- */
-const FREE_DRAG_UNITS_PER_PX = 0.014;
 
-/**
- * v1.1 — World Scale. Terrain texture LOD tiers, keyed by camera distance
- * from the planet (in units of PLANET_RADIUS). Farther away requests a
- * coarser overview; closer requests sharper detail — but the *maximum*
- * resolution is fixed regardless of how large the simulated world
- * actually is (512x512 vs 2048x2048 request the exact same tiers), which
- * is what keeps render cost flat as the world scales up. See
- * ViewportRequest/ViewportFrame and simulation/core/viewportFrame.ts.
- *
- * v1.2.2 — each tier also now specifies a mesh tessellation
- * (segmentsWidth/segmentsHeight for the sphere's own widthSegments/
- * heightSegments): geometry only gets as detailed as the camera distance
- * actually warrants, same principle as the texture resolution, reusing
- * the exact same tier list rather than a second, independent LOD system.
- */
-const TERRAIN_LOD_TIERS: { minDistanceFactor: number; maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number }[] = [
-  { minDistanceFactor: 4, maxWidth: 320, maxHeight: 160, segmentsWidth: 64, segmentsHeight: 48 },
-  { minDistanceFactor: 2.2, maxWidth: 640, maxHeight: 320, segmentsWidth: 96, segmentsHeight: 64 },
-  { minDistanceFactor: 0, maxWidth: 1024, maxHeight: 512, segmentsWidth: 160, segmentsHeight: 112 },
-];
-/** How often (ms) camera distance is polled to decide whether a new terrain LOD tier should be requested. */
-const TERRAIN_LOD_CHECK_INTERVAL_MS = 500;
-
-type TerrainTier = { minDistanceFactor: number; maxWidth: number; maxHeight: number; segmentsWidth: number; segmentsHeight: number };
-
-/** v1.6.0 — the LOD tiers a profile may use: those whose texture is no wider than the profile allows (always at least the coarsest one). */
-function tiersForProfile(profile: QualityProfile): TerrainTier[] {
-  const allowed = TERRAIN_LOD_TIERS.filter((t) => t.maxWidth <= profile.terrainMaxWidth);
-  return allowed.length > 0 ? allowed : [TERRAIN_LOD_TIERS[0]];
-}
-
-function pickTerrainLodTier(distance: number, tiers: TerrainTier[]): TerrainTier {
-  const factor = distance / PLANET_RADIUS;
-  for (const tier of tiers) {
-    if (factor >= tier.minDistanceFactor) return tier;
-  }
-  return tiers[tiers.length - 1];
-}
 
 const TERRAIN_LABELS: Record<number, string> = {
   0: "Oceano",
@@ -196,138 +108,14 @@ interface Props {
   onSlow?: () => void;
   /** v1.7.0 — vista dall'alto (default) o terza persona sull'animale selezionato. */
   cameraMode?: CameraMode;
+  /**
+   * G-REV-02 — sorgente G2 opzionale. G3 la crea automaticamente dal frame:
+   * questo prop resta solo per test/override espliciti e non è più necessario.
+   */
+  anatomyRenderSource?: CreatureAnatomyRenderSource | null;
 }
 
-interface HeightmapSample {
-  elevation: Float32Array;
-  terrain: Uint8Array;
-  originX: number;
-  originY: number;
-  cellsWidth: number;
-  cellsHeight: number;
-  texWidth: number;
-  texHeight: number;
-}
 
-/**
- * v1.9.0 — Traccia di una creatura disegnata: ultima posizione, orientamento, fase del passo e anatomia
- * (che dipende solo dai geni, quindi si ricalcola solo se cambiano). Si modifica sul posto a ogni frame:
- * niente oggetti nuovi per creatura, e quindi meno lavoro per il garbage collector.
- */
-export interface CreatureTrack extends MutableHeading {
-  /** v1.10.2 — rotazione, velocità e inclinazione visive (temporanee, solo per il disegno). */
-  motion: VisualMotion;
-  /** v1.10.4 — stato visivo da ferma (respiro, sguardo, mangia, riposa): temporaneo, non persistente. */
-  living: LivingState;
-  x: number;
-  y: number;
-  phase: number;
-  /** Numero del frame in cui la creatura è stata disegnata l'ultima volta (per scartare le assenti). */
-  gen: number;
-  anatomy: CreatureAnatomy | null;
-  aSpeed: number;
-  aCarnivory: number;
-  aVision: number;
-  aEvasion: number;
-  aHunting: number;
-}
-
-let trackGeneration = 0;
-const tmpDrawn: XY = { x: 0, y: 0 };
-// v1.10.3 — animazione del corpo: posa e matrici di lavoro riusate per ogni creatura (nessuna allocazione per frame)
-const tmpPose = createBodyPose();
-const tmpLodWeights = createLodWeights();
-const tmpLodDetail = createLodDetail();
-const tmpHeadParent = new THREE.Matrix4();
-const tmpHeadLocal = new THREE.Matrix4();
-const tmpNeckBack = new THREE.Matrix4();
-const tmpHeadQuat = new THREE.Quaternion();
-const tmpTailQuat = new THREE.Quaternion();
-const tmpPoseEuler = new THREE.Euler();
-const tmpPoseVec = new THREE.Vector3();
-const ONE_VEC = new THREE.Vector3(1, 1, 1);
-const tmpLeanEuler = new THREE.Euler();
-const tmpLeanQuat = new THREE.Quaternion();
-const tmpPoint: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
-const tmpAhead: SpherePoint = { x: 0, y: 0, z: 0, normalX: 0, normalY: 0, normalZ: 0 };
-
-export interface SceneRefs {
-  renderer: THREE.WebGLRenderer;
-  scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
-  planetMesh: THREE.Mesh;
-  planetTexture: THREE.DataTexture;
-  textureData: Uint8Array;
-  /** v1.9.4 — Acqua: roughnessMap del pianeta (verde: 255 = terra opaca, ~45 = acqua lucida). */
-  roughnessTexture: THREE.DataTexture;
-  roughnessData: Uint8Array;
-  /** v1.2.2 — pristine, undisplaced unit-sphere vertex positions (direction * PLANET_RADIUS) for the CURRENT geometry, captured fresh whenever the geometry is (re)built at a new LOD tessellation. Displacement is always computed from this, never from the previous frame's already-displaced positions, so repeated updates don't compound. */
-  basePositions: Float32Array;
-  /** v1.2.2 — tessellation (segmentsWidth) the current planetMesh.geometry was built at, to detect when a LOD tier change requires rebuilding the geometry rather than just re-displacing it. */
-  currentSegmentsWidth: number;
-  /** v1.2.2 — latest viewport elevation/terrain sample, shared so creature positioning (updateCreatureInstances) can rest organisms on the same displaced surface without any per-tick RenderFrame payload growth. */
-  heightmap: HeightmapSample | null;
-  /** v1.6.0 — instance-buffer size, drawn-creature target and how many body parts to draw (1 torso+head, 2 +eyes/tail/jaw, 3 +spikes). */
-  capacity: number;
-  maxCreatures: number;
-  detail: 1 | 2 | 3;
-  bodyMesh: THREE.InstancedMesh;
-  /** v1.5.0 — Creature 3D: the rest of a creature's body, one InstancedMesh per part (see updateCreatureInstances). */
-  headMesh: THREE.InstancedMesh;
-  /** Two slots per creature: instance 2n is the left eye, 2n+1 the right. */
-  eyeMesh: THREE.InstancedMesh;
-  tailMesh: THREE.InstancedMesh;
-  jawMesh: THREE.InstancedMesh;
-  /** Three slots per creature (up to three dorsal spikes): instances 3n..3n+2. */
-  spikeMesh: THREE.InstancedMesh;
-  /** v1.8.0 — quattro zampe per creatura (istanze 4n..4n+3), dal dettaglio 2. */
-  legMesh: THREE.InstancedMesh;
-  /** v1.8.0 — due orecchie per creatura (istanze 2n, 2n+1), solo al dettaglio 3 e solo per gli erbivori. */
-  earMesh: THREE.InstancedMesh;
-  /** v1.8.0 — ombra morbida sotto ogni creatura, dal dettaglio 2. */
-  shadowMesh: THREE.InstancedMesh;
-  /** v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito (null se il profilo non li prevede). */
-  local: LocalScene | null;
-  /** v1.5.0 — last rendered position and heading of each drawn creature, so each one can face the way it has been moving. Rebuilt every frame (creatures no longer drawn are dropped). v1.8.0: `phase` è la fase del passo, che avanza con la strada percorsa. */
-  creatureTrack: Map<number, CreatureTrack>;
-  selectionRing: THREE.Mesh;
-  /** Maps instance index (as written by updateCreatureInstances) back to the underlying organism's id, for raycasting hit-tests (v1.0.4). */
-  instanceOrganismId: Uint32Array;
-}
-
-// Reused scratch objects for the per-frame instance update loop, to avoid
-// allocating thousands of THREE.Vector3/Matrix4/Color objects every tick.
-const UP = new THREE.Vector3(0, 1, 0);
-const AXIS_X = new THREE.Vector3(1, 0, 0);
-const AXIS_Z = new THREE.Vector3(0, 0, 1);
-const tmpLegQuat = new THREE.Quaternion();
-const AGGRO_TINT = new THREE.Color(1, 0.35, 0.27);
-const SPIKE_TINT = new THREE.Color(1, 1, 1);
-const tmpPosition = new THREE.Vector3();
-const tmpNormal = new THREE.Vector3();
-const tmpQuaternion = new THREE.Quaternion();
-const tmpScale = new THREE.Vector3();
-const tmpMatrix = new THREE.Matrix4();
-const tmpColor = new THREE.Color();
-// v1.5.0 — Creature 3D scratch objects.
-const tmpColor2 = new THREE.Color();
-const tmpTangent = new THREE.Vector3();
-const tmpRight = new THREE.Vector3();
-const tmpBasis = new THREE.Matrix4();
-const tmpCreatureMatrix = new THREE.Matrix4();
-const tmpLocal = new THREE.Matrix4();
-const tmpPartMatrix = new THREE.Matrix4();
-const tmpLocalPos = new THREE.Vector3();
-const tmpLocalScale = new THREE.Vector3();
-const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
-const Q_IDENTITY = new THREE.Quaternion();
-/** Rotates a cone (tip along +Y) so its tip points backward (-Z): the tail. */
-const Q_TIP_BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
-/** Rotates a cone so its tip points forward (+Z): the jaw. */
-const Q_TIP_FORWARD = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
-/** Radius of the unit cone geometry used for tail, jaw and spikes (see ConeGeometry below). */
-const CONE_BASE_RADIUS = 0.35;
 
 /**
  * Renders the planet as a rotatable 3D sphere with organisms drawn as
@@ -385,7 +173,7 @@ const CONE_BASE_RADIUS = 0.35;
  * sampled client-side from the on-demand viewport heightmap — never from
  * a per-tick simulation query, so RenderFrame's payload is unchanged.
  */
-export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow, cameraMode = "orbit" }: Props) {
+export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, selectedOrganismId = null, onSelectOrganism, quality = QUALITY_PROFILES.alto, onSlow, cameraMode = "orbit", anatomyRenderSource = null }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneRefs | null>(null);
   const lastTextureSize = useRef<{ width: number; height: number } | null>(null);
@@ -395,6 +183,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   const onRequestViewportRef = useRef(onRequestViewport);
   const onSlowRef = useRef(onSlow);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
+  // G3 — sorgente automatica: nessuna prop manuale è più necessaria per
+  // collegare il descriptor G2 al renderer. Il prop resta un override opzionale.
+  const runtimeAnatomySourceRef = useRef<RuntimeAnatomyRenderSource>(createRuntimeAnatomyRenderSource());
+  const anatomyRenderSourceRef = useRef<CreatureAnatomyRenderSource | null>(anatomyRenderSource ?? runtimeAnatomySourceRef.current);
   // v1.10.8 — il pianeta globale (mappa altezze + texture) è stato costruito almeno una volta per il mondo corrente.
   const globalTerrainBuiltRef = useRef(false);
   const globalPlanetKeyRef = useRef("");
@@ -419,6 +211,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   useEffect(() => {
     onRequestViewportRef.current = onRequestViewport;
   }, [onRequestViewport]);
+  useEffect(() => {
+    const active = anatomyRenderSource ?? runtimeAnatomySourceRef.current;
+    anatomyRenderSourceRef.current = active;
+    if (sceneRef.current) sceneRef.current.renderSource = active;
+  }, [anatomyRenderSource]);
 
   // Mount-only: build the renderer, scene, camera, controls, and the
   // pre-allocated meshes once. Per-frame updates (below) only ever mutate
@@ -475,6 +272,12 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const sun = new THREE.DirectionalLight(0xfff2d9, 1.45);
     sun.position.set(...SUN_ORBIT_POSITION);
     scene.add(sun);
+    // vNext (graphics pass) — luce di riempimento debole dal lato opposto:
+    // stacca i volumi delle creature dal fondo scuro senza cambiare la
+    // direzione del sole. Nessuna ombra, una sola draw-cost trascurabile.
+    const fillLight = new THREE.DirectionalLight(0x9fc4ff, 0.22);
+    fillLight.position.set(-SUN_ORBIT_POSITION[0], SUN_ORBIT_POSITION[1] * 0.35, -SUN_ORBIT_POSITION[2]);
+    scene.add(fillLight);
     if (shadows) {
       sun.castShadow = true;
       sun.shadow.mapSize.set(2048, 2048);
@@ -548,10 +351,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     const detail = quality.creatureParts;
     const [segW, segH] = quality.creatureSegments;
     const useLambert = quality.level === "basso" || quality.level === "2d";
-    const makeMaterial = (opts: { color?: number; roughness?: number; vertexColors?: boolean }) =>
+    // vNext (graphics pass) — metalness per materiale: la pelle/superficie organica
+    // non è metallo, va tenuta bassa; gli occhi restano lucidi. Senza opt-in il
+    // valore resta quello storico (0.1) per non alterare gli altri materiali.
+    const makeMaterial = (opts: { color?: number; roughness?: number; metalness?: number; vertexColors?: boolean }) =>
       useLambert
         ? new THREE.MeshLambertMaterial({ ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) })
-        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) });
+        : new THREE.MeshStandardMaterial({ roughness: opts.roughness ?? 0.6, metalness: opts.metalness ?? 0.1, ...(opts.color !== undefined ? { color: opts.color } : {}), ...(opts.vertexColors ? { vertexColors: true } : {}) });
     const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, instances: number, colored: boolean) => {
       const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, instances));
       if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, instances) * 3), 3);
@@ -564,36 +370,36 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     };
 
     const bodyGeometry = addBellyGradient(new THREE.SphereGeometry(1, segW, segH));
-    const bodyMaterial = makeMaterial({ roughness: 0.6, vertexColors: true });
+    const bodyMaterial = makeMaterial({ roughness: 0.52, metalness: 0.04, vertexColors: true });
     const bodyMesh = makeMesh(bodyGeometry, bodyMaterial, capacity, true);
 
     const headGeometry = addBellyGradient(new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2)));
-    const headMaterial = makeMaterial({ roughness: 0.55, vertexColors: true });
+    const headMaterial = makeMaterial({ roughness: 0.48, metalness: 0.04, vertexColors: true });
     const headMesh = makeMesh(headGeometry, headMaterial, capacity, true);
 
     const eyeGeometry = new THREE.SphereGeometry(1, 6, 4);
-    const eyeMaterial = makeMaterial({ color: 0x0b0f14, roughness: 0.25 });
+    const eyeMaterial = makeMaterial({ color: 0x0b0f14, roughness: 0.16, metalness: 0.0 });
     const eyeMesh = makeMesh(eyeGeometry, eyeMaterial, detail >= 2 ? capacity * 2 : 1, false);
 
     const tailGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 6);
-    const tailMaterial = makeMaterial({ roughness: 0.65 });
+    const tailMaterial = makeMaterial({ roughness: 0.56, metalness: 0.04 });
     const tailMesh = makeMesh(tailGeometry, tailMaterial, detail >= 2 ? capacity : 1, true);
 
     const jawGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const jawMaterial = makeMaterial({ color: 0xc8553d, roughness: 0.5 });
+    const jawMaterial = makeMaterial({ color: 0xc8553d, roughness: 0.45, metalness: 0.03 });
     const jawMesh = makeMesh(jawGeometry, jawMaterial, detail >= 2 ? capacity : 1, false);
 
     const spikeGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const spikeMaterial = makeMaterial({ roughness: 0.5 });
+    const spikeMaterial = makeMaterial({ roughness: 0.42, metalness: 0.05 });
     const spikeMesh = makeMesh(spikeGeometry, spikeMaterial, detail >= 3 ? capacity * MAX_SPIKES : 1, true);
 
     // v1.8.0 — zampe (cilindri appesi all'anca), orecchie (coni) e ombra (disco piatto).
     const legGeometry = new THREE.CylinderGeometry(0.8, 1, 1, 5);
     legGeometry.translate(0, -0.5, 0); // l'estremo alto (l'anca) sta in y = 0
-    const legMaterial = makeMaterial({ roughness: 0.7 });
+    const legMaterial = makeMaterial({ roughness: 0.62, metalness: 0.03 });
     const legMesh = makeMesh(legGeometry, legMaterial, detail >= 2 ? capacity * LEGS_PER_CREATURE : 1, true);
     const earGeometry = new THREE.ConeGeometry(CONE_BASE_RADIUS, 1, 5);
-    const earMaterial = makeMaterial({ roughness: 0.6 });
+    const earMaterial = makeMaterial({ roughness: 0.55, metalness: 0.03 });
     const earMesh = makeMesh(earGeometry, earMaterial, detail >= 3 ? capacity * 2 : 1, true);
     const shadowGeometry = new THREE.CircleGeometry(1, 14);
     shadowGeometry.rotateX(-Math.PI / 2); // il disco giace nel piano XZ, rivolto verso l'alto
@@ -608,6 +414,31 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     });
     const shadowMesh = makeMesh(shadowGeometry, shadowMaterial, detail >= 2 ? capacity : 1, false);
     shadowMesh.castShadow = false; // è già un'ombra disegnata: non ne proietta una seconda
+
+    // G-REV-02 — pool generici per le parti G2 non rappresentabili dai nove mesh
+    // fissi. I slots sono costanti e limitati; i mesh restano invisibili finché
+    // non viene fornita una sorgente, quindi il percorso legacy non cambia.
+    const genericMeshes: Partial<Record<CreatureRenderPartKey, THREE.InstancedMesh>> = {};
+    const genericGeometries: Partial<Record<CreatureRenderPartKey, THREE.BufferGeometry>> = {};
+    const genericMaterials: Partial<Record<CreatureRenderPartKey, THREE.Material>> = {};
+    const genericSlotsPerCreature: Partial<Record<CreatureRenderPartKey, number>> = {};
+    for (const key of Object.keys(GENERIC_RENDER_SLOTS) as CreatureRenderPartKey[]) {
+      const slots = GENERIC_RENDER_SLOTS[key];
+      const geometry = key === "segment"
+        ? new THREE.SphereGeometry(1, Math.max(5, segW - 2), Math.max(3, segH - 2))
+        : key === "appendage"
+          ? new THREE.CylinderGeometry(0.8, 1, 1, 5)
+          : new THREE.SphereGeometry(1, 6, 4);
+      const material = key === "eye"
+        ? makeMaterial({ color: 0x0b0f14, roughness: 0.16, metalness: 0 })
+        : makeMaterial({ roughness: 0.58, metalness: 0.03 });
+      genericGeometries[key] = geometry;
+      genericMaterials[key] = material;
+      genericSlotsPerCreature[key] = slots;
+      const mesh = makeMesh(geometry, material, capacity * slots, key !== "eye");
+      mesh.visible = false;
+      genericMeshes[key] = mesh;
+    }
 
     // v1.8.0 — terreno ad alto dettaglio e flora 3D intorno all'animale seguito.
     const local = quality.localTerrainSegments > 0 ? createLocalScene(quality, PLANET_RADIUS) : null;
@@ -734,6 +565,13 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
         const interpolated = interpolatedFrame(realFrame, motionRef.current, nowMs);
         view = interpolated.frame;
         motionAlpha = interpolated.alpha;
+      }
+
+      // G3 — il descriptor dipende dal frame reale, non dall'interpolazione
+      // visiva: sincronizzare qui evita di rigenerare piani a ogni sub-frame.
+      const activeSource = anatomyRenderSourceRef.current;
+      if (activeSource && typeof (activeSource as RuntimeAnatomyRenderSource).syncFrame === "function") {
+        (activeSource as RuntimeAnatomyRenderSource).syncFrame(realFrame);
       }
 
       if (followActive) {
@@ -916,7 +754,43 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       creatureTrack: new Map(),
       selectionRing,
       instanceOrganismId: new Uint32Array(capacity),
+      renderSource: anatomyRenderSourceRef.current,
+      genericMeshes,
+      genericSlotsPerCreature,
+      creatureRenderStats: { drawn: 0, mapped: 0, legacy: 0, fallback: 0, unsupported: 0, fallbackReasons: [] },
+      // G3.1 — aggiornamenti adattivi: solo la rappresentazione grafica. Le
+      // creature vicine restano a 60 Hz; le lontane ruotano su 4 frame. Il
+      // culling dietro la camera evita scritture invisibili in terza persona.
+      adaptive: { enabled: true, nearDistanceScales: 55, farStride: 4, cullBehindCamera: true, cullMarginUnits: 4 },
+      adaptiveState: null,
     };
+
+    // G3 — snapshot di QA in development: espose solo statistiche, non muta la scena.
+    if (process.env.NODE_ENV !== "production") {
+      const debugWindow = window as Window & {
+        __EVOWORLD_G3__?: { snapshot: () => Record<string, unknown> };
+      };
+      debugWindow.__EVOWORLD_G3__ = {
+        snapshot: () => ({
+          quality: quality.level,
+          rendererInfo: {
+            calls: renderer.info.render.calls,
+            geometries: renderer.info.memory.geometries,
+            textures: renderer.info.memory.textures,
+          },
+          renderStats: { ...sceneRef.current?.creatureRenderStats },
+          adaptive: {
+            enabled: sceneRef.current?.adaptive?.enabled ?? false,
+            updated: sceneRef.current?.creatureRenderStats?.updated ?? null,
+            skipped: sceneRef.current?.creatureRenderStats?.skipped ?? null,
+            culled: sceneRef.current?.creatureRenderStats?.culled ?? null,
+            lodNear: sceneRef.current?.creatureRenderStats?.lodNear ?? null,
+            lodFar: sceneRef.current?.creatureRenderStats?.lodFar ?? null,
+          },
+          anatomySource: runtimeAnatomySourceRef.current.stats(),
+        }),
+      };
+    }
 
     // v1.0.4 — tap/click selection. A pointerdown/pointerup pair is only
     // treated as a tap (not a drag-to-rotate) if the pointer barely moved.
@@ -999,6 +873,10 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
     renderer.domElement.addEventListener("pointercancel", handlePointerEnd);
 
     return () => {
+      if (process.env.NODE_ENV !== "production") {
+        const debugWindow = window as Window & { __EVOWORLD_G3__?: unknown };
+        delete debugWindow.__EVOWORLD_G3__;
+      }
       cancelAnimationFrame(animationFrameId);
       clearInterval(lodCheckHandle);
       clearInterval(localCheckHandle);
@@ -1008,6 +886,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("pointercancel", handlePointerEnd);
       controls.dispose();
+      // G3 — i buffer di istanza non sono liberati da geometry.dispose():
+      // vanno rilasciati esplicitamente, inclusi i pool cresciuti a runtime.
+      const refsForCleanup = sceneRef.current;
+      for (const mesh of [
+        refsForCleanup?.bodyMesh, refsForCleanup?.headMesh, refsForCleanup?.eyeMesh,
+        refsForCleanup?.tailMesh, refsForCleanup?.jawMesh, refsForCleanup?.spikeMesh,
+        refsForCleanup?.legMesh, refsForCleanup?.earMesh, refsForCleanup?.shadowMesh,
+      ]) mesh?.dispose();
       sceneRef.current?.planetMesh.geometry.dispose();
       planetMaterial.dispose();
       sceneRef.current?.planetTexture.dispose();
@@ -1033,6 +919,15 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       earMaterial.dispose();
       shadowGeometry.dispose();
       shadowMaterial.dispose();
+      for (const key of Object.keys(genericMeshes) as CreatureRenderPartKey[]) {
+        const mesh = refsForCleanup?.genericMeshes?.[key] ?? genericMeshes[key];
+        if (mesh) {
+          scene.remove(mesh);
+          mesh.dispose();
+        }
+        genericGeometries[key]?.dispose();
+        genericMaterials[key]?.dispose();
+      }
       local?.dispose();
       ringGeometry.dispose();
       ringMaterial.dispose();
@@ -1279,902 +1174,4 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
   );
 }
 
-/**
- * v1.2.2 — Real 3D Surface: resting radius for a creature/marker at a
- * given world (x, y), sampled from the same on-demand viewport heightmap
- * already used to displace the terrain mesh (see the [viewportFrame]
- * effect above) — never a per-tick simulation query, so this adds zero
- * bytes to RenderFrame. `restOffset` is the small existing "hover above
- * the ground" gap (0.02 for bodies, 0.05 for the selection ring, both
- * pre-existing since v0.7/v1.0.4) preserved on top of the terrain height.
- * Falls back to flat PLANET_RADIUS + restOffset if no viewport data has
- * arrived yet (e.g. the very first frame), exactly matching pre-v1.2.2
- * behavior in that case.
- */
-function restingRadius(refs: Pick<SceneRefs, "heightmap"> & Partial<Pick<SceneRefs, "local">>, worldX: number, worldY: number, restOffset: number): number {
-  // v1.8.0 — dentro il terreno locale si poggia sulla stessa superficie che è disegnata (stessa funzione dei vertici).
-  const ground = refs.local?.ground;
-  if (ground && groundContains(ground, worldX, worldY, 1)) return groundRadius(ground, worldX, worldY, PLANET_RADIUS) + restOffset;
-  const hm = refs.heightmap;
-  if (!hm) return PLANET_RADIUS + restOffset;
-  const elevation = sampleViewportElevationNearest(worldX, worldY, hm.elevation, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
-  const isOcean = sampleViewportTerrainIsOcean(worldX, worldY, hm.terrain, hm.originX, hm.originY, hm.cellsWidth, hm.cellsHeight, hm.texWidth, hm.texHeight);
-  return PLANET_RADIUS + elevationDisplacement(elevation, isOcean) + restOffset;
-}
 
-/** Writes `parent * local(position, rotation, scale)` into `mesh` instance `index`. */
-function setPart(
-  mesh: THREE.InstancedMesh,
-  index: number,
-  parent: THREE.Matrix4,
-  px: number,
-  py: number,
-  pz: number,
-  rotation: THREE.Quaternion,
-  sx: number,
-  sy: number,
-  sz: number,
-): void {
-  tmpLocalPos.set(px, py, pz);
-  tmpLocalScale.set(sx, sy, sz);
-  tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
-  tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
-  mesh.setMatrixAt(index, tmpPartMatrix);
-}
-
-/**
- * v1.10.5 — Come setPart, ma posizione e scala locali si scrivono prima nei vettori di lavoro (`tmpLocalPos`,
- * `tmpLocalScale`) invece di passarle come argomenti. Nel ciclo per creatura setPart si chiamava una quindicina di
- * volte con sei numeri decimali, e V8, non potendola espandere in linea in una funzione così grande, creava un
- * oggetto temporaneo per ognuno: circa 1,4 KB di spazzatura per creatura a ogni aggiornamento. Così no.
- */
-function commitPart(mesh: THREE.InstancedMesh, index: number, parent: THREE.Matrix4, rotation: THREE.Quaternion): void {
-  tmpLocal.compose(tmpLocalPos, rotation, tmpLocalScale);
-  tmpPartMatrix.multiplyMatrices(parent, tmpLocal);
-  mesh.setMatrixAt(index, tmpPartMatrix);
-}
-
-/**
- * v1.8.0 — Ogni InstancedMesh va esclusa dal frustum culling. Three.js ne calcola
- * la sfera di ingombro una volta sola, quando ha ancora zero istanze: resta una
- * sfera vuota al centro del pianeta. Dalla vista dall'alto il centro è
- * inquadrato e non succede nulla; in terza persona è fuori campo e l'intera
- * mesh (cioè tutti gli animali) sparirebbe dallo schermo.
- */
-export function configureInstancedMesh(mesh: THREE.InstancedMesh): void {
-  mesh.frustumCulled = false;
-}
-
-/**
- * v1.10.5 — Contro-ombreggiamento ventre-dorso: colori per vertice che il materiale moltiplica
- * per il colore della specie. Ventre chiaro e caldo (come il sottopelo di mammiferi e
- * uccelli reali), dorso scuro e freddo. Stesso costo di prima: solo colori per vertice.
- */
-export function addBellyGradient(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const position = geometry.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(position.count * 3);
-  for (let i = 0; i < position.count; i++) {
-    const y = position.getY(i); // sfera unitaria: -1 ventre, +1 dorso
-    const t = (y + 1) / 2; // 0 ventre, 1 dorso
-    colors[i * 3] = 1.08 - 0.34 * t; // ventre caldo e chiaro, dorso molto più scuro
-    colors[i * 3 + 1] = 1.04 - 0.26 * t;
-    colors[i * 3 + 2] = 0.96 - 0.12 * t; // il dorso raffredda (più blu), il ventre scalda
-  }
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  return geometry;
-}
-
-/**
- * v1.10.6 — Cielo con gradiente: una grande sfera rovesciata con colori per vertice
- * (zenit più scuro, orizzonte chiaro, foschia sotto). Una sola draw call, niente luci:
- * MeshBasicMaterial. Segue la camera, così non se ne esce mai guardandosi intorno.
- */
-export function createSkyDome(): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(1, 24, 12);
-  const position = geometry.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(position.count * 3);
-  const zenith = new THREE.Color(SKY_ZENITH);
-  const horizon = new THREE.Color(SKY_HORIZON);
-  const haze = new THREE.Color(SKY_COLOR);
-  const c = new THREE.Color();
-  for (let i = 0; i < position.count; i++) {
-    const t = position.getY(i); // +1 zenit, 0 orizzonte, -1 sotto
-    if (t >= 0) c.copy(horizon).lerp(zenith, Math.pow(t, 0.7));
-    else c.copy(horizon).lerp(haze, Math.min(1, -t * 2)); // sotto l'orizzonte: sfuma nella foschia del suolo
-    colors[i * 3] = c.r;
-    colors[i * 3 + 1] = c.g;
-    colors[i * 3 + 2] = c.b;
-  }
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.scale.setScalar(40);
-  mesh.renderOrder = -10; // dietro a tutto
-  mesh.frustumCulled = false;
-  mesh.visible = false;
-  return mesh;
-}
-
-/**
- * v1.10.6 — Texture morbida di una nuvola: tre blob ellittici sfumati, generata una volta
- * con la sola matematica (niente immagini da caricare, niente canvas 2D).
- */
-export function createCloudTexture(): THREE.Texture {
-  const SIZE = 64;
-  const data = new Uint8Array(SIZE * SIZE * 4);
-  const blobs = [
-    { x: 0.5, y: 0.55, rx: 0.42, ry: 0.22, a: 1 },
-    { x: 0.3, y: 0.5, rx: 0.2, ry: 0.14, a: 0.8 },
-    { x: 0.68, y: 0.5, rx: 0.22, ry: 0.15, a: 0.85 },
-  ];
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
-      let a = 0;
-      for (const b of blobs) {
-        const dx = (x + 0.5) / SIZE - b.x;
-        const dy = (y + 0.5) / SIZE - b.y;
-        const d = Math.sqrt((dx / b.rx) * (dx / b.rx) + (dy / b.ry) * (dy / b.ry));
-        a = Math.max(a, b.a * Math.max(0, 1 - d));
-      }
-      const k = (y * SIZE + x) * 4;
-      data[k] = 255;
-      data[k + 1] = 255;
-      data[k + 2] = 255;
-      data[k + 3] = Math.round(Math.min(1, a * a) * 255); // falloff morbido ai bordi
-    }
-  }
-  const texture = new THREE.DataTexture(data, SIZE, SIZE, THREE.RGBAFormat);
-  texture.needsUpdate = true;
-  return texture;
-}
-const sunDir = new THREE.Vector3();
-const sunSide = new THREE.Vector3();
-
-/**
- * v1.9.2 — Ampiezza dell'area coperta dalle ombre del sole: semi-lato della camera
- * ortografica dell'ombra. In orbita copre l'intero pianeta (le montagne si gettano
- * ombra addosso); in terza persona si restringe all'area locale, così le stesse
- * 2048x2048 pixel d'ombra si concentrano su pochi metri e restano nitide.
- */
-export function setSunShadowExtent(sun: THREE.DirectionalLight, half: number): void {
-  const sc = sun.shadow.camera as THREE.OrthographicCamera;
-  sc.left = -half;
-  sc.right = half;
-  sc.top = half;
-  sc.bottom = -half;
-  sc.updateProjectionMatrix();
-}
-
-/** v1.8.0 — In terza persona il sole sta sopra chi guarda, un po' di lato, così il suolo è sempre illuminato. */
-export function placeFollowSun(sun: THREE.DirectionalLight, cameraPosition: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3): void {
-  sunDir.copy(target).sub(cameraPosition);
-  if (sunDir.lengthSq() < 1e-12) sunDir.set(0, 0, -1);
-  sunDir.normalize();
-  sunSide.crossVectors(up, sunDir);
-  sun.position.copy(target).addScaledVector(up, 7).addScaledVector(sunDir, -2).addScaledVector(sunSide, 3);
-}
-
-/**
- * v1.7.0 — Terza persona. Stato della camera che segue un animale: cosa sta
- * seguendo, dove l'ha visto l'ultima volta, la sua direzione di marcia e la
- * posa (già smorzata) della camera.
- */
-export interface FollowState {
-  id: number | null;
-  /** L'ultimo RenderFrame in cui è stato cercato l'animale (si cerca una volta per frame). */
-  frame: RenderFrame | null;
-  x: number;
-  y: number;
-  size: number;
-  hasPosition: boolean;
-  heading: Heading | null;
-  hasPose: boolean;
-  position: THREE.Vector3;
-  target: THREE.Vector3;
-  up: THREE.Vector3;
-  yaw: number;
-  pitch: number;
-  dragging: boolean;
-  lastInteractAt: number;
-  /** Da quando (ms) l'animale non c'è più nei frame, o null. */
-  missingSince: number | null;
-  /** v1.10.8 — camera libera: punto della superficie verso cui il punto d'osservazione sta andando (coordinate griglia). */
-  goalX: number;
-  goalY: number;
-  hasGoal: boolean;
-  /** v1.10.9 — camera libera: velocità attuale del punto d'osservazione (unità del mondo al secondo), per accelerare e frenare dolcemente. */
-  freeSpeed: number;
-}
-
-export function createFollowState(): FollowState {
-  return {
-    id: null,
-    frame: null,
-    x: 0,
-    y: 0,
-    size: 1,
-    hasPosition: false,
-    heading: null,
-    hasPose: false,
-    position: new THREE.Vector3(),
-    target: new THREE.Vector3(),
-    up: new THREE.Vector3(0, 1, 0),
-    yaw: 0,
-    pitch: 0,
-    dragging: false,
-    lastInteractAt: 0,
-    missingSince: null,
-    goalX: 0,
-    goalY: 0,
-    hasGoal: false,
-    freeSpeed: 0,
-  };
-}
-
-/** Riporta lo stato come all'inizio (all'ingresso in terza persona). */
-export function resetFollowState(state: FollowState): void {
-  state.id = null;
-  state.frame = null;
-  state.hasPosition = false;
-  state.heading = null;
-  state.hasPose = false;
-  state.yaw = 0;
-  state.pitch = 0;
-  state.dragging = false;
-  state.missingSince = null;
-  state.hasGoal = false;
-  state.freeSpeed = 0;
-}
-
-/** Un trascinamento di (dx, dy) pixel gira la camera intorno all'animale. */
-export function applyFollowDrag(state: FollowState, dx: number, dy: number, nowMs: number): void {
-  state.yaw += dx * FOLLOW_YAW_PER_PX;
-  state.yaw = Math.atan2(Math.sin(state.yaw), Math.cos(state.yaw));
-  state.pitch = Math.min(FOLLOW_PITCH_MAX, Math.max(FOLLOW_PITCH_MIN, state.pitch + dy * FOLLOW_PITCH_PER_PX));
-  state.lastInteractAt = nowMs;
-}
-
-const fcNormal = new THREE.Vector3();
-const fcTangent = new THREE.Vector3();
-const fcDesired = new THREE.Vector3();
-const fcDesiredTarget = new THREE.Vector3();
-// v1.10.10 — temporanei dello scorrimento in vista libera (panFreeCamera).
-const panRight = new THREE.Vector3();
-const panWorld = new THREE.Vector3();
-
-/**
- * Posiziona la camera dietro e sopra l'animale `selectedId`, guardando
- * leggermente davanti a lui. Va chiamata a ogni frame di rendering mentre la
- * modalità è "terza persona". Restituisce l'id di un altro animale se quello
- * seguito è sparito (morto) da troppo tempo — il chiamante lo seleziona —,
- * altrimenti null. Finché l'animale manca la camera resta dove l'ha visto.
- */
-export function updateFollowCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local" | "creatureTrack">>,
-  frame: RenderFrame,
-  selectedId: number,
-  state: FollowState,
-  nowMs: number,
-  dtMs: number,
-): number | null {
-  const { planetWidth, planetHeight } = frame;
-
-  if (state.id !== selectedId) {
-    state.id = selectedId;
-    state.frame = null;
-    state.heading = null;
-    state.hasPosition = false;
-    state.missingSince = null;
-  }
-
-  // Si cerca l'animale una sola volta per frame della simulazione.
-  if (state.frame !== frame) {
-    state.frame = frame;
-    let index = -1;
-    for (let k = 0; k < frame.organismsId.length; k++) {
-      if (frame.organismsId[k] === selectedId) {
-        index = k;
-        break;
-      }
-    }
-    if (index >= 0) {
-      const x = frame.organismsX[index];
-      const y = frame.organismsY[index];
-      if (state.hasPosition) {
-        state.heading = nextHeading(state.heading, wrappedDelta(state.x, x, planetWidth), wrappedDelta(state.y, y, planetHeight), headingBlendForDt(dtMs));
-      }
-      state.x = x;
-      state.y = y;
-      state.size = frame.organismsSize[index];
-      state.hasPosition = true;
-      state.missingSince = null;
-    } else if (state.hasPosition && state.missingSince === null) {
-      state.missingSince = nowMs;
-    }
-  }
-
-  let replacement: number | null = null;
-  if (state.missingSince !== null && nowMs - state.missingSince > FOLLOW_LOST_TARGET_MS) {
-    replacement = nearestOrganismId(frame, state.x, state.y, selectedId);
-    state.missingSince = nowMs; // riprova solo dopo un altro intervallo, se non c'era nessuno
-  }
-
-  if (!state.hasPosition) return replacement;
-
-  // Dopo un po' senza tocchi la camera torna dietro l'animale.
-  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
-    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
-    state.yaw = easeAngleToZero(state.yaw, a);
-    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
-  }
-
-  // v1.10.2 — la camera guarda dove è girata la creatura (la sua rotazione visiva graduale), non una direzione propria
-  // più veloce: altrimenti la creatura sembrerebbe ruotare rispetto alla camera.
-  const visual = refs.creatureTrack?.get(selectedId)?.motion;
-  if (visual && visual.hasYaw) {
-    if (state.heading) {
-      state.heading.hx = Math.cos(visual.yaw);
-      state.heading.hy = Math.sin(visual.yaw);
-    } else {
-      state.heading = { hx: Math.cos(visual.yaw), hy: Math.sin(visual.yaw) };
-    }
-  }
-
-  const scale = creatureScale(state.size);
-  const restingR = restingRadius(refs, state.x, state.y, 0.02);
-  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
-  fcNormal.set(point.normalX, point.normalY, point.normalZ);
-  const ahead = projectToSphere(state.x + (state.heading?.hx ?? 0) * 0.5, state.y + (state.heading?.hy ?? -1) * 0.5, planetWidth, planetHeight, restingR);
-  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
-  if (fcTangent.lengthSq() < 1e-12) {
-    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-  }
-  fcTangent.normalize();
-
-  const pose = computeFollowPose({
-    point: [point.x, point.y, point.z],
-    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
-    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
-    scale,
-    yaw: state.yaw,
-    pitch: state.pitch,
-  });
-
-  // La camera non deve finire dentro una collina.
-  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
-  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(scale);
-  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
-
-  fcDesired.set(cam[0], cam[1], cam[2]);
-  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
-
-  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
-    state.position.copy(fcDesired);
-    state.target.copy(fcDesiredTarget);
-    state.up.copy(fcNormal);
-    state.hasPose = true;
-  } else {
-    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
-    state.position.lerp(fcDesired, a);
-    state.target.lerp(fcDesiredTarget, a);
-    state.up.lerp(fcNormal, a).normalize();
-  }
-
-  refs.camera.position.copy(state.position);
-  refs.camera.up.copy(state.up);
-  refs.camera.lookAt(state.target);
-  return replacement;
-}
-
-/**
- * v1.10.8 — Camera libera: terza persona slegata dagli esseri. Il punto d'osservazione è un punto
- * qualunque della superficie (non un animale): avanza da solo verso il punto toccato (state.hasGoal)
- * e la camera lo incornicia da dietro, con la stessa matematica di posa, smorzamento e collisione
- * col terreno della terza persona (computeFollowPose, clampCameraRadius). Trascinando si guarda
- * intorno come in "follow"; senza tocchi la camera torna dietro il punto d'osservazione.
- * Scrive anche state.x/y, così il terreno locale ad alto dettaglio segue il punto d'osservazione.
- */
-export function updateFreeCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
-  frame: RenderFrame,
-  state: FollowState,
-  nowMs: number,
-  dtMs: number,
-): void {
-  const { planetWidth, planetHeight } = frame;
-
-  // All'ingresso (o al cambio di mondo) il punto d'osservazione parte dal centro della mappa, guardando nord.
-  if (!state.hasPosition) {
-    state.x = planetWidth / 2;
-    state.y = planetHeight / 2;
-    state.hasPosition = true;
-    state.heading = { hx: 0, hy: -1 };
-    state.hasGoal = false;
-  }
-
-  // Avanza verso il punto toccato (se c'è), lungo la griglia con wrap.
-  // v1.10.9 — partenza e arrivo morbidi: la velocità sale con un'accelerazione limitata e scende
-  // secondo la frenata necessaria a fermarsi sul punto (v = √(2·a·d)), qualunque sia la distanza.
-  if (state.hasGoal) {
-    const dx = wrappedDelta(state.x, state.goalX, planetWidth);
-    const dy = wrappedDelta(state.y, state.goalY, planetHeight);
-    const distCells = Math.hypot(dx, dy);
-    const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
-    const remainingUnits = distCells * cellUnits;
-    const step = dtMs / 1000;
-    const brakeSpeed = Math.sqrt(2 * FREE_BRAKE_UNITS_PER_S2 * Math.max(0, remainingUnits));
-    const targetSpeed = Math.min(FREE_MOVE_UNITS_PER_SEC, brakeSpeed);
-    const diff = targetSpeed - state.freeSpeed;
-    const maxDelta = (diff > 0 ? FREE_ACCEL_UNITS_PER_S2 : FREE_BRAKE_UNITS_PER_S2) * step;
-    state.freeSpeed += Math.max(-maxDelta, Math.min(maxDelta, diff));
-    const stepUnits = state.freeSpeed * step;
-    if (remainingUnits <= stepUnits || remainingUnits < 1e-9) {
-      state.x = state.goalX;
-      state.y = state.goalY;
-      state.hasGoal = false;
-      state.freeSpeed = 0;
-    } else {
-      const k = stepUnits / cellUnits / distCells;
-      state.x += dx * k;
-      state.y += dy * k;
-      // mentre va, la camera guarda dove sta andando
-      state.heading = nextHeading(state.heading, dx * k, dy * k, headingBlendForDt(dtMs));
-    }
-  } else {
-    state.freeSpeed = 0;
-  }
-
-  // Dopo un po' senza tocchi la camera torna dietro il punto d'osservazione (come in follow).
-  if (!state.dragging && nowMs - state.lastInteractAt > FOLLOW_RECENTER_DELAY_MS && (state.yaw !== 0 || state.pitch !== 0)) {
-    const a = dampingAlpha(dtMs, FOLLOW_RECENTER_TIME_MS);
-    state.yaw = easeAngleToZero(state.yaw, a);
-    state.pitch = Math.abs(state.pitch * (1 - a)) < 1e-4 ? 0 : state.pitch * (1 - a);
-  }
-
-  const restingR = restingRadius(refs, state.x, state.y, 0.02);
-  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
-  fcNormal.set(point.normalX, point.normalY, point.normalZ);
-  const hx = state.heading?.hx ?? 0;
-  const hy = state.heading?.hy ?? -1;
-  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
-  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
-  if (fcTangent.lengthSq() < 1e-12) {
-    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-  }
-  fcTangent.normalize();
-
-  const pose = computeFollowPose({
-    point: [point.x, point.y, point.z],
-    normal: [fcNormal.x, fcNormal.y, fcNormal.z],
-    forward: [fcTangent.x, fcTangent.y, fcTangent.z],
-    scale: FREE_CAMERA_SCALE,
-    yaw: state.yaw,
-    pitch: state.pitch,
-  });
-
-  // La camera non deve finire dentro una collina (come in follow).
-  const grid = directionToGrid(pose.position, planetWidth, planetHeight);
-  const minRadius = restingRadius(refs, grid.x, grid.y, 0) + cameraClearance(FREE_CAMERA_SCALE);
-  const cam: Vec3 = clampCameraRadius(pose.position, minRadius);
-
-  fcDesired.set(cam[0], cam[1], cam[2]);
-  fcDesiredTarget.set(pose.target[0], pose.target[1], pose.target[2]);
-
-  if (!state.hasPose || state.position.distanceTo(fcDesired) > FOLLOW_SNAP_DISTANCE) {
-    state.position.copy(fcDesired);
-    state.target.copy(fcDesiredTarget);
-    state.up.copy(fcNormal);
-    state.hasPose = true;
-  } else {
-    const a = dampingAlpha(dtMs, FOLLOW_SMOOTHING_MS);
-    state.position.lerp(fcDesired, a);
-    state.target.lerp(fcDesiredTarget, a);
-    state.up.lerp(fcNormal, a).normalize();
-  }
-
-  refs.camera.position.copy(state.position);
-  refs.camera.up.copy(state.up);
-  refs.camera.lookAt(state.target);
-}
-
-/**
- * v1.10.10 — SCORRIMENTO in vista libera: un gesto di trascinamento (dx, dy in pixel) sposta il punto
- * d'osservazione SULLA SUPERFICIE nella direzione del gesto, come si scorre una mappa: dito/mouse su =
- * avanti, giù = indietro, destra/sinistra = laterale. La direzione è relativa a dove sta guardando la
- * camera (avanti = la direzione di marcia corrente, proiettata sul piano tangente); il nuovo punto si
- * ottiene proiettando lo spostamento sulla sfera (directionToGrid normalizza da sola). La direzione di
- * marcia segue il movimento, così la camera si gira dolcemente verso dove si sta andando.
- * Il tocco secco resta per "vacci da solo" (hasGoal + frenata dolce di updateFreeCamera).
- */
-export function panFreeCamera(
-  refs: Pick<SceneRefs, "camera" | "heightmap"> & Partial<Pick<SceneRefs, "local">>,
-  frame: RenderFrame,
-  state: FollowState,
-  dxPx: number,
-  dyPx: number,
-): void {
-  if (!state.hasPosition) return;
-  const { planetWidth, planetHeight } = frame;
-
-  const restingR = restingRadius(refs, state.x, state.y, 0.02);
-  const point = projectToSphere(state.x, state.y, planetWidth, planetHeight, restingR);
-  fcNormal.set(point.normalX, point.normalY, point.normalZ);
-  const hx = state.heading?.hx ?? 0;
-  const hy = state.heading?.hy ?? -1;
-  const ahead = projectToSphere(state.x + hx * 0.5, state.y + hy * 0.5, planetWidth, planetHeight, restingR);
-  fcTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-  fcTangent.addScaledVector(fcNormal, -fcTangent.dot(fcNormal));
-  if (fcTangent.lengthSq() < 1e-12) {
-    fcTangent.crossVectors(fcNormal, Math.abs(fcNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-  }
-  fcTangent.normalize();
-
-  // Avanti/indietro lungo la direzione di marcia, destra/sinistra lungo il suo perpendicolare.
-  // (cross(normal, forward) è il lato SINISTRO: per il destro si inverte il verso del prodotto.)
-  panRight.copy(fcTangent).cross(fcNormal);
-  const du = -dyPx * FREE_DRAG_UNITS_PER_PX; // dito/mouse su = avanti
-  const dv = dxPx * FREE_DRAG_UNITS_PER_PX; // destra = destra
-  panWorld.copy(point).addScaledVector(fcTangent, du).addScaledVector(panRight, dv);
-
-  const prevX = state.x;
-  const prevY = state.y;
-  const grid = directionToGrid([panWorld.x, panWorld.y, panWorld.z], planetWidth, planetHeight);
-  state.x = grid.x;
-  state.y = grid.y;
-  state.hasGoal = false;
-  state.freeSpeed = 0;
-  // La direzione di marcia segue il movimento: la camera si gira verso dove si sta andando.
-  state.heading = nextHeading(state.heading, wrappedDelta(prevX, state.x, planetWidth), wrappedDelta(prevY, state.y, planetHeight), 1);
-  state.lastInteractAt = performance.now();
-}
-
-/**
- * v1.5.0 — Creature 3D. Each drawn creature is placed on the (displaced)
- * surface, oriented with its feet on the ground and its nose toward the
- * direction it has been moving, and built from the parts of its genome-
- * derived anatomy (torso, head, eyes, tail, jaw, spikes). Everything
- * about its shape is a pure function of its traits (lib/creatureAnatomy.ts),
- * so an evolving species visibly changes body over generations.
- */
-export function updateCreatureInstances(
-  refs: SceneRefs,
-  frame: RenderFrame,
-  forceOrganismId: number | null = null,
-  /** v1.9.0 — se indicato (e c'è un animale obbligato), si disegnano solo le creature entro questo raggio da lui. */
-  cullRangeUnits: number | null = null,
-  /** v1.10.1/2 — millisecondi dall'aggiornamento precedente: rotazione, velocità e inclinazione visive dipendono dal tempo. */
-  dtMs = 100,
-  /** v1.10.5 — posizione della camera nel mondo 3D: la distanza decide il dettaglio dell'animazione (LOD). Senza, tutto è al massimo dettaglio. */
-  cameraPosition: THREE.Vector3 | null = null,
-): number {
-  const {
-    organismsX,
-    organismsY,
-    organismsSpecies,
-    organismsSize,
-    organismsSpeed,
-    organismsCarnivory,
-    organismsVision,
-    organismsEvasion,
-    organismsHuntingSkill,
-    organismsId,
-    organismsEnergyGain,
-    planetWidth,
-    planetHeight,
-  } = frame;
-
-  const populationAll = organismsX.length;
-
-  // v1.7.0 — un animale "obbligato" (quello seguito in terza persona) viene
-  // disegnato anche se il campionamento a passo fisso non lo includerebbe.
-  let forcedIndex = -1;
-  if (forceOrganismId !== null) {
-    for (let k = 0; k < populationAll; k++) {
-      if (organismsId[k] === forceOrganismId) {
-        forcedIndex = k;
-        break;
-      }
-    }
-  }
-
-  // v1.9.0 — in terza persona la foschia e la curvatura del pianeta nascondono tutto ciò che è lontano:
-  // si elaborano e si disegnano solo le creature vicine, e il campionamento si fa su quelle (più dettaglio vicino).
-  let candidates: Int32Array | null = null;
-  let population = populationAll;
-  if (cullRangeUnits !== null && cullRangeUnits > 0 && forcedIndex >= 0) {
-    candidates = ensureCandidateBuffer(populationAll);
-    population = collectNearbyOrganisms(candidates, organismsX, organismsY, populationAll, organismsX[forcedIndex], organismsY[forcedIndex], planetWidth, planetHeight, cullRangeUnits, PLANET_RADIUS);
-  }
-
-  const stride = computeRenderStride(population, refs.maxCreatures);
-  const generation = ++trackGeneration;
-  const halfWidth = planetWidth / 2;
-  const halfHeight = planetHeight / 2;
-  const cellUnits = (2 * Math.PI * PLANET_RADIUS) / Math.max(1, planetWidth);
-
-  let extraIndex = -1;
-  if (forcedIndex >= 0 && stride > 1) {
-    let position = forcedIndex;
-    if (candidates) {
-      position = -1;
-      for (let p = 0; p < population; p++) {
-        if (candidates[p] === forcedIndex) {
-          position = p;
-          break;
-        }
-      }
-    }
-    if (position >= 0 && position % stride !== 0) extraIndex = forcedIndex;
-  }
-
-  let writeIndex = 0;
-  for (let step = 0; writeIndex < refs.capacity; step++) {
-    const sampled = step * stride;
-    let i: number;
-    if (sampled >= population) {
-      if (extraIndex < 0) break;
-      i = extraIndex;
-      extraIndex = -1;
-    } else {
-      i = candidates ? candidates[sampled] : sampled;
-    }
-    const id = organismsId[i];
-    // v1.9.1 — x, y: dove sta la creatura nella simulazione (serve a orientarla e a farla camminare);
-    // drawX, drawY: dove la si disegna, che differisce solo se un tronco le sta in mezzo (gira intorno all'albero).
-    const x = organismsX[i];
-    const y = organismsY[i];
-    let drawX = x;
-    let drawY = y;
-    const trunks = refs.local?.trunks;
-    if (trunks && trunks.count > 0 && refs.local?.ground && groundContains(refs.local.ground, x, y)) {
-      pushOutOfTrunks(trunks, x, y, bodyRadiusUnits(organismsSize[i]), tmpDrawn);
-      drawX = tmpDrawn.x;
-      drawY = tmpDrawn.y;
-    }
-
-    const restingR = restingRadius(refs, drawX, drawY, 0.02);
-    const point = projectToSphereInto(tmpPoint, drawX, drawY, planetWidth, planetHeight, restingR);
-    tmpPosition.set(point.x, point.y, point.z);
-    tmpNormal.set(point.normalX, point.normalY, point.normalZ);
-
-    // Heading: face the way this creature has moved since the last frame
-    // (keeps its previous heading while it stands still; first sight of a
-    // creature faces north until it moves).
-    // v1.10.5 — la scala si calcola una volta per creatura (prima 5 volte) e le funzioni piccole del ciclo non
-    // ricevono più numeri decimali "uno per uno" quando basta scriverli sul posto: meno oggetti temporanei per frame.
-    const scaleI = creatureScale(organismsSize[i]);
-    let track = refs.creatureTrack.get(id);
-    if (track) {
-      let dxCells = x - track.x;
-      if (dxCells > halfWidth) dxCells -= planetWidth;
-      else if (dxCells < -halfWidth) dxCells += planetWidth;
-      let dyCells = y - track.y;
-      if (dyCells > halfHeight) dyCells -= planetHeight;
-      else if (dyCells < -halfHeight) dyCells += planetHeight;
-      // v1.10.2 — rotazione graduale e velocità/inclinazione visive (la posizione resta quella interpolata)
-      const travelledUnitsNow = Math.sqrt(dxCells * dxCells + dyCells * dyCells) * cellUnits;
-      stepVisualMotion(track.motion, dxCells, dyCells, travelledUnitsNow, dtMs, organismsSize[i], scaleI);
-      if (track.motion.hasYaw) {
-        track.hx = Math.cos(track.motion.yaw);
-        track.hy = Math.sin(track.motion.yaw);
-        track.hasHeading = true;
-      }
-      // v1.10.3 — la fase del passo avanza con la velocità visualizzata: la cadenza è proporzionale alla velocità e, da ferma, si ferma
-      track.phase = advancePhase(track.phase, track.motion.visSpeed, dtMs, scaleI);
-      // v1.10.4 — respiro, sguardo, mangia, riposa: dallo stato reale (velocità visualizzata, energia guadagnata)
-      stepLiving(track.living, dtMs, normalizedSpeed(track.motion.visSpeed, scaleI), organismsEnergyGain ? organismsEnergyGain[i] : 0);
-      track.x = x;
-      track.y = y;
-    } else {
-      track = { motion: createVisualMotion(), living: createLivingState(id), x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
-      refs.creatureTrack.set(id, track);
-    }
-    track.gen = generation;
-    const phase = track.phase;
-    const ahead = projectToSphereInto(tmpAhead, drawX + (track.hasHeading ? track.hx : 0) * 0.5, drawY + (track.hasHeading ? track.hy : -1) * 0.5, planetWidth, planetHeight, restingR);
-    tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
-    tmpTangent.addScaledVector(tmpNormal, -tmpTangent.dot(tmpNormal));
-    if (tmpTangent.lengthSq() < 1e-12) {
-      // Degenerate (e.g. exactly at a pole): any direction along the surface will do.
-      tmpTangent.crossVectors(tmpNormal, Math.abs(tmpNormal.y) < 0.9 ? UP : tmpRight.set(1, 0, 0));
-    }
-    tmpTangent.normalize();
-    tmpRight.crossVectors(tmpNormal, tmpTangent);
-    tmpBasis.makeBasis(tmpRight, tmpNormal, tmpTangent);
-    tmpQuaternion.setFromRotationMatrix(tmpBasis);
-    // v1.10.2 — il corpo si inclina in curva (attorno all'asse di marcia) e in accelerazione/frenata (attorno a quello trasversale)
-    if (track.motion.roll !== 0 || track.motion.pitch !== 0) {
-      tmpLeanQuat.setFromEuler(tmpLeanEuler.set(track.motion.pitch, 0, track.motion.roll, "XYZ"));
-      tmpQuaternion.multiply(tmpLeanQuat);
-    }
-
-    // v1.9.0 — l'anatomia dipende solo dai geni: si ricalcola solo se sono cambiati.
-    const gSpeed = organismsSpeed[i];
-    const gCarnivory = organismsCarnivory[i];
-    const gVision = organismsVision[i];
-    const gEvasion = organismsEvasion[i];
-    const gHunting = organismsHuntingSkill[i];
-    let anatomy = track.anatomy;
-    if (!anatomy || track.aSpeed !== gSpeed || track.aCarnivory !== gCarnivory || track.aVision !== gVision || track.aEvasion !== gEvasion || track.aHunting !== gHunting) {
-      anatomy = computeCreatureAnatomy({ speed: gSpeed, carnivory: gCarnivory, vision: gVision, evasion: gEvasion, huntingSkill: gHunting });
-      track.anatomy = anatomy;
-      track.aSpeed = gSpeed;
-      track.aCarnivory = gCarnivory;
-      track.aVision = gVision;
-      track.aEvasion = gEvasion;
-      track.aHunting = gHunting;
-    }
-
-    const baseScale = scaleI;
-    tmpScale.set(baseScale, baseScale, baseScale);
-    tmpCreatureMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
-
-    // Senza zampe (dettaglio 1) il torso è affondato di un quinto della sua altezza nel suolo, così una creatura non sembra
-    // mai fluttuare sul terreno irregolare. Con le zampe (v1.8.0) il corpo sta alla loro altezza, con i piedi sul suolo.
-    const hasLegs = refs.detail >= 2;
-    const lift = hasLegs ? anatomy.legLength * 0.97 + anatomy.bodyHalfHeight * 0.4 : anatomy.bodyHalfHeight * 0.8;
-
-    // v1.10.3 — posa del corpo in cammino: zampe, corpo, testa e coda (dallo stato visivo, vedi lib/bodyAnimation.ts)
-    // v1.10.5 — LOD: il dettaglio dell'animazione dipende dalla distanza dalla camera (in scale della creatura), con pesi continui
-    let detail = FULL_DETAIL;
-    if (cameraPosition) {
-      const cdx = tmpPosition.x - cameraPosition.x;
-      const cdy = tmpPosition.y - cameraPosition.y;
-      const cdz = tmpPosition.z - cameraPosition.z;
-      lodWeights(Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz) / baseScale, tmpLodWeights);
-      detail = lodDetail(tmpLodWeights, tmpLodDetail);
-    }
-    computeBodyPose(tmpPose, phase, track.motion, baseScale, anatomy, detail);
-    applyLivingPose(tmpPose, track.living, detail);
-    // La testa (con occhi, mandibola e orecchie) ruota attorno al collo e segue il corpo; se non c'è movimento si usa la matrice della creatura.
-    let headParent = tmpCreatureMatrix;
-    if (tmpPose.headPitch !== 0 || tmpPose.headYaw !== 0 || tmpPose.bobY !== 0 || tmpPose.swayX !== 0 || tmpPose.surgeZ !== 0) {
-      const neckY = lift + anatomy.headY * 0.5;
-      const neckZ = anatomy.bodyHalfLength * 0.85;
-      tmpHeadQuat.setFromEuler(tmpPoseEuler.set(tmpPose.headPitch, tmpPose.headYaw, 0, "YXZ"));
-      tmpHeadLocal.compose(tmpPoseVec.set(tmpPose.swayX, neckY + tmpPose.bobY, neckZ + tmpPose.surgeZ), tmpHeadQuat, ONE_VEC);
-      tmpHeadLocal.multiply(tmpNeckBack.makeTranslation(0, -neckY, -neckZ));
-      tmpHeadParent.multiplyMatrices(tmpCreatureMatrix, tmpHeadLocal);
-      headParent = tmpHeadParent;
-    }
-
-    { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY; tmpLocalPos.z = tmpPose.surgeZ; tmpLocalScale.x = anatomy.bodyHalfWidth * (1 + tmpPose.breath); tmpLocalScale.y = anatomy.bodyHalfHeight * (1 + tmpPose.breath); tmpLocalScale.z = anatomy.bodyHalfLength * (1 + tmpPose.breath * 0.3); commitPart(refs.bodyMesh, writeIndex, tmpCreatureMatrix, Q_IDENTITY); }
-    { tmpLocalPos.x = 0; tmpLocalPos.y = lift + anatomy.headY; tmpLocalPos.z = anatomy.headZ; tmpLocalScale.x = anatomy.headRadius; tmpLocalScale.y = anatomy.headRadius; tmpLocalScale.z = anatomy.headRadius; commitPart(refs.headMesh, writeIndex, headParent, Q_IDENTITY); }
-    // v1.6.0 — lighter profiles skip the finer parts entirely: eyes, tail
-    // and jaw from detail 2, dorsal spikes only at detail 3.
-    if (refs.detail >= 2) {
-      { tmpLocalPos.x = -anatomy.eyeX; tmpLocalPos.y = lift + anatomy.eyeY; tmpLocalPos.z = anatomy.eyeZ; tmpLocalScale.x = anatomy.eyeRadius; tmpLocalScale.y = anatomy.eyeRadius; tmpLocalScale.z = anatomy.eyeRadius; commitPart(refs.eyeMesh, writeIndex * 2, headParent, Q_IDENTITY); }
-      { tmpLocalPos.x = anatomy.eyeX; tmpLocalPos.y = lift + anatomy.eyeY; tmpLocalPos.z = anatomy.eyeZ; tmpLocalScale.x = anatomy.eyeRadius; tmpLocalScale.y = anatomy.eyeRadius; tmpLocalScale.z = anatomy.eyeRadius; commitPart(refs.eyeMesh, writeIndex * 2 + 1, headParent, Q_IDENTITY); }
-      // la coda oscilla col passo e fa da contrappeso in curva (la rotazione si compone con quella che la fa puntare indietro)
-      tmpTailQuat.setFromEuler(tmpPoseEuler.set(tmpPose.tailPitch, tmpPose.tailYaw, 0, "YXZ")).multiply(Q_TIP_BACK);
-      { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY; tmpLocalPos.z = anatomy.tailZ + tmpPose.surgeZ; tmpLocalScale.x = anatomy.tailRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.tailLength; tmpLocalScale.z = anatomy.tailRadius / CONE_BASE_RADIUS; commitPart(refs.tailMesh, writeIndex, tmpCreatureMatrix, tmpTailQuat); }
-      if (anatomy.jawVisible) {
-        { tmpLocalPos.x = 0; tmpLocalPos.y = lift + anatomy.jawY; tmpLocalPos.z = anatomy.jawZ; tmpLocalScale.x = anatomy.jawRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.jawLength; tmpLocalScale.z = anatomy.jawRadius / CONE_BASE_RADIUS; commitPart(refs.jawMesh, writeIndex, headParent, Q_TIP_FORWARD); }
-      } else {
-        refs.jawMesh.setMatrixAt(writeIndex, ZERO_MATRIX);
-      }
-    }
-
-    if (hasLegs) {
-      // quattro zampe che oscillano in diagonale (trotto) mentre la creatura si muove
-      for (let n = 0; n < LEGS_PER_CREATURE; n++) {
-        const side = n % 2 === 0 ? -1 : 1;
-        const front = n < 2;
-        // v1.10.3 — oscillazione dalla posa: andatura (passo, trotto, galoppo) e ampiezza che va a zero da ferma
-        tmpLegQuat.setFromAxisAngle(AXIS_X, tmpPose.legSwing[n]);
-        { tmpLocalPos.x = side * anatomy.legX; tmpLocalPos.y = anatomy.legLength * 0.97; tmpLocalPos.z = front ? anatomy.legFrontZ : anatomy.legBackZ; tmpLocalScale.x = anatomy.legRadius; tmpLocalScale.y = anatomy.legLength; tmpLocalScale.z = anatomy.legRadius; commitPart(refs.legMesh, writeIndex * LEGS_PER_CREATURE + n, tmpCreatureMatrix, tmpLegQuat); }
-      }
-      // ombra morbida sul suolo
-      { tmpLocalPos.x = 0; tmpLocalPos.y = 0.05; tmpLocalPos.z = 0; tmpLocalScale.x = anatomy.bodyHalfWidth * 1.5; tmpLocalScale.y = 1; tmpLocalScale.z = anatomy.bodyHalfLength * 1.4; commitPart(refs.shadowMesh, writeIndex, tmpCreatureMatrix, Q_IDENTITY); }
-    }
-    if (refs.detail >= 3) {
-      // orecchie per gli erbivori, più grandi con la vista migliore, inclinate verso l'esterno
-      for (let n = 0; n < 2; n++) {
-        const slot = writeIndex * 2 + n;
-        if (anatomy.earVisible) {
-          const side = n === 0 ? -1 : 1;
-          tmpLegQuat.setFromAxisAngle(AXIS_Z, -side * 0.35);
-          { tmpLocalPos.x = side * anatomy.earX; tmpLocalPos.y = lift + anatomy.earY; tmpLocalPos.z = anatomy.earZ; tmpLocalScale.x = anatomy.earRadius / CONE_BASE_RADIUS; tmpLocalScale.y = anatomy.earHeight; tmpLocalScale.z = anatomy.earRadius / CONE_BASE_RADIUS; commitPart(refs.earMesh, slot, headParent, tmpLegQuat); }
-        } else {
-          refs.earMesh.setMatrixAt(slot, ZERO_MATRIX);
-        }
-      }
-    }
-
-    // Species color, warmed toward red the more predatory the creature is.
-    tmpColor.setHSL(speciesHue(organismsSpecies[i]) / 360, 0.85, 0.62);
-    if (anatomy.aggression > AGGRESSION_VISIBLE_THRESHOLD) {
-      tmpColor.lerp(AGGRO_TINT, anatomy.aggression * 0.35);
-    }
-    refs.bodyMesh.setColorAt(writeIndex, tmpColor);
-    refs.headMesh.setColorAt(writeIndex, tmpColor);
-    if (refs.detail >= 2) {
-      tmpColor2.copy(tmpColor).multiplyScalar(0.82);
-      refs.tailMesh.setColorAt(writeIndex, tmpColor2);
-      // zampe più scure del corpo
-      tmpColor2.copy(tmpColor).multiplyScalar(0.68);
-      for (let n = 0; n < LEGS_PER_CREATURE; n++) refs.legMesh.setColorAt(writeIndex * LEGS_PER_CREATURE + n, tmpColor2);
-    }
-    if (refs.detail >= 3) {
-      tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.18);
-      refs.earMesh.setColorAt(writeIndex * 2, tmpColor2);
-      refs.earMesh.setColorAt(writeIndex * 2 + 1, tmpColor2);
-    }
-    tmpColor2.copy(tmpColor).lerp(SPIKE_TINT, 0.3);
-
-    for (let k = 0; refs.detail >= 3 && k < MAX_SPIKES; k++) {
-      const slot = writeIndex * MAX_SPIKES + k;
-      const spike = anatomy.spikes[k];
-      if (spike) {
-        { tmpLocalPos.x = tmpPose.swayX; tmpLocalPos.y = lift + tmpPose.bobY + anatomy.bodyHalfHeight * 0.95 + spike.height * 0.45; tmpLocalPos.z = spike.z + tmpPose.surgeZ; tmpLocalScale.x = spike.radius / CONE_BASE_RADIUS; tmpLocalScale.y = spike.height; tmpLocalScale.z = spike.radius / CONE_BASE_RADIUS; commitPart(refs.spikeMesh, slot, tmpCreatureMatrix, Q_IDENTITY); }
-        refs.spikeMesh.setColorAt(slot, tmpColor2);
-      } else {
-        refs.spikeMesh.setMatrixAt(slot, ZERO_MATRIX);
-      }
-    }
-
-    refs.instanceOrganismId[writeIndex] = id;
-    writeIndex++;
-  }
-  // v1.9.0 — chi non è stato disegnato in questo frame esce dalla traccia (come prima), senza ricostruire la mappa.
-  for (const [trackId, t] of refs.creatureTrack) {
-    if (t.gen !== generation) refs.creatureTrack.delete(trackId);
-  }
-
-  refs.bodyMesh.count = writeIndex;
-  refs.headMesh.count = writeIndex;
-  refs.eyeMesh.count = refs.detail >= 2 ? writeIndex * 2 : 0;
-  refs.tailMesh.count = refs.detail >= 2 ? writeIndex : 0;
-  refs.jawMesh.count = refs.detail >= 2 ? writeIndex : 0;
-  refs.spikeMesh.count = refs.detail >= 3 ? writeIndex * MAX_SPIKES : 0;
-  refs.legMesh.count = refs.detail >= 2 ? writeIndex * LEGS_PER_CREATURE : 0;
-  refs.earMesh.count = refs.detail >= 3 ? writeIndex * 2 : 0;
-  refs.shadowMesh.count = refs.detail >= 2 ? writeIndex : 0;
-
-  for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh]) {
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }
-  // v1.10.5 (consolidamento) — quante creature sono state disegnate: chi chiama sa se c'è una posa viva da far proseguire (pausa).
-  return writeIndex;
-}
-
-/**
- * Positions (or hides) the selection ring for the currently selected
- * organism, if any. Searches the full (unsampled) organismsId array rather
- * than relying on the LOD-strided instance loop above, since the selected
- * organism might not have been included in this frame's rendered subset.
- */
-function updateSelectionRing(refs: SceneRefs, frame: RenderFrame, selectedId: number | null): void {
-  if (selectedId === null) {
-    refs.selectionRing.visible = false;
-    return;
-  }
-
-  const { organismsId, organismsX, organismsY, organismsSize, planetWidth, planetHeight } = frame;
-  let index = -1;
-  for (let i = 0; i < organismsId.length; i++) {
-    if (organismsId[i] === selectedId) {
-      index = i;
-      break;
-    }
-  }
-
-  if (index === -1) {
-    refs.selectionRing.visible = false;
-    return;
-  }
-
-  const point = projectToSphere(organismsX[index], organismsY[index], planetWidth, planetHeight, restingRadius(refs, organismsX[index], organismsY[index], 0.05));
-  const normal = new THREE.Vector3(point.normalX, point.normalY, point.normalZ);
-  refs.selectionRing.position.set(point.x, point.y, point.z);
-  refs.selectionRing.quaternion.setFromUnitVectors(UP, normal);
-  refs.selectionRing.rotateX(Math.PI / 2); // torus is authored flat on XY; align its face with the surface normal
-
-  const baseScale = creatureScale(organismsSize[index]);
-  const ringScale = baseScale * 2.2;
-  refs.selectionRing.scale.set(ringScale, ringScale, ringScale);
-  refs.selectionRing.visible = true;
-}

@@ -97,12 +97,34 @@ export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis):
   const organismsHuntingSkill = new Float32Array(n);
   const organismsId = new Uint32Array(n);
   const organismsEnergy = new Float32Array(n); // v1.10.4 — sola lettura, per l'animazione
+  // G3 — copie dei soli geni MOR registrati. Nessuna interpretazione biologica qui:
+  // derivePhenotype valuta i valori e dichiara missing/invalid nel descriptor G2.
+  const organismsBodyStature = new Float32Array(n);
+  const organismsFurDensity = new Float32Array(n);
+  const organismsDermalArmor = new Float32Array(n);
+  const organismsMorphologyPresence = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     const o = organisms[i];
     organismsX[i] = o.position.x;
     organismsY[i] = o.position.y;
     organismsSpecies[i] = o.speciesId % 65535;
     organismsSize[i] = o.genome.size;
+    const ext = o.genome.ext;
+    const stature = ext?.bodyStature;
+    const fur = ext?.furDensity;
+    const armor = ext?.dermalArmor;
+    if (stature !== undefined && Number.isFinite(stature)) {
+      organismsBodyStature[i] = stature;
+      organismsMorphologyPresence[i] |= 1;
+    }
+    if (fur !== undefined && Number.isFinite(fur)) {
+      organismsFurDensity[i] = fur;
+      organismsMorphologyPresence[i] |= 2;
+    }
+    if (armor !== undefined && Number.isFinite(armor)) {
+      organismsDermalArmor[i] = armor;
+      organismsMorphologyPresence[i] |= 4;
+    }
     organismsSpeed[i] = o.genome.speed;
     organismsCarnivory[i] = o.genome.carnivory;
     organismsVision[i] = o.genome.vision;
@@ -125,6 +147,10 @@ export function buildRenderFrame(world: World, cachedSpecies?: SpeciesAnalysis):
     organismsY,
     organismsSpecies,
     organismsSize,
+    organismsBodyStature,
+    organismsFurDensity,
+    organismsDermalArmor,
+    organismsMorphologyPresence,
     organismsSpeed,
     organismsCarnivory,
     organismsVision,
