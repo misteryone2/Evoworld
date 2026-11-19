@@ -207,7 +207,8 @@ Nessuna failure appartiene al renderer G3 dopo l’aggiornamento dell’aspettat
 ## H. Commit e stato Git
 
 - Commit di partenza: `d89885c50b46558feff1bb9985b02c26acc2ad81`.
-- Commit di questa sessione: `ce861041e1f05d47e422919cd1724196d1b3be97` — `fix(graphics): harden G3 anatomy cache, optimize render pools, fix StatsPanel`.
+- Commit implementativo di questa sessione: `873e0b4880f84452a053e06c5a39a26bc152f9ef` — `fix(graphics): harden G3 anatomy cache, optimize render pools, fix StatsPanel`.
+- Commit documentale successivo: aggiunge a questo report il riferimento al commit implementativo; non modifica codice.
 - Nessun merge, PR, release, checkout di `main` o cancellazione di branch.
 - Nessuna modifica a `simulation/**` in questa sessione: biologia, evoluzione, predazione, riproduzione, mortalità, genetica e salvataggi invariati. Unica eccezione storica G3: le copie MOR in `renderFrame.ts`, già committate prima di questa sessione.
 
