@@ -3,6 +3,7 @@ import { TICKS_PER_YEAR, DEFAULT_CHUNK_SIZE } from "../core/constants";
 import { hashNoise, computeElevationAt, computeWaterAt, classifyBaseAt, computeVegetationPotential } from "./terrainNoise";
 import { annualMeanTemperature, seasonalTemperatureOffset } from "./seasons";
 import { hydrologyAt, computeChunkHydrology, computeWaterAvailability, type HydrologyResult } from "./hydrology";
+import { NULL_EVENT_SINK, type EcologicalEventSink } from "../ecology/observability";
 
 /** Wraps a coordinate into [0, max). */
 function wrapCoord(value: number, max: number): number {
@@ -330,7 +331,14 @@ export class Planet {
    * active chunk behaves exactly as before — this path only ever runs
    * with elapsed <= 1, see update()).
    */
-  private stepCellOneTick(cell: Cell, x: number, y: number, tick: number, growthFactor: number): void {
+  private stepCellOneTick(
+    cell: Cell,
+    x: number,
+    y: number,
+    tick: number,
+    growthFactor: number,
+    sink: EcologicalEventSink = NULL_EVENT_SINK,
+  ): void {
     if (cell.terrain === "ocean") return;
 
     // v1.3.0 — Stagioni: current temperature = annual mean + this tick's
@@ -354,9 +362,34 @@ export class Planet {
       // regrowth model" constraint (§10).
       const waterAvailability = computeWaterAvailability(cell.water, cell.riverFlow ?? 0, cell.isLake ?? false);
       const potential = computeVegetationPotential(this.config.seed, x, y, cell.temperature, waterAvailability);
+      // E2.3 — stock prima della rigenerazione, osservato senza toccare la formula.
+      const stockBefore = cell.vegetation;
       const regrowth = 0.005 * growthFactor * (potential - cell.vegetation) * (waterAvailability > 0.1 ? 1 : 0.2);
       cell.vegetation = Math.max(0, Math.min(1, cell.vegetation + regrowth));
       cell.terrain = Planet.classifyBiome(meanTemperature, waterAvailability, cell.vegetation);
+      if (cell.vegetation !== stockBefore) {
+        sink.record({
+          type: "RESOURCE_REGENERATION",
+          tick,
+          entityIds: [],
+          source: "simulation/planet/planet.ts:stepCellOneTick",
+          correlationId: `regen:${tick}:${x},${y}:active`,
+          payload: {
+            cellX: x,
+            cellY: y,
+            mode: "active",
+            stockBefore,
+            stockAfter: cell.vegetation,
+            regrowth: cell.vegetation - stockBefore,
+            nominalRegrowth: regrowth,
+            potential,
+            growthFactor,
+            waterAvailability,
+            temperature: cell.temperature,
+            terrain: cell.terrain,
+          },
+        });
+      }
     }
   }
 
@@ -379,7 +412,14 @@ export class Planet {
    *    of "what this cell's climate looks like right now" than replaying
    *    a long chain of ±0.0002 nudges would be.
    */
-  private catchUpCell(cell: Cell, x: number, y: number, elapsedTicks: number, tick: number): void {
+  private catchUpCell(
+    cell: Cell,
+    x: number,
+    y: number,
+    elapsedTicks: number,
+    tick: number,
+    sink: EcologicalEventSink = NULL_EVENT_SINK,
+  ): void {
     if (cell.terrain === "ocean") return;
 
     // v1.3.0 — same stateless temperature as stepCellOneTick, so a chunk
@@ -401,8 +441,34 @@ export class Planet {
       const growthFactor = Planet.averageGrowthFactor(tick - elapsedTicks, tick);
       const waterFactor = waterAvailability > 0.1 ? 1 : 0.2;
       const rate = 0.005 * growthFactor * waterFactor;
+      // E2.3 — stock prima del catch-up approximato; nessuna modifica alla formula.
+      const stockBefore = cell.vegetation;
       cell.vegetation = Math.max(0, Math.min(1, potential - (potential - cell.vegetation) * Math.pow(1 - rate, elapsedTicks)));
       cell.terrain = Planet.classifyBiome(meanTemperature, waterAvailability, cell.vegetation);
+      if (cell.vegetation !== stockBefore) {
+        sink.record({
+          type: "RESOURCE_REGENERATION",
+          tick,
+          entityIds: [],
+          source: "simulation/planet/planet.ts:catchUpCell",
+          correlationId: `regen:${tick}:${x},${y}:catchup`,
+          payload: {
+            cellX: x,
+            cellY: y,
+            mode: "catchup",
+            elapsedTicks,
+            stockBefore,
+            stockAfter: cell.vegetation,
+            regrowth: cell.vegetation - stockBefore,
+            rate,
+            potential,
+            growthFactor,
+            waterAvailability,
+            temperature: cell.temperature,
+            terrain: cell.terrain,
+          },
+        });
+      }
     }
   }
 
@@ -432,7 +498,7 @@ export class Planet {
    * gets catchUpCell's approximate fast-forward instead of a cell-by-cell
    * replay of every skipped tick.
    */
-  update(tick: number, activeChunkKeys: Iterable<string>): void {
+  update(tick: number, activeChunkKeys: Iterable<string>, sink: EcologicalEventSink = NULL_EVENT_SINK): void {
     const growthFactor = growthFactorForTick(tick);
     const cs = this.chunkSize;
 
@@ -466,9 +532,9 @@ export class Planet {
           if (wx >= this.config.width || wy >= this.config.height) continue;
           const cell = chunk[ly * cs + lx];
           if (elapsed <= 1) {
-            this.stepCellOneTick(cell, wx, wy, tick, growthFactor);
+            this.stepCellOneTick(cell, wx, wy, tick, growthFactor, sink);
           } else {
-            this.catchUpCell(cell, wx, wy, elapsed, tick);
+            this.catchUpCell(cell, wx, wy, elapsed, tick, sink);
           }
         }
       }
