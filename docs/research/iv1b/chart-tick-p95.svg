@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
+  <rect width="720" height="360" fill="#ffffff"/>
+  <text x="360" y="42" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">P95 tempo per tick</text>
+    <rect x="70" y="14" width="12" height="12" fill="#64748b"/><text x="88" y="24" font-size="11" fill="#334155">baseline</text>
+    <rect x="220" y="14" width="12" height="12" fill="#2563eb"/><text x="238" y="24" font-size="11" fill="#334155">rendering</text>
+    <rect x="370" y="14" width="12" height="12" fill="#dc2626"/><text x="388" y="24" font-size="11" fill="#334155">observability</text>
+    <rect x="520" y="14" width="12" height="12" fill="#7c3aed"/><text x="538" y="24" font-size="11" fill="#334155">integrated</text>
+    <line x1="70" y1="308" x2="700" y2="308" stroke="#e2e8f0"/><text x="62" y="312" text-anchor="end" font-size="10" fill="#64748b">0.00</text>
+    <line x1="70" y1="242.5" x2="700" y2="242.5" stroke="#e2e8f0"/><text x="62" y="246.5" text-anchor="end" font-size="10" fill="#64748b">2083.05</text>
+    <line x1="70" y1="177" x2="700" y2="177" stroke="#e2e8f0"/><text x="62" y="181" text-anchor="end" font-size="10" fill="#64748b">4166.11</text>
+    <line x1="70" y1="111.5" x2="700" y2="111.5" stroke="#e2e8f0"/><text x="62" y="115.5" text-anchor="end" font-size="10" fill="#64748b">6249.16</text>
+    <line x1="70" y1="46" x2="700" y2="46" stroke="#e2e8f0"/><text x="62" y="50" text-anchor="end" font-size="10" fill="#64748b">8332.21</text>
+    <polyline fill="none" stroke="#64748b" stroke-width="2.4" points="70,307.8815558908552 196,307.51463636627216 322,305.37710192910833 448,299.2223286901833 574,280.4784132078529 700,118.97811894558842"/>
+    <polyline fill="none" stroke="#2563eb" stroke-width="2.4" points="70,307.88143954722034 196,307.5764054031215 322,305.4366415703597 448,299.59784192163403 574,276.7126527450787 700,111.92616648298218"/>
+    <polyline fill="none" stroke="#dc2626" stroke-width="2.4" points="70,307.52606005344757 196,306.5705549356248 322,303.48561855758584 448,293.6379505599646 574,241.03521049401212 700,74.07142857142858"/>
+    <polyline fill="none" stroke="#7c3aed" stroke-width="2.4" points="70,307.3881079467151 196,306.54680825642066 322,302.56391912674974 448,294.6636297561506 574,250.56349634737444 700,137.8766205300154"/>
+    <text x="70" y="326" text-anchor="middle" font-size="10" fill="#64748b">100</text>
+    <text x="196" y="326" text-anchor="middle" font-size="10" fill="#64748b">500</text>
+    <text x="322" y="326" text-anchor="middle" font-size="10" fill="#64748b">1500</text>
+    <text x="448" y="326" text-anchor="middle" font-size="10" fill="#64748b">3000</text>
+    <text x="574" y="326" text-anchor="middle" font-size="10" fill="#64748b">5000</text>
+    <text x="700" y="326" text-anchor="middle" font-size="10" fill="#64748b">10000</text>
+  <text x="360" y="352" text-anchor="middle" font-size="11" fill="#334155">Popolazione iniziale</text>
+  <text x="16" y="180" transform="rotate(-90 16 180)" text-anchor="middle" font-size="11" fill="#334155">ms</text>
+</svg>

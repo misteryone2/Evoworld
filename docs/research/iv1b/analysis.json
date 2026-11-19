@@ -1,0 +1,469 @@
+{
+  "schema": "evoworld.iv1b.analysis.v1",
+  "source": "dataset.raw.json",
+  "seeds": [
+    7,
+    11,
+    31,
+    47,
+    59
+  ],
+  "comparisons": [
+    {
+      "population": 100,
+      "tickMs": {
+        "baseline": 2.1528,
+        "rendering": 2.1123,
+        "observability": 11.1348,
+        "integrated": 11.591
+      },
+      "wallMs": {
+        "baseline": 58.672000000000004,
+        "rendering": 57.112,
+        "observability": 239.61599999999999,
+        "integrated": 248.272
+      },
+      "renderMs": {
+        "baseline": 0.4857,
+        "rendering": 0.4187,
+        "integrated": 0.3653
+      },
+      "overhead": {
+        "renderingVsBaseline": 0.9811872909698995,
+        "observabilityVsBaseline": 5.172240802675585,
+        "integratedVsBaseline": 5.384150873281308,
+        "integratedWallVsBaseline": 4.2315244068721025
+      },
+      "adaptiveRenderSpeedup": 1.160019106759016,
+      "adaptiveRenderDeltaMs": 0.067,
+      "interaction": {
+        "additiveExcessMs": 0.4966999999999988,
+        "additiveExpectedMs": 11.0943,
+        "multiplicativeRatio": 1.0609296106393542,
+        "multiplicativeExpectedMs": 10.925324247491638
+      },
+      "adaptiveCounters": {
+        "updated": 37.2,
+        "skipped": 33.6,
+        "culled": 3.8,
+        "near": 8.4,
+        "far": 66.2,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 846547,
+        "lost": 0,
+        "perSecond": 709099.9,
+        "flushMs": 13.08,
+        "bufferKB": 2686.5,
+        "integratedRecorded": 846547,
+        "integratedLost": 0,
+        "integratedPerSecond": 686851.8
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": -2243.98,
+          "rendering": 2953.84,
+          "observability": 22528.2,
+          "integrated": 9138.02
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": 64.274,
+          "rendering": -31.128,
+          "observability": -1994.638,
+          "integrated": -2941.18
+        }
+      }
+    },
+    {
+      "population": 500,
+      "tickMs": {
+        "baseline": 9.8911,
+        "rendering": 9.8936,
+        "observability": 34.4455,
+        "integrated": 34.4488
+      },
+      "wallMs": {
+        "baseline": 252.63400000000001,
+        "rendering": 252.12199999999999,
+        "observability": 749.7839999999999,
+        "integrated": 751.962
+      },
+      "renderMs": {
+        "baseline": 1.6108,
+        "rendering": 1.6222,
+        "integrated": 1.619
+      },
+      "overhead": {
+        "renderingVsBaseline": 1.0002527524744467,
+        "observabilityVsBaseline": 3.4824741434218645,
+        "integratedVsBaseline": 3.4828077766881336,
+        "integratedWallVsBaseline": 2.9764877253259656
+      },
+      "adaptiveRenderSpeedup": 0.9929725064726913,
+      "adaptiveRenderDeltaMs": -0.011400000000000077,
+      "interaction": {
+        "additiveExcessMs": 0.0007999999999981355,
+        "additiveExpectedMs": 34.448,
+        "multiplicativeRatio": 0.9998430907004657,
+        "multiplicativeExpectedMs": 34.45420618535855
+      },
+      "adaptiveCounters": {
+        "updated": 253.4,
+        "skipped": 31.2,
+        "culled": 16.8,
+        "near": 24.4,
+        "far": 277,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 2135357,
+        "lost": 0,
+        "perSecond": 571081.14,
+        "flushMs": 39.2212,
+        "bufferKB": 2639.1,
+        "integratedRecorded": 2135357,
+        "integratedLost": 0,
+        "integratedPerSecond": 568268.62
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": 7454.98,
+          "rendering": 11489.2,
+          "observability": 42783.86,
+          "integrated": -2635.92
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": -47.834,
+          "rendering": 166.052,
+          "observability": 990.41,
+          "integrated": -1073.996
+        }
+      }
+    },
+    {
+      "population": 1500,
+      "tickMs": {
+        "baseline": 53.777,
+        "rendering": 53.2255,
+        "observability": 114.8768,
+        "integrated": 120.4927
+      },
+      "wallMs": {
+        "baseline": 1246.5440000000003,
+        "rendering": 1225.944,
+        "observability": 2448.99,
+        "integrated": 2565.55
+      },
+      "renderMs": {
+        "baseline": 4.891,
+        "rendering": 4.5845,
+        "integrated": 4.417
+      },
+      "overhead": {
+        "renderingVsBaseline": 0.9897446863900924,
+        "observabilityVsBaseline": 2.1361697379920783,
+        "integratedVsBaseline": 2.240599140896666,
+        "integratedWallVsBaseline": 2.058130318705156
+      },
+      "adaptiveRenderSpeedup": 1.066855709455775,
+      "adaptiveRenderDeltaMs": 0.3064999999999998,
+      "interaction": {
+        "additiveExcessMs": 6.1673999999999864,
+        "additiveExpectedMs": 114.32530000000001,
+        "multiplicativeRatio": 1.059754398842904,
+        "multiplicativeExpectedMs": 113.69870238949736
+      },
+      "adaptiveCounters": {
+        "updated": 705.6,
+        "skipped": 18.2,
+        "culled": 54,
+        "near": 55.6,
+        "far": 722.2,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 5982461,
+        "lost": 0,
+        "perSecond": 488919.6,
+        "flushMs": 95.383,
+        "bufferKB": 2727.4,
+        "integratedRecorded": 5982461,
+        "integratedLost": 0,
+        "integratedPerSecond": 466499.66
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": -67357.78,
+          "rendering": 31010.84,
+          "observability": -14168.54,
+          "integrated": 50118.32
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": -4457.856,
+          "rendering": 610.694,
+          "observability": 355.99,
+          "integrated": 683.416
+        }
+      }
+    },
+    {
+      "population": 3000,
+      "tickMs": {
+        "baseline": 168.8442,
+        "rendering": 164.6098,
+        "observability": 316.7001,
+        "integrated": 315.3839
+      },
+      "wallMs": {
+        "baseline": 3721.2300000000005,
+        "rendering": 3592.6659999999997,
+        "observability": 6648.444,
+        "integrated": 6615.162000000001
+      },
+      "renderMs": {
+        "baseline": 9.443,
+        "rendering": 8.1559,
+        "integrated": 8.0927
+      },
+      "overhead": {
+        "renderingVsBaseline": 0.9749212587699193,
+        "observabilityVsBaseline": 1.875694279104642,
+        "integratedVsBaseline": 1.8678989269397468,
+        "integratedWallVsBaseline": 1.777681573028273
+      },
+      "adaptiveRenderSpeedup": 1.1578121359997056,
+      "adaptiveRenderDeltaMs": 1.2870999999999988,
+      "interaction": {
+        "additiveExcessMs": 2.918199999999956,
+        "additiveExpectedMs": 312.4657,
+        "multiplicativeRatio": 1.021460973153956,
+        "multiplicativeExpectedMs": 308.75766014455934
+      },
+      "adaptiveCounters": {
+        "updated": 1257.2,
+        "skipped": 41.4,
+        "culled": 88.4,
+        "near": 91.2,
+        "far": 1295.8,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 11718977,
+        "lost": 0,
+        "perSecond": 356513.04,
+        "flushMs": 244.1376,
+        "bufferKB": 2706.1,
+        "integratedRecorded": 11718977,
+        "integratedLost": 0,
+        "integratedPerSecond": 355478.38
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": -26101.04,
+          "rendering": -82874.2,
+          "observability": -31391.58,
+          "integrated": 30606.02
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": -5671.998,
+          "rendering": -2008.096,
+          "observability": -1534.872,
+          "integrated": -1913.19
+        }
+      }
+    },
+    {
+      "population": 5000,
+      "tickMs": {
+        "baseline": 487.0473,
+        "rendering": 529.2582,
+        "observability": 941.1693,
+        "integrated": 935.6944
+      },
+      "wallMs": {
+        "baseline": 10403.486,
+        "rendering": 11260.922,
+        "observability": 19606.832,
+        "integrated": 19478.676
+      },
+      "renderMs": {
+        "baseline": 17.5353,
+        "rendering": 16.7213,
+        "integrated": 20.3803
+      },
+      "overhead": {
+        "renderingVsBaseline": 1.086666941793949,
+        "observabilityVsBaseline": 1.932398146956158,
+        "integratedVsBaseline": 1.9211571442855755,
+        "integratedWallVsBaseline": 1.8723220274434933
+      },
+      "adaptiveRenderSpeedup": 1.048680425564998,
+      "adaptiveRenderDeltaMs": 0.8140000000000001,
+      "interaction": {
+        "additiveExcessMs": -47.685800000000086,
+        "additiveExpectedMs": 983.3802000000001,
+        "multiplicativeRatio": 0.9148919840972664,
+        "multiplicativeExpectedMs": 1022.7375649413516
+      },
+      "adaptiveCounters": {
+        "updated": 1941,
+        "skipped": 5.8,
+        "culled": 119.2,
+        "near": 150.4,
+        "far": 1915.6,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 19212778,
+        "lost": 0,
+        "perSecond": 208078.14,
+        "flushMs": 489.5418,
+        "bufferKB": 2760.2,
+        "integratedRecorded": 19212778,
+        "integratedLost": 0,
+        "integratedPerSecond": 206513.8
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": -29167.78,
+          "rendering": 36055.66,
+          "observability": -81601.16,
+          "integrated": 13150.94
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": -407.982,
+          "rendering": 5492.604,
+          "observability": -3346.172,
+          "integrated": -1910.714
+        }
+      }
+    },
+    {
+      "population": 10000,
+      "tickMs": {
+        "baseline": 2397.333,
+        "rendering": 2426.6267,
+        "observability": 2856.2929,
+        "integrated": 2759.9411
+      },
+      "wallMs": {
+        "baseline": 49422.462,
+        "rendering": 49947.348,
+        "observability": 58713.988,
+        "integrated": 56619.657999999996
+      },
+      "renderMs": {
+        "baseline": 35.6812,
+        "rendering": 31.8697,
+        "integrated": 30.3965
+      },
+      "overhead": {
+        "renderingVsBaseline": 1.0122192870160298,
+        "observabilityVsBaseline": 1.191446036074254,
+        "integratedVsBaseline": 1.151254790218964,
+        "integratedWallVsBaseline": 1.1456260111040197
+      },
+      "adaptiveRenderSpeedup": 1.119596356413772,
+      "adaptiveRenderDeltaMs": 3.8114999999999952,
+      "interaction": {
+        "additiveExcessMs": -125.64549999999917,
+        "additiveExpectedMs": 2885.586599999999,
+        "multiplicativeRatio": 0.9546022756964865,
+        "multiplicativeExpectedMs": 2891.194762746948
+      },
+      "adaptiveCounters": {
+        "updated": 3481,
+        "skipped": 11,
+        "culled": 232.8,
+        "near": 292,
+        "far": 3432.8,
+        "droppedParts": 0
+      },
+      "events": {
+        "recorded": 36300058,
+        "lost": 0,
+        "perSecond": 133677.42,
+        "flushMs": 844.7548,
+        "bufferKB": 2773.4,
+        "integratedRecorded": 36300058,
+        "integratedLost": 0,
+        "integratedPerSecond": 133481.82
+      },
+      "memory": {
+        "heapGrowthKB": {
+          "baseline": 61117.14,
+          "rendering": 16382.3,
+          "observability": -42695.66,
+          "integrated": 137145.32
+        },
+        "heapSlopeKBPerTick": {
+          "baseline": 8178.586,
+          "rendering": -6144.984,
+          "observability": -1721.688,
+          "integrated": 3911.256
+        }
+      }
+    }
+  ],
+  "scaling": {
+    "baseline": {
+      "tickExponent": 1.508893127097852,
+      "renderExponent": 1.0350396031678493,
+      "wallExponent": 1.4438550274901196
+    },
+    "rendering": {
+      "tickExponent": 1.52003368236865,
+      "renderExponent": 1.0001635014045256,
+      "wallExponent": 1.4903473920829158
+    },
+    "observability": {
+      "tickExponent": 1.2068975724297493,
+      "renderExponent": 1.0394113098037658,
+      "wallExponent": 1.237655901015918
+    },
+    "integrated": {
+      "tickExponent": 1.1938364527223062,
+      "renderExponent": 1.0170854502538569,
+      "wallExponent": 1.241880425021398
+    }
+  },
+  "sanity": [
+    {
+      "population": 100,
+      "frameBuildSpreadMs": 0.14450000000000002,
+      "syncSpreadMs": 0.004799999999999999,
+      "populationSpread": 0
+    },
+    {
+      "population": 500,
+      "frameBuildSpreadMs": 0.3698,
+      "syncSpreadMs": 0.03960000000000001,
+      "populationSpread": 0
+    },
+    {
+      "population": 1500,
+      "frameBuildSpreadMs": 0.4394,
+      "syncSpreadMs": 0.07820000000000002,
+      "populationSpread": 0
+    },
+    {
+      "population": 3000,
+      "frameBuildSpreadMs": 0.9209000000000005,
+      "syncSpreadMs": 0.06620000000000004,
+      "populationSpread": 0
+    },
+    {
+      "population": 5000,
+      "frameBuildSpreadMs": 2.623099999999999,
+      "syncSpreadMs": 0.08730000000000004,
+      "populationSpread": 0
+    },
+    {
+      "population": 10000,
+      "frameBuildSpreadMs": 5.867100000000001,
+      "syncSpreadMs": 0.20550000000000002,
+      "populationSpread": 0
+    }
+  ]
+}

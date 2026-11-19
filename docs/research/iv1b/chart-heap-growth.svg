@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
+  <rect width="720" height="360" fill="#ffffff"/>
+  <text x="360" y="42" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">Crescita heap per run</text>
+    <rect x="70" y="14" width="12" height="12" fill="#64748b"/><text x="88" y="24" font-size="11" fill="#334155">baseline</text>
+    <rect x="220" y="14" width="12" height="12" fill="#2563eb"/><text x="238" y="24" font-size="11" fill="#334155">rendering</text>
+    <rect x="370" y="14" width="12" height="12" fill="#dc2626"/><text x="388" y="24" font-size="11" fill="#334155">observability</text>
+    <rect x="520" y="14" width="12" height="12" fill="#7c3aed"/><text x="538" y="24" font-size="11" fill="#334155">integrated</text>
+    <line x1="70" y1="308" x2="700" y2="308" stroke="#e2e8f0"/><text x="62" y="312" text-anchor="end" font-size="10" fill="#64748b">0.00</text>
+    <line x1="70" y1="242.5" x2="700" y2="242.5" stroke="#e2e8f0"/><text x="62" y="246.5" text-anchor="end" font-size="10" fill="#64748b">38400.69</text>
+    <line x1="70" y1="177" x2="700" y2="177" stroke="#e2e8f0"/><text x="62" y="181" text-anchor="end" font-size="10" fill="#64748b">76801.38</text>
+    <line x1="70" y1="111.5" x2="700" y2="111.5" stroke="#e2e8f0"/><text x="62" y="115.5" text-anchor="end" font-size="10" fill="#64748b">115202.07</text>
+    <line x1="70" y1="46" x2="700" y2="46" stroke="#e2e8f0"/><text x="62" y="50" text-anchor="end" font-size="10" fill="#64748b">153602.76</text>
+    <polyline fill="none" stroke="#64748b" stroke-width="2.4" points="70,311.82755339893686 196,295.28405153432453 322,422.8920666778859 448,352.5205056942519 574,357.75143961998015 700,203.75258382859874"/>
+    <polyline fill="none" stroke="#2563eb" stroke-width="2.4" points="70,302.9616394388917 196,288.402888389796 322,255.10485563780085 448,449.3584015428723 574,246.49991355363576 700,280.05673488738597"/>
+    <polyline fill="none" stroke="#dc2626" stroke-width="2.4" points="70,269.5736822601227 196,235.02363266934665 322,332.1672579234098 448,361.54457202247744 574,447.18697907966737 700,380.8259247198519"/>
+    <polyline fill="none" stroke="#7c3aed" stroke-width="2.4" points="70,292.41329267170244 196,312.496084882809 322,222.51325499112914 448,255.79535651880585 574,285.56846090597287 700,74.07142857142858"/>
+    <text x="70" y="326" text-anchor="middle" font-size="10" fill="#64748b">100</text>
+    <text x="196" y="326" text-anchor="middle" font-size="10" fill="#64748b">500</text>
+    <text x="322" y="326" text-anchor="middle" font-size="10" fill="#64748b">1500</text>
+    <text x="448" y="326" text-anchor="middle" font-size="10" fill="#64748b">3000</text>
+    <text x="574" y="326" text-anchor="middle" font-size="10" fill="#64748b">5000</text>
+    <text x="700" y="326" text-anchor="middle" font-size="10" fill="#64748b">10000</text>
+  <text x="360" y="352" text-anchor="middle" font-size="11" fill="#334155">Popolazione iniziale</text>
+  <text x="16" y="180" transform="rotate(-90 16 180)" text-anchor="middle" font-size="11" fill="#334155">KB</text>
+</svg>
