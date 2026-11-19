@@ -1,9 +1,15 @@
 <#
 .SYNOPSIS
-IV1-B — esegue il benchmark integrato G3.1 + E2.3.1 e scrive dataset/graphic/report.
+IV1-B-R1 — esegue il benchmark integrato G3.1 + E2.3.1 e scrive dataset/graphic.
 
 Tutti i percorsi sono relativi alla root del repository. Richiede Node 22 e Vitest 4.
-Nessuna modifica al codice di produzione: il benchmark è infrastruttura isolata.
+Nessuna modifica al codice di produzione: il benchmark e infrastruttura isolata.
+
+R1: i riferimenti di tempo/CPU/heap e i contatori evento sono acquisiti DOPO il
+warm-up. Ogni run separa `warmup.*`, la finestra misurata e `totals.*`.
+Il writer e sintetico (nessun I/O su disco): i dati non misurano persistenza reale.
+
+Override: IV1B_OUT, IV1B_POPULATIONS, IV1B_SEEDS, IV1B_TICKS, IV1B_WARMUP_TICKS.
 #>
 $ErrorActionPreference = "Stop"
 
@@ -31,5 +37,5 @@ Write-Host ""
 Write-Host ("End:       " + (Get-Date -Format "o"))
 Write-Host ("Elapsed:   " + [math]::Round($sw.Elapsed.TotalSeconds, 1) + " s")
 Write-Host ("Vitest:    " + $exit)
-Write-Host ("Dataset:   docs/research/iv1b/dataset.raw.json")
+Write-Host ("Dataset:   " + ($env:IV1B_OUT ?? "docs/research/iv1b") + "\dataset.raw.json")
 exit $exit

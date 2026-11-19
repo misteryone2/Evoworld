@@ -1,24 +1,40 @@
-# IV1-B — Performance integrata: Adaptive Rendering (G3.1) + Observability (E2.3.1)
+# IV1-B-R1 — Performance integrata: Adaptive Rendering (G3.1) + Observability (E2.3.1)
 
-**Branch:** `benchmark/iv1-b-integrated-performance` · **Esecuzione:** 2026-11-19, 16:09–16:50 CET · **Dataset:** [`dataset.raw.json`](dataset.raw.json) · **Tabelle:** [`TABLES.md`](TABLES.md) · **Configurazione:** [`EXPERIMENTAL_CONFIG.md`](EXPERIMENTAL_CONFIG.md)
+**Branch:** `validation/iv1-b-r1-benchmark-corrections` · **Esecuzione R1:** 2026-11-19, 18:00–21:10 CET · **Dataset:** [`dataset.raw.json`](dataset.raw.json) (v2, 120 run) · **Dataset originale:** [`dataset.raw.v1.json`](dataset.raw.v1.json) · **Tabelle:** [`TABLES.md`](TABLES.md) · **Analisi:** [`analysis.json`](analysis.json) · **Protocollo:** [`EXPERIMENTAL_CONFIG.md`](EXPERIMENTAL_CONFIG.md)
+
+---
+
+## 0. Correzioni R1 — leggere prima del resto
+
+La versione IV1-B originale conteneva due difetti di misurazione, ora corretti:
+
+| Difetto | IV1-B (v1) | IV1-B-R1 (v2) |
+|---|---|---|
+| Riferimenti di misura | `heapBefore`, `cpuBefore`, `wallStart` presi **prima** del warm-up | presi **dopo** il warm-up; `warmup.*`, finestra misurata e `totals.*` sono campi separati |
+| Metriche interessate | `wallMs`, `cpuMs`, `heapGrowthKB` includevano 5 tick di warm-up | `measuredWallMs`, `measuredCpuMs`, `heapGrowthMeasuredKB` escludono il warm-up |
+| Contatori evento | cumulativi (warm-up + misurazione), non separabili | delta della sola finestra misurata |
+| Costo/evento a 10 000 | dichiarato `6,4 µs` da `71 106 eventi/tick` — **non riproducibile** | **5,889 µs** misurati nella finestra R1; con i soli dati v1 l'aritmetica corretta darebbe 363 000,58 eventi/tick e **1,264 µs** |
+| Writer | descritto come «writer no-op che cronometra writeBatch» | dichiarato esplicitamente **sintetico**: property scan in memoria, nessuna persistenza su disco |
+
+Il valore `71 106` non compare in nessuna aggregazione del dataset grezzo e non è stato possibile ricostruirlo: è un errore aritmetico, non una misura alternativa. Non è stato sostituito con un valore scelto arbitrariamente: la matrice è stata **rieseguita** con contatori della sola finestra misurata. Le differenze tra i numeri assoluti di v1 e v2 riflettono inoltre un ambiente sensibilmente più lento e più rumoso durante il rerun (§3), quindi **i confronti v1 ↔ v2 non sono validi**: tutte le conclusioni di questo report usano esclusivamente i dati R1.
 
 ---
 
 ## 1. Sintesi esecutiva
 
-Tutti i numeri seguenti sono **misurati** nel run integrato (120 run = 6 popolazioni × 4 configurazioni × 5 seed, 5 tick di warm-up esclusi + 20 misurati).
+Tutti i numeri seguenti sono **misurati** nella sessione R1 (120 run = 6 popolazioni × 4 configurazioni × 5 seed; 5 tick di warm-up esclusi + 20 misurati).
 
-| Risultato | Evidenza misurata |
+| Risultato | Evidenza misurata R1 |
 |---|---|
-| L'observability è il costo dominante, non il rendering | Overhead di `world.step()` dovuto agli eventi: **+8.98 ms/tick a 100** organismi fino a **+458.96 ms/tick a 10 000**. Il rendering adaptive, nella migliore configurazione, risparmia **0.07–0.31 ms/tick**. |
-| Il rapporto di overhead cala all'aumentare della popolazione, ma il costo assoluto esplode | O/B = 5.17× a 100 → 1.19× a 10 000; in termini assoluti l'extra step passa da 9 a 459 ms/tick (≈51×). |
-| L'interazione tra i due sistemi non è rilevabile | Scarto additivo `I − (R + O − B)` tra −126 e +6 ms/tick; rapporto moltiplicativo `I / (R·O/B)` = 0.91–1.06. Valori dentro il rumore di misura ai popolazioni alte (deviazione standard fino al 47%). **Nessuna sinergia o penalizzazione incrociata dimostrata.** |
-| L'adaptive rendering è molto meno efficace che nel benchmark G3.1 originale | Speedup della sola fase di rendering = 0.99–1.16× (media ≈1.09×), contro 2.6–3.0× misurati su frame statici. Causa misurata: con `syncFrame()` a ogni tick (come in produzione) le creature «lontane» vengono invalidate come `dirty` e non vengono saltate (es. 10 000 organismi: 3 481 aggiornati, **11 saltati**, 233 cullati). |
-| Il collo di bottiglia eventi è strutturale | `RESOURCE_REGENERATION` + `RESOURCE_DEPLETION` = **~97%** di tutti gli eventi (6.91 M di 7.11 M a 10 000 organismi, per run). |
-| Nessuna perdita di eventi | `lost = 0` in ogni cella; `attempted = recorded` sempre; `droppedParts = 0` sempre. |
-| La scala è dominata dalla simulazione | Esponente `b` in `t = a·N^b`: tick baseline **1.509**, rendering **1.520**, observability **1.207**, integrated **1.194**. La fase di rendering cresce quasi linearmente (b≈1.0). |
+| L'observability resta il costo dominante | Extra `world.step()` (O − B): **+12,54 ms/tick a 100** → **+1 696,92 ms/tick a 10 000**. |
+| Il rapporto relativo non è monotono | O/B = 4,54× (100), 3,45× (500), 2,59× (1 500), 2,98× (3 000), 1,25× (5 000), 1,50× (10 000): la variabilità alta (SD fino al 66%) impedisce un'interpretazione di scala semplice. |
+| Nessuna interazione sistematica riproducibile | Scarto additivo `I − (R + O − B)` tra −859 e −0,1 ms/tick; rapporto moltiplicativo 0,76–1,02. Valori dentro la dispersione dei run alle popolazioni alte. |
+| L'adaptive rendering resta poco efficace con frame vivo | Speedup della fase render = **0,97–1,34×** (mediana ≈1,14×); a 10 000 è 0,97×. Con `syncFrame()` per tick le creature lontane vengono invalidate `dirty`: 11 saltate su 3 724. |
+| Il collo di bottiglia eventi è strutturale | `RESOURCE_REGENERATION` + `RESOURCE_DEPLETION` = **97,4–98,9%** degli eventi in ogni popolazione. |
+| Integrità eventi | **0 eventi persi**, `attempted = recorded + sampled`, `flushErrors = 0`, `droppedParts = 0` in tutte le 120 run. |
+| Scala | Esponente `b` di `t = a·N^b`: tick baseline **1,496**, rendering **1,521**, observability **1,237**, integrated **1,216**; fase render ≈1,15. |
 
-**Conclusione operativa:** abilitare observability completa nel percorso caldo è oggi il principale costo (fino a +459 ms/tick a 10 000 organismi); abilitare adaptive rendering in presenza di frame vivo non riproduce i guadagni misurati a frame statico. Le due cose non si amplificano a vicenda: i costi sono sostanzialmente additivi.
+**Conclusione operativa:** nel percorso caldo l'observability completa è il costo principale e il suo costo unitario misurato va da 1,3 a 5,9 µs/evento a seconda della popolazione e della variabilità del run. L'adaptive rendering, nel carico realistico con `syncFrame()` a ogni tick, non riproduce i guadagni misurati su frame statici e non modifica in modo coerente la produzione di eventi.
 
 ---
 
@@ -29,94 +45,100 @@ Tutti i numeri seguenti sono **misurati** nel run integrato (120 run = 6 popolaz
 | Base benchmark | `graphics/g3-renderer-integration` @ `717da65` |
 | Observability importata da | `research/e2-ecosystem-dynamics` @ `52178e5` |
 | Commit di import isolato | `b1ab7da` — copia verbatim, **nessun merge** |
-| Branch di lavoro | `benchmark/iv1-b-integrated-performance` |
+| Branch benchmark originale | `benchmark/iv1-b-integrated-performance` (`ad0a807`) |
+| Branch R1 | `validation/iv1-b-r1-benchmark-corrections` |
 | `main` | `d330c12` — **non toccato** |
 
-Nessuna logica biologica o di rendering è stata modificata per migliorare i risultati. Il commit `b1ab7da` contiene solo codice E2.3.1 copiato senza alterazioni; il codice di misurazione è confinato in `scripts/iv1bIntegrated.benchmark.ts`, `scripts/iv1bAnalyze.mjs`, `scripts/run_iv1b.ps1` e nella documentazione. Non sono stati eseguiti merge né pull request.
+Nessuna logica biologica o di rendering è stata modificata. Le modifiche R1 riguardano solo infrastruttura di misurazione (`scripts/iv1bMetrics.ts`, `scripts/iv1bIntegrated.benchmark.ts`, `scripts/iv1bAnalyze.mjs`), test e documentazione. Non sono stati eseguiti merge né PR.
 
 ---
 
-## 3. Ambiente (misurato)
+## 3. Ambiente e avvertenza sulle sessioni
 
 | Voce | Valore |
 |---|---|
-| CPU | 13th Gen Intel Core i7-1365U, 10 core fisici / 12 logici, 1.80 GHz base |
-| Memoria | 16 GB (osservati ~6 GB liberi all'inizio) |
+| CPU | 13th Gen Intel Core i7-1365U, 12 thread logici, 1,80 GHz base |
+| Memoria | 16 GB (circa 4 GB liberi all'avvio della sessione R1) |
 | OS | Windows 11 Pro 64 bit, build 10.0.26300 |
 | Node | v22.14.0 (portable), `win32` / `x64` |
 | Vitest | 4.1.12 |
-| GPU | **non misurata** — benchmark in Node, senza `WebGLRenderer` |
-| confronto | tutte le configurazioni nello stesso processo, stessa macchina, stessa toolchain |
+| GPU / FPS | **non misurati** — benchmark in Node, senza `WebGLRenderer` |
 
-Il contention da altri processi non è stato controllato attivamente; la variabilità osservata è riportata nella sezione 8.
-
----
-
-## 4. Protocollo
-
-- **Popolazioni iniziali:** 100, 500, 1 500, 3 000, 5 000, 10 000.
-- **Configurazioni:** `baseline` (adaptive OFF + sink nullo), `rendering` (ON + OFF), `observability` (OFF + ON), `integrated` (ON + ON).
-- **Seed:** 7, 11, 31, 47, 59 → 5 run/cella.
-- **Ordine:** ruotato per seed (`CONFIGS[(i + seedIndex) % 4]`), così ogni configurazione passa una volta in ogni posizione del processo.
-- **Tick:** 5 warm-up esclusi + 20 misurati; `world.step()`, `buildRenderFrame`, `syncFrame` e `updateCreatureInstances` cronometrati separatamente.
-- **Pianeta:** 64², 96², 160², 224², 288², 400² (costante entro ogni popolazione).
-- **Setup:** `mixed`, genoma avanzato e gene effects attivi. Popolazione iniziale identica nelle 4 configurazioni (spread = 0 in tutte le popolazioni).
-- **Sink:** `scientific_full`, `snapshotEveryTicks: 0`, `flushEveryEvents: 5000`, `releaseAfterFlush: true`, writer no-op cronometrato — vedi [`EXPERIMENTAL_CONFIG.md`](EXPERIMENTAL_CONFIG.md) §4 per la scelta del buffer limitato.
+La sessione R1 è risultata circa 3–6× più lenta della sessione IV1-B originale a parità di popolazione (es. 10 000 baseline: 3 407 ms/tick contro 2 397 ms/tick) e con maggiore dispersione. Le cause esatte (throttling, contention, stato del sistema) **non sono state misurate**. Tutte le configurazioni R1 sono comunque state eseguite sulla stessa macchina, nella stessa toolchain e con ordine ruotato, quindi i confronti interni a R1 restano validi. I log `r1-benchmark.log` e `r1-resume.log` documentano che la prima esecuzione è stata interrotta dopo 100 run e che la popolazione 10 000 è stata completata con `IV1B_RESUME=1`.
 
 ---
 
-## 5. Risultati di performance
+## 4. Protocollo e finestre
 
-Le tabelle complete sono in [`TABLES.md`](TABLES.md). I grafici SVG sono `chart-tick-mean.svg`, `chart-tick-p95.svg`, `chart-render-mean.svg`, `chart-events-per-second.svg`, `chart-heap-growth.svg`.
+- **Popolazioni:** 100, 500, 1 500, 3 000, 5 000, 10 000.
+- **Configurazioni:** `baseline` (OFF/OFF), `rendering` (ON/OFF), `observability` (OFF/ON), `integrated` (ON/ON).
+- **Seed:** 7, 11, 31, 47, 59 → 5 run/cella; ordine ruotato `CONFIGS[(i + seedIndex) % 4]`.
+- **Tick:** 5 warm-up esclusi + 20 misurati, separati esplicitamente (§0).
+- **Finestra misurata:** da dopo il warm-up fino dopo il flush finale; `measuredWallMs`, `measuredCpuMs`, contatori evento e delta heap usano tutti questa finestra.
+- **Sink:** `scientific_full`, `snapshotEveryTicks: 0`, `flushEveryEvents: 5000`, `releaseAfterFlush: true`, writer sintetico.
+- **Pianeta/setup:** 64²…400² costante per popolazione, setup `mixed`, genoma avanzato e gene effects attivi; popolazione iniziale identica nelle 4 configurazioni (spread = 0).
 
-### 5.1 Tempo per tick e overhead
+---
+
+## 5. Tempo per tick e latenza
 
 | N | baseline (ms) | rendering | observability | integrated | O/B | I/B |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100 | 2.15 | 2.11 | 11.13 | 11.59 | 5.17× | 5.38× |
-| 500 | 9.89 | 9.89 | 34.45 | 34.45 | 3.48× | 3.48× |
-| 1 500 | 53.78 | 53.23 | 114.88 | 120.49 | 2.14× | 2.24× |
-| 3 000 | 168.84 | 164.61 | 316.70 | 315.38 | 1.88× | 1.87× |
-| 5 000 | 487.05 | 529.26 | 941.17 | 935.69 | 1.93× | 1.92× |
-| 10 000 | 2 397.33 | 2 426.63 | 2 856.29 | 2 759.94 | 1.19× | 1.15× |
+| 100 | 3,54 | 3,33 | 16,07 | 15,14 | 4,54× | 4,28× |
+| 500 | 12,75 | 12,44 | 44,03 | 43,64 | 3,45× | 3,42× |
+| 1 500 | 65,13 | 67,86 | 168,93 | 162,40 | 2,59× | 2,49× |
+| 3 000 | 228,74 | 212,95 | 682,63 | 485,84 | 2,98× | 2,12× |
+| 5 000 | 779,54 | 629,48 | 977,39 | 790,31 | 1,25× | 1,01× |
+| 10 000 | 3 407,47 | 4 352,17 | 5 104,40 | 5 190,23 | 1,50× | 1,52× |
 
-Il tempo di `world.step()` non dipende dal rendering (R/B = 0.97–1.09, come atteso: sono fasi separate) e dipende quasi esclusivamente dall'observability (I ≈ O in ogni cella).
+`R/B` va da 0,81 a 1,28: le fasi sono separate e il renderer non dovrebbe alterare `world.step()`. Le deviazioni a 5 000 e 10 000 sono attribuibili alla variabilità della sessione, non a un effetto misurato del rendering.
 
-### 5.2 Latenza di coda
+| N | P95/mean (observability) | P99/mean (observability) | SD tick/mean (observability) |
+|---:|---:|---:|---:|
+| 100 | 1,39 | 2,02 | 21% |
+| 500 | 1,29 | 1,60 | 13% |
+| 1 500 | 1,43 | 1,56 | 21% |
+| 3 000 | 2,44 | 3,02 | 61% |
+| 5 000 | 1,74 | 2,00 | 39% |
+| 10 000 | 2,59 | 3,42 | 66% |
 
-| N | P95/mean | P99/mean |
-|---:|---:|---:|
-| 100 | 1.68 | 3.79 |
-| 500 | 1.34 | 1.67 |
-| 1 500 | 1.43 | 1.60 |
-| 3 000 | 1.34 | 1.45 |
-| 5 000 | 1.95 | 2.46 |
-| 10 000 | 1.96 | 3.16 |
-
-La coda peggiora sopra 3 000 organismi: P99 fino a 3.16× la media a 10 000. Le code lunghe sono coerenti con GC e con la variabilità dei tick a popolazione alta (§8).
+Oltre 3 000 organismi la coda è molto lunga e la dispersione tra seed è elevata: differenze inferiori al ~50% non sono distinguibili dal rumore.
 
 ---
 
-## 6. Observability
+## 6. Observability e riconciliazione eventi
 
-| N | eventi registrati\* | persi | eventi/s | flush per run (ms) | buffer max (KB)\*\* |
-|---:|---:|---:|---:|---:|---:|
-| 100 | 846 547 | 0 | 709 100 | 13.08 | 2 686.5 |
-| 500 | 2 135 357 | 0 | 571 081 | 39.22 | 2 639.1 |
-| 1 500 | 5 982 461 | 0 | 488 920 | 95.38 | 2 727.4 |
-| 3 000 | 11 718 977 | 0 | 356 513 | 244.14 | 2 706.1 |
-| 5 000 | 19 212 778 | 0 | 208 078 | 489.54 | 2 760.2 |
-| 10 000 | 36 300 058 | 0 | 133 677 | 844.75 | 2 773.4 |
+Tutti i valori della tabella sono **delta della finestra misurata** (5 seed × 20 tick = 100 tick).
 
-\* totale di 5 seed × 20 tick (per run: da 169 309 a 7 260 012 eventi).
-\*\* **stima**, non misurazione diretta: `retainedMax × 582 B/evento` (582 B/evento è la media misurata nel report E2.3.1 §N.9). Il valore misurato è la profondità massima del buffer: 4 499–4 852 eventi, coerente con il limite `flushEveryEvents = 5000`.
+| N | eventi registrati | persi | eventi/tick | eventi/s | flush writer sintetico (ms/run) | buffer max (KB, stimato) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 672 642 | 0 | 6 726 | 387 061 | 15,02 | 2 686,5 |
+| 500 | 1 699 923 | 0 | 16 999 | 354 728 | 32,72 | 2 639,1 |
+| 1 500 | 4 762 963 | 0 | 47 630 | 267 491 | 96,44 | 2 727,4 |
+| 3 000 | 9 328 930 | 0 | 93 289 | 157 632 | 293,06 | 2 706,1 |
+| 5 000 | 15 283 554 | 0 | 152 836 | 158 126 | 365,78 | 2 760,2 |
+| 10 000 | 28 816 637 | 0 | 288 166 | 63 767 | 778,67 | 2 773,4 |
 
-**Composizione degli eventi (misurata):** a 10 000 organismi, `RESOURCE_REGENERATION` 3.61 M + `RESOURCE_DEPLETION` 3.30 M = 6.91 M su 7.11 M eventi (**97.2%**); `RESOURCE_CONSUMPTION` 175 k (2.5%), `HUNT_ATTEMPT` 21 k, `DEATH` 6 k. La stessa proporzione vale a tutte le popolazioni.
+**Buffer:** `retainedMax` è misurato (4 499–4 852 eventi); `bufferKB` è una **stima** (`retainedMax × 582 B/evento`, media E2.3.1 §N.9), marcata `bufferBytesIsEstimate: true` nel dataset.
 
-**Interpretazione:**
-- Il costo non è nel flush: 844.75 ms / 100 tick misurati ≈ 8.4 ms/tick a 10 000, cioè <2% dei 459 ms/tick di overhead totale. Il costo è nella creazione degli eventi dentro `world.step()`.
-- Il costo per evento nell'integrazione è ≈6.4 µs a 10 000 (459 ms / 71 106 eventi per tick), contro ≈1.9 µs misurati da E2.3.1 per `record()` diretto in isolamento: l'emissione distribuita su molte hook di pianeta/celle costa circa 3× in più rispetto alla sola registrazione.
-- `events/s` cala all'aumentare della popolazione (709 k → 134 k) perché il costo della simulazione cresce più velocemente del numero di eventi emessi.
+**Writer:** `flushMs` misura un **writer sintetico** che scorre gli eventi e conta le proprietà in memoria. Non c'è scrittura su disco, né fsync: questi numeri **non sono un throughput di persistenza reale**.
+
+**Composizione misurata:** a 10 000 organismi `RESOURCE_REGENERATION` 51,2% + `RESOURCE_DEPLETION` 46,2% = **97,4%**; `RESOURCE_CONSUMPTION` 2,3%, `HUNT_ATTEMPT` 0,3%, `DEATH` 0,1%. La proporzione è simile in tutte le popolazioni.
+
+### Costo per evento (R1)
+
+Numeratore: extra step per tick `O − B` della stessa cella. Denominatore: eventi/tick della stessa cella, stessa finestra, stessi seed.
+
+| N | overhead step (ms/tick) | eventi/tick | µs/evento |
+|---:|---:|---:|---:|
+| 100 | 12,54 | 6 726 | 1,864 |
+| 500 | 31,27 | 16 999 | 1,840 |
+| 1 500 | 103,80 | 47 630 | 2,179 |
+| 3 000 | 453,89 | 93 289 | 4,865 |
+| 5 000 | 197,85 | 152 836 | 1,295 |
+| 10 000 | 1 696,92 | 288 166 | 5,889 |
+
+Il costo unitario non è costante: il valore a 10 000 è quasi 5× quello a 5 000, coerente con la forte degradazione delle code (§5). Il confronto con ~1,9 µs misurati da E2.3.1 per `record()` isolato **non è più presentato come prova di un moltiplicatore**: i carichi e le sessioni sono diversi.
 
 ---
 
@@ -124,93 +146,93 @@ La coda peggiora sopra 3 000 organismi: P99 fino a 3.16× la media a 10 000. Le 
 
 | N | render baseline (ms) | render adaptive (ms) | speedup | updated | skipped | culled | near | far | droppedParts |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 100 | 0.49 | 0.42 | 1.16× | 37 | 34 | 4 | 8 | 66 | 0 |
-| 500 | 1.61 | 1.62 | 0.99× | 253 | 31 | 17 | 24 | 277 | 0 |
-| 1 500 | 4.89 | 4.58 | 1.07× | 706 | 18 | 54 | 56 | 722 | 0 |
-| 3 000 | 9.44 | 8.16 | 1.16× | 1 257 | 41 | 88 | 91 | 1 296 | 0 |
-| 5 000 | 17.54 | 16.72 | 1.05× | 1 941 | 6 | 119 | 150 | 1 916 | 0 |
-| 10 000 | 35.68 | 31.87 | 1.12× | 3 481 | 11 | 233 | 292 | 3 433 | 0 |
+| 100 | 0,86 | 0,68 | 1,27× | 37 | 34 | 4 | 8 | 66 | 0 |
+| 500 | 2,12 | 1,88 | 1,13× | 253 | 31 | 17 | 24 | 277 | 0 |
+| 1 500 | 6,45 | 6,18 | 1,04× | 706 | 18 | 54 | 56 | 722 | 0 |
+| 3 000 | 13,70 | 11,98 | 1,14× | 1 257 | 41 | 88 | 91 | 1 296 | 0 |
+| 5 000 | 27,74 | 20,75 | 1,34× | 1 941 | 6 | 119 | 150 | 1 916 | 0 |
+| 10 000 | 65,48 | 67,18 | 0,97× | 3 481 | 11 | 233 | 292 | 3 433 | 0 |
 
-**Interazione osservata con il frame vivo:** la maggior parte delle creature è classificata `far` (es. 3 433 di 3 724 a 10 000), ma quasi nessuna viene saltata (11). Il motivo è misurabile nel codice: `syncFrame()` viene chiamato a ogni tick con un `RenderFrame` appena costruito; la firma cambia, la generazione avanza e l'identità del piano di rendering cambia, quindi la condizione `dirty` in `updateCreatureInstances` forza l'aggiornamento anche delle creature lontane. Nel benchmark G3.1 originale il frame era statico e il piano veniva sincronizzato una sola volta, permettendo lo stride: da qui i 2.6–3.0× precedenti contro l'1.09× medio di qui. **Entrambi i risultati sono misurati; cambia il carico di lavoro, non la logica.**
+Il frame viene sincronizzato a ogni tick (`syncFrame()`), quindi l'identità del piano cambia e la maggior parte delle creature `far` resta `dirty`: a 10 000 sono 3 433 `far` ma solo 11 `skipped`. Ciò spiega lo speedup modesto rispetto ai 2,6–3,0× del benchmark G3.1 su frame statici: **cambia il carico di lavoro, non la logica**.
 
-Il rendering resta una frazione minima del tempo totale (35.7 ms su ~2 470 ms/tick a 10 000, ≈1.4%): anche uno speedup di 3× della sola fase renderer non cambierebbe il tempo di tick a popolazione alta.
+La fase renderer resta una frazione piccola del tempo totale (65 ms su ~5 200 ms/tick a 10 000, ≈1,3%): anche un raddoppio dello speedup non cambierebbe il tick a popolazione alta.
 
 ---
 
-## 8. Cross-system interaction, scala e variabilità
+## 8. Interazione, scala e memoria
 
 ### Interazione
 
 | N | atteso additivo R+O−B (ms) | integrato misurato (ms) | scarto (ms) | I/(R·O/B) |
 |---:|---:|---:|---:|---:|
-| 100 | 11.09 | 11.59 | +0.50 | 1.06× |
-| 500 | 34.45 | 34.45 | +0.00 | 1.00× |
-| 1 500 | 114.33 | 120.49 | +6.17 | 1.06× |
-| 3 000 | 312.47 | 315.38 | +2.92 | 1.02× |
-| 5 000 | 983.38 | 935.69 | −47.69 | 0.91× |
-| 10 000 | 2 885.59 | 2 759.94 | −125.65 | 0.95× |
+| 100 | 15,87 | 15,14 | −0,72 | 1,00× |
+| 500 | 43,71 | 43,64 | −0,07 | 1,02× |
+| 1 500 | 171,67 | 162,40 | −9,27 | 0,92× |
+| 3 000 | 666,84 | 485,84 | −181,00 | 0,76× |
+| 5 000 | 827,33 | 790,31 | −37,02 | 1,00× |
+| 10 000 | 6 049,09 | 5 190,23 | −858,86 | 0,80× |
 
-Gli scarti negativi alle popolazioni alte sono dello stesso ordine della deviazione standard tra run (fino al 47% a 10 000). **Non c'è evidenza di interazione sistematica**: i due sistemi sommano i propri costi senza amplificarli. La variazione degli eventi/s tra observability-only e integrated è ≤5% in ogni cella (0.95–1.00×), confermando che il renderer non altera la produzione di eventi.
+Gli scarti negativi a 3 000 e 10 000 sono dello stesso ordine della dispersione osservata (SD fino al 66%). **Non c'è evidenza di interazione sistematica**: non possiamo distinguere un effetto incrociato dal rumore. L'oscillazione eventi/s O→I è 1,00–1,23×, senza direzione coerente.
 
 ### Scala
 
 | configurazione | b (tick) | b (render) | b (wall misurato) |
 |---|---:|---:|---:|
-| baseline | 1.509 | 1.035 | 1.444 |
-| rendering | 1.520 | 1.000 | 1.490 |
-| observability | 1.207 | 1.039 | 1.238 |
-| integrated | 1.194 | 1.017 | 1.242 |
+| baseline | 1,496 | 1,147 | 1,430 |
+| rendering | 1,521 | 1,155 | 1,461 |
+| observability | 1,237 | 1,162 | 1,224 |
+| integrated | 1,216 | 1,115 | 1,206 |
 
-Il `world.step()` è superlineare (b≈1.5) ed è il vero limite di scala; observability cresce più lentamente (b≈1.2) in termini relativi, ma assolutamente aggiunge centinaia di ms/tick.
-
-### Variabilità (deviazione standard del tick medio tra i 5 seed)
-
-| N | baseline | rendering | observability | integrated |
-|---:|---:|---:|---:|---:|
-| 100 | 20% | 15% | 8% | 9% |
-| 500 | 11% | 5% | 6% | 5% |
-| 1 500 | 7% | 3% | 4% | 3% |
-| 3 000 | 4% | 3% | 11% | 7% |
-| 5 000 | 1% | 12% | 29% | 23% |
-| 10 000 | 36% | 47% | 33% | 22% |
-
-Sopra 3 000 organismi le conclusioni quantitative vanno lette con cautela: le differenze tra configurazione inferiori al ~25% non sono distinguibili dal rumore in quella fascia.
+`world.step()` resta superlineare ed è il limite di scala; la fase render cresce quasi linearmente.
 
 ### Memoria
 
-I delta di heap grezzi sono inaffidabili (valori negativi per GC; tabella in `TABLES.md` §4). Indicatori più stabili: **RSS** da ~213 MB (100) a ~1.03 GB (10 000), e **heap peak** da 88→531 MB in baseline contro 165→782 MB in integrated: l'observability comporta circa **+250 MB di heap peak a 10 000**, anche con buffer limitato a 5 000 eventi. Il consumo di memoria non è il primo limite in questa configurazione; lo diventerebbe con `releaseAfterFlush: false` (§10).
+I delta di heapMisurati sono inaffidabili come contatore di allocazioni: il GC produce valori anche fortemente negativi (tabella §4 di `TABLES.md`). Indicatori più stabili nella sessione R1:
+
+| N | RSS baseline (MB) | RSS observability (MB) | heap peak baseline (MB) | heap peak observability (MB) |
+|---:|---:|---:|---:|---:|
+| 100 | 102 | 216 | 44 | 147 |
+| 500 | 245 | 287 | 127 | 213 |
+| 1 500 | 368 | 448 | 205 | 364 |
+| 3 000 | 617 | 614 | 485 | 383 |
+| 5 000 | 651 | 829 | 335 | 647 |
+| 10 000 | 583 | 961 | 467 | 837 |
+
+Sono misure di heap V8 e RSS del processo Node, non memoria GPU. La stima `bufferBytes` non va confusa con questi valori.
 
 ---
 
-## 9. Colli di bottiglia identificati (in ordine di impatto)
+## 9. Colli di bottiglia identificati (ordine di impatto)
 
-1. **Volume di eventi resource (NON_CRITICAL).** ~97% degli eventi sono `RESOURCE_REGENERATION`/`RESOURCE_DEPLETION`. Costo misurato: fino a +459 ms/tick a 10 000. È la leva con maggior rendimento.
-2. **`world.step()` superlineare.** b≈1.5, 2 397 ms/tick a 10 000 anche senza observability: è il limite assoluto di scala e rende irrilevanti ottimizzazioni del solo renderer in quella fascia.
-3. **Invalidazione `dirty` del piano di rendering con frame vivo.** Azzera il beneficio dello stride: 11 creature saltate su 3 724 a 10 000, speedup reale 1.12× invece di ~2.8×.
-4. **Coda e variabilità.** P99/mean fino a 3.16× e SD fino al 47% sopra 5 000 organismi: degradazione non lineare, probabilmente GC + pressione sulle cache.
-5. **Flush e serializzazione.** 844.75 ms/run a 10 000, ma <2% dell'overhead: rilevante solo se si abilita la scrittura su disco reale (non misurata qui, writer no-op).
-
----
-
-## 10. Raccomandazioni tecniche (in ordine di impatto)
-
-1. **Limitare o campionare gli eventi resource prima di abilitare l'observability in produzione.** Disabilitare `RESOURCE_REGENERATION`/`RESOURCE_DEPLETION` (o applicare `sampleRates`/`maxNonCriticalEvents`) rimuove la quasi totalità del costo misurato. Come termine di confronto **esterno**, il report E2.3.1 §N.9 misura `DEATH`-only a 1.01× del disabilitato contro 1.65× per `scientific_full` (carico diverso dal nostro): va riverificato con questo harness integrato, non presentato come nostro risultato.
-2. **Non usare `scientific_full` nel percorso caldo a popolazione alta senza un writer asincrono.** Il costo è in `record()`, non nel flush: spostare il flush su un thread non risolve da solo. Mantenere il buffer limitato (`releaseAfterFlush: true`) — la configurazione non rilasciata è cresciuta fino a 25 MB (100 org.) e 63 MB (500 org.) in soli 3 tick in calibrazione e porterebbe a OOM a 10 000 (**estrapolazione**, non misurata nella matrice).
-3. **Rendere stabile l'identità del piano di rendering quando la morfologia non cambia**, così le creature lontane restano `dirty = false` e lo stride G3.1 si attiva anche con frame vivo. È una modifica alla logica di rendering: **non eseguita** in questo branch (vincolo del task), solo raccomandata.
-4. **Riportare sempre P95/P99 insieme alla media e ripetere le misure oltre i 5 seed sopra 3 000 organismi.** La variabilità osservata rende i confronti a una cifra significativa circa solo sotto 3 000.
-5. **Aggiungere un QA browser-side per FPS, frame time e upload GPU.** Node non può misurarli; i campi restano `null` nel dataset. Un `WebGLRenderer` reale è necessario prima di trarre conclusioni sull'esperienza utente.
-6. **Se serve copertura scientifica completa**, valutare emissione differita/aggregata delle due hook resource (conteggi per cella per tick invece di un evento per cella), mantenendo validità dello schema. Anche questa è una proposta, non una modifica applicata.
+1. **Volume di eventi resource (NON_CRITICAL).** 97,4–98,9% degli eventi; costo misurato fino a +1 697 ms/tick a 10 000. È la leva con maggior rendimento potenziale.
+2. **`world.step()` superlineare.** b≈1,50 e 3 407 ms/tick a 10 000 anche senza observability: limite assoluto di scala.
+3. **Coda e variabilità.** P99/mean fino a 3,42× e SD fino al 66% sopra 3 000 organismi: le ottimizzazioni che migliorano la media possono essere irrilevanti per la latenza percepita.
+4. **Invalidazione `dirty` del piano di rendering con frame vivo.** Azzera gran parte del beneficio dello stride (11 saltate su 3 724 a 10 000).
+5. **Writer sintetico.** Fino a 779 ms/run a 10 000, ma <1% dell'overhead totale; inoltre non misura I/O reale.
 
 ---
 
-## 11. Measured / stimato / mancante
+## 10. Raccomandazioni (ordine di impatto)
+
+1. **Limitare o campionare `RESOURCE_REGENERATION`/`RESOURCE_DEPLETION` prima di attivare `scientific_full` nel percorso caldo.** Rimuoverebbe la quasi totalità del costo misurato. Va riverificato con questo harness: il confronto con E2.3.1 §N.9 (`DEATH`-only 1,01× contro 1,65×) usa un carico diverso e non è un risultato di questa sessione.
+2. **Non presentare i valori `flushMs` come throughput di scrittura.** Il writer è sintetico: servono misure con persistenza reale (file, fsync, coda asincrona) prima di trarre conclusioni sul costo di I/O.
+3. **Mantenere `releaseAfterFlush: true`.** La configurazione non rilasciata cresceva fino a 25 MB (100 org.) e 63 MB (500 org.) in 3 tick in calibrazione; l'OOM a 10 000 resta un'**estrapolazione**, non un dato misurato nella matrice.
+4. **Rendere stabile l'identità del piano di rendering quando la morfologia non cambia**, così le creature lontane restano `dirty = false`. È una modifica alla logica di rendering: **non eseguita** in questo branch, solo raccomandata.
+5. **Riportare P95/P99 e SD insieme alla media e usare più di 5 seed sopra 3 000 organismi.** In questa sessione la dispersione rende i confronti sotto il ~50% non conclusivi in quella fascia.
+6. **Aggiungere un QA browser-side per FPS, frame time e upload GPU.** Node non può misurarli: i campi restano `null`.
+
+---
+
+## 11. Measured / stimato / sintetico / mancante
 
 | Categoria | Contenuto |
 |---|---|
-| **Misurato** | tempo tick/fase (media, mediana, P95, P99, min, max, SD), tick/s, CPU `user+system`, heapUsed/RSS/heap peak, contatori sink (`attemptsByType`, `byType`, `lost`, `sampled`, `retained`, `flushedBatches`, `flushedEvents`, `flushErrors`), contatori renderer (`updated`, `skipped`, `culled`, `lodNear`, `lodFar`, `droppedParts`), popolazione iniziale/finale, seeding. |
-| **Stimato (marcato nel dataset)** | `bufferBytes` = `retainedMax × 582 B/evento`. La profondità `retainedMax` è misurata; i byte derivano da una media pubblicata in E2.3.1 §N.9. |
-| **Non misurato / `null`** | FPS, frame time GPU, upload/fill-rate, byte GPU, draw call reali (Node non istanzia `WebGLRenderer`); delta heap come conteggio allocazioni (GC); crescita illimitata del buffer nella matrice; I/O su disco reale del writer; dispositivi mobili fisici; screenshot/heap snapshot browser. |
-| **Estrapolazione esplicita** | OOM con `releaseAfterFlush: false` a 10 000 organismi, dedotto dalla crescita lineare osservata in calibrazione. |
+| **Misurato (finestra misurata)** | tick/fase (media, mediana, P95, P99, min, max, SD), `measuredWallMs`, `measuredCpuMs`, heapUsed a inizio/fine/picco della finestra, RSS, contatori sink della finestra (`attempted`, `recorded`, `byType`, `lost`, `sampled`, `retainedMax`, `flushedBatches`, `flushedEvents`, `flushErrors`), contatori renderer, popolazione iniziale/finale, seeding. |
+| **Misurato separatamente** | `warmup.*` e `totals.*`: non sommati alle metriche della finestra. |
+| **Stimato (marcato)** | `bufferBytes = retainedMax × 582 B/evento`; `retainedMax` è misurato, i byte no. |
+| **Sintetico** | `flushMs`, `writerBatches`, `writerSyntheticBytes`: property scan in memoria, nessuna persistenza. |
+| **Non misurato / `null`** | FPS, frame time GPU, upload/fill-rate, byte GPU, draw call reali, I/O su disco, GC come conteggio allocazioni, dispositivi mobili, screenshot/heap snapshot browser. |
+| **Estrapolazione esplicita** | OOM con `releaseAfterFlush: false` a 10 000 organismi, dedotto dalla calibrazione a 100/500 organismi. |
 
 ---
 
@@ -221,22 +243,19 @@ $env:PATH = "C:\Users\matti\AppData\Local\GitHubDesktop\app-3.6.11\resources\app
 $env:VITE_CONFIG_NATIVE_IGNORE_WARNING = "true"
 .\scripts\run_iv1b.ps1
 node scripts/iv1bAnalyze.mjs
+npx vitest run --config vitest.config.ts tests/iv1bMetrics.test.ts tests/iv1bDataset.test.ts
 ```
 
-Override: `IV1B_POPULATIONS`, `IV1B_SEEDS`, `IV1B_TICKS`, `IV1B_WARMUP_TICKS`, `IV1B_OUT` per il benchmark; `IV1B_DATASET`, `IV1B_OUT_DIR` per l'analisi.
+Override: `IV1B_POPULATIONS`, `IV1B_SEEDS`, `IV1B_TICKS`, `IV1B_WARMUP_TICKS`, `IV1B_OUT`, `IV1B_RESUME`. Il dataset v1 è conservato come `dataset.raw.v1.json` e non viene riscritto.
 
 ---
 
 ## 13. Validazione
 
 - `npx tsc --noEmit --pretty false` → **exit 0**.
-- Suite focalizzata (E2.3.1 ×5 + G3.1): **56/56 test passati** sull'albero combinato.
-- Benchmark IV1-B: **1/1 test passato**, 120 run complete, nessuna eccezione, `flushErrors = 0`.
-- `npm run lint` → **0 errori, 34 warning**: 33 pre-esistenti sul branch G3 e 1 (`observability.ts:796`) presente verbatim nel codice E2.3.1 importato. Nessun warning nei nuovi file di misurazione.
-- `npx next build --webpack` → **OK** (3 pagine statiche prerenderizzate). `--webpack` è obbligatorio in questo ambiente perché il default Turbopack fallisce con il junction `node_modules`.
-- Suite completa **non rieseguita** sull'albero combinato: i riferimenti storici (G3.1: 940 passati / 6 falliti pre-esistenti / 1 skippato; E2.3.1: 879 passati / 15 falliti pre-esistenti) vanno letti come contesto dei branch di partenza, non come risultato di questa sessione.
-- Nessun test modificato per far passare il benchmark; nessuna soglia allentata.
-
----
-
-*Report generato su dati misurati; nessun miglioramento di performance è dichiarato senza misurazione diretta.*
+- Test R1 dei calcoli e del dataset: **33/33 passati** (`tests/iv1bMetrics.test.ts` 7/7, `tests/iv1bDataset.test.ts` 26/26). Verificano esclusione del warm-up, denominatori, coerenza contatori/tick e riconciliazione costo/evento.
+- Benchmark R1: **1/1 test passato**, 120 run, `flushErrors = 0`, nessuna eccezione. Prima esecuzione interrotta a 100 run e completata con `IV1B_RESUME=1` (log disponibili).
+- `node scripts/iv1bAnalyze.mjs` → `analysis.json` v2 con 6 comparazioni e 6 voci `costPerEvent`.
+- `npm run lint` → **0 errori, 37 warning** (36 pre-esistenti + 1 `eslint-disable` inutilizzato nell'harness benchmark; nessun warning nei nuovi file di metriche/test).
+- `npx next build --webpack` → **OK** (3 pagine statiche prerenderizzate). `--webpack` è obbligatorio in questo ambiente a causa del junction `node_modules`.
+- Nessuna soglia di test allentata e nessun test modificato per far passare il benchmark.

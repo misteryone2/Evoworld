@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import { performance } from "node:perf_hooks";
 import { cpus, freemem, totalmem } from "node:os";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { World } from "../simulation/core/world";
 import { buildRenderFrame } from "../simulation/core/renderFrame";
@@ -14,6 +14,10 @@ import { applySetupWithInfo, type SetupKind } from "../tools/e1/initialCondition
 import { createSceneRefs } from "./g31Fixtures";
 import { createRuntimeAnatomyRenderSource } from "../lib/visual/runtimeAnatomyRenderSource";
 import { updateCreatureInstances, type SceneRefs } from "../components/simulation/Planet3DView";
+import {
+  counterLost, deltaCounters, deltaWindow, eventsPerSecond, eventsPerTick,
+  mean, snapshotCounters, sum, type CounterSnapshot,
+} from "./iv1bMetrics";
 
 /**
  * IV1-B — Integrated Performance Benchmark.
@@ -65,6 +69,8 @@ const SEEDS = envInts("IV1B_SEEDS", DEFAULT_SEEDS);
 const TICKS = envInt("IV1B_TICKS", 20);
 const WARMUP_TICKS = envInt("IV1B_WARMUP_TICKS", 5);
 const OUT_DIR = envStr("IV1B_OUT", join(process.cwd(), "docs", "research", "iv1b"));
+/** R1: consente di riprendere una matrice interrotta senza perdere i run già scritti. */
+const RESUME = envStr("IV1B_RESUME", "0") === "1";
 
 interface Stats {
   mean: number; median: number; p95: number; p99: number;
@@ -93,7 +99,12 @@ function num(value: number, digits = 4): number {
   return Number(value.toFixed(digits));
 }
 
-/** Writer di misura: cronometra writeBatch senza I/O su disco. */
+/**
+ * Writer SINTETICO: misura solo il costo di elaborazione di un batch in memoria.
+ * NON esegue scrittura su disco, NON è un throughput di persistenza reale e NON
+ * deve essere presentato come tale. `bytes` è un conteggio di proprietà, non byte
+ * serializzati: è un indicatore di volume, non di I/O.
+ */
 class MeasuringWriter implements EventBatchWriter {
   batches = 0;
   events = 0;
@@ -113,6 +124,7 @@ class MeasuringWriter implements EventBatchWriter {
 }
 
 interface EventMetrics {
+  /** Tutti i contatori sotto sono DELTA della sola finestra misurata. */
   attempted: number;
   recorded: number;
   retained: number;
@@ -126,39 +138,53 @@ interface EventMetrics {
   byType: Record<string, number>;
   attemptsByType: Record<string, number>;
   lostByType: Record<string, number>;
+  /** Numero di tick a cui si riferiscono `recorded` e `attempted`. */
+  measuredTicks: number;
+  recordedPerTick: number | null;
+  /** Finestra in ms usata come denominatore di `eventsPerSecond`. */
+  measuredWallMs: number;
   bufferBytes: number;
   bufferBytesIsEstimate: boolean;
   eventsPerSecond: number | null;
   attemptsPerSecond: number | null;
+  /** Contatore sintetico del writer: Nessun I/O su disco. */
+  writerBatches: number;
+  writerSyntheticBytes: number;
 }
 
 function eventMetrics(
-  summary: EventSinkSummary, retainedEvents: number, bufferBytes: number, wallSeconds: number,
-  writer: MeasuringWriter | null,
+  delta: CounterSnapshot,
+  retainedEvents: number,
+  bufferBytes: number,
+  measuredWallMs: number,
+  measuredTicks: number,
+  writerBatchesDelta: number,
+  writerSyntheticBytesDelta: number,
 ): EventMetrics {
-  const lostTypes = Object.values(summary.lostByType).reduce((a, b) => a + b, 0);
   return {
-    attempted: Object.values(summary.attemptsByType).reduce((a, b) => a + b, 0),
-    recorded: summary.total,
+    attempted: delta.attempted,
+    recorded: delta.recorded,
     retained: retainedEvents,
-    lost: summary.droppedNonCritical + summary.criticalDropped + lostTypes,
-    droppedNonCritical: summary.droppedNonCritical,
-    criticalDropped: summary.criticalDropped,
-    sampled: summary.sampled,
-    flushedBatches: summary.flushedBatches,
-    flushedEvents: summary.flushedEvents,
-    flushErrors: summary.flushErrors,
-    byType: summary.byType,
-    attemptsByType: summary.attemptsByType,
-    lostByType: summary.lostByType,
+    lost: counterLost(delta),
+    droppedNonCritical: delta.droppedNonCritical,
+    criticalDropped: delta.criticalDropped,
+    sampled: delta.sampled,
+    flushedBatches: delta.flushedBatches,
+    flushedEvents: delta.flushedEvents,
+    flushErrors: delta.flushErrors,
+    byType: delta.byType,
+    attemptsByType: delta.attemptsByType,
+    lostByType: delta.lostByType,
+    measuredTicks,
+    recordedPerTick: eventsPerTick(delta.recorded, measuredTicks),
+    measuredWallMs: num(measuredWallMs, 2),
     bufferBytes,
     bufferBytesIsEstimate: true,
-    eventsPerSecond: wallSeconds > 0 ? num(summary.total / wallSeconds, 1) : null,
-    attemptsPerSecond: wallSeconds > 0
-      ? num(Object.values(summary.attemptsByType).reduce((a, b) => a + b, 0) / wallSeconds, 1)
-      : null,
-    ...(writer ? { writerBatches: writer.batches } : {}),
-  } as EventMetrics;
+    eventsPerSecond: eventsPerSecond(delta.recorded, measuredWallMs),
+    attemptsPerSecond: eventsPerSecond(delta.attempted, measuredWallMs),
+    writerBatches: writerBatchesDelta,
+    writerSyntheticBytes: writerSyntheticBytesDelta,
+  };
 }
 
 interface RunRecord {
@@ -175,19 +201,36 @@ interface RunRecord {
   syncMs: number[];
   renderMs: number[];
   heapKB: number[];
-  wallMs: number;
-  cpuMs: number;
-  heapBeforeKB: number;
-  heapAfterKB: number;
-  heapPeakKB: number;
-  heapGrowthKB: number;
-  heapSlopeKBPerTick: number;
-  rssKB: number;
-  flushMs: number;
+  /** Finestra misurata: dopo warm-up, fino dopo il flush finale. */
   measuredWallMs: number;
+  tickLoopWallMs: number;
+  measuredCpuMs: number;
+  heapAtWarmupEndKB: number;
+  heapAfterMeasuredKB: number;
+  heapGrowthMeasuredKB: number;
+  heapPeakMeasuredKB: number;
+  heapSlopeMeasuredKBPerTick: number;
+  rssKB: number;
+  /** Flush della finestra misurata (esclude il warm-up). */
+  flushMs: number;
   retainedPeak: number | null;
   ticksPerSecond: number | null;
   events: EventMetrics | null;
+  /** Finestra di warm-up, tenuta separata e mai unita alle metriche misurate. */
+  warmup: {
+    wallMs: number;
+    cpuMs: number;
+    heapGrowthKB: number;
+    eventsRecorded: number | null;
+    flushMs: number | null;
+  };
+  /** Totali dell'intera esecuzione (warm-up + misurazione), solo se utili. */
+  totals: {
+    wallMs: number;
+    cpuMs: number;
+    heapGrowthKB: number;
+    eventsRecorded: number | null;
+  };
   rendering: Record<string, number | boolean | null>;
 }
 
@@ -269,9 +312,11 @@ function runOne(config: MatrixConfig, population: number, seed: number): RunReco
 
   const gc = (globalThis as { gc?: () => void }).gc;
   if (gc) gc();
-  const heapBefore = process.memoryUsage().heapUsed;
-  const cpuBefore = process.cpuUsage();
-  const wallStart = performance.now();
+
+  // Riferimenti dell'intera esecuzione: servono SOLO ai totali espliciti.
+  const runStartWallMs = performance.now();
+  const runStartCpu = process.cpuUsage();
+  const heapRunStart = process.memoryUsage().heapUsed;
 
   for (let i = 0; i < WARMUP_TICKS; i++) {
     activeWorld.step();
@@ -280,13 +325,21 @@ function runOne(config: MatrixConfig, population: number, seed: number): RunReco
     updateCreatureInstances(refs, frame, null, null, 16, refs.camera.position, source);
   }
 
+  // Riferimenti presi ALLA FINE DEL WARM-UP: da qui inizia la finestra misurata.
+  const afterWarmupWallMs = performance.now();
+  const afterWarmupCpu = process.cpuUsage();
+  const heapAfterWarmup = process.memoryUsage().heapUsed;
+  const warmupCounters = sink instanceof InMemoryEventSink ? snapshotCounters(sink.summary()) : null;
+  const warmupWriterMs = writer?.ms ?? 0;
+  const warmupWriterBatches = writer?.batches ?? 0;
+  const warmupWriterBytes = writer?.bytes ?? 0;
+
   const tickMs: number[] = [];
   const frameBuildMs: number[] = [];
   const syncMs: number[] = [];
   const renderMs: number[] = [];
   const heapKB: number[] = [];
   const retainedByTick: number[] = [];
-  const measuredWallStart = performance.now();
   for (let i = 0; i < TICKS; i++) {
     let t0 = performance.now();
     activeWorld.step();
@@ -307,27 +360,41 @@ function runOne(config: MatrixConfig, population: number, seed: number): RunReco
     heapKB.push(process.memoryUsage().heapUsed / 1024);
     if (sink instanceof InMemoryEventSink) retainedByTick.push(sink.summary().retained);
   }
-  const measuredWallMs = performance.now() - measuredWallStart;
-  // Flush finale del batch incompleto: cronometrato separatamente dal tick.
+  const tickLoopEndMs = performance.now();
+  // Il flush finale appartiene alla finestra misurata: tutti i contatori evento
+  // e il denominatore temporale si riferiscono così alla stessa finestra.
   const finalFlushStart = performance.now();
   if (sink instanceof InMemoryEventSink) sink.flush();
   const finalFlushMs = performance.now() - finalFlushStart;
-  const wallMs = performance.now() - wallStart;
-  const cpuAfter = process.cpuUsage(cpuBefore);
-  const cpuMs = (cpuAfter.user + cpuAfter.system) / 1000;
-  const finalPopulation = activeWorld.organisms.length;
+  const measuredEndWallMs = performance.now();
+  const measuredCpuDelta = process.cpuUsage(afterWarmupCpu);
+  const finalCounters = sink instanceof InMemoryEventSink ? snapshotCounters(sink.summary()) : null;
   const memory = process.memoryUsage();
+  const finalPopulation = activeWorld.organisms.length;
+
+  const warmupWallMs = afterWarmupWallMs - runStartWallMs;
+  const measuredWallMs = measuredEndWallMs - afterWarmupWallMs;
+  const totalWallMs = measuredEndWallMs - runStartWallMs;
+  const warmupCpuMs = ((afterWarmupCpu.user - runStartCpu.user) + (afterWarmupCpu.system - runStartCpu.system)) / 1000;
+  const measuredCpuMs = (measuredCpuDelta.user + measuredCpuDelta.system) / 1000;
+  const heapGrowthWarmupKB = (heapAfterWarmup - heapRunStart) / 1024;
+  const heapGrowthMeasuredKB = (memory.heapUsed - heapAfterWarmup) / 1024;
+  const flushMeasuredMs = (writer?.ms ?? 0) - warmupWriterMs + finalFlushMs;
 
   let events: EventMetrics | null = null;
-  if (sink instanceof InMemoryEventSink) {
-    const summary = sink.summary();
-    const peakRetained = retainedByTick.length ? Math.max(...retainedByTick) : summary.retained;
+  if (sink instanceof InMemoryEventSink && warmupCounters && finalCounters) {
+    const delta = deltaCounters(finalCounters, warmupCounters);
+    const peakRetained = retainedByTick.length ? Math.max(...retainedByTick) : finalCounters.recorded;
     // STIMA: E2.3.1 misura ~582 byte/evento (report N.9). Con releaseAfterFlush
     // gli eventi vengono rilasciati, quindi non è possibile serializzare il
     // buffer finale; il valore è derivato da peakRetained × 582 e marcato come
     // stima, non come misurazione diretta.
     const bufferBytesEstimate = peakRetained * 582;
-    events = eventMetrics(summary, peakRetained, bufferBytesEstimate, measuredWallMs / 1000, writer);
+    events = eventMetrics(
+      delta, peakRetained, bufferBytesEstimate, measuredWallMs, TICKS,
+      (writer?.batches ?? 0) - warmupWriterBatches,
+      (writer?.bytes ?? 0) - warmupWriterBytes,
+    );
   }
 
   const stats = refs.creatureRenderStats;
@@ -360,19 +427,32 @@ function runOne(config: MatrixConfig, population: number, seed: number): RunReco
     syncMs: syncMs.map((v) => num(v)),
     renderMs: renderMs.map((v) => num(v)),
     heapKB: heapArr.map((v) => num(v, 1)),
-    wallMs: num(wallMs, 2),
-    cpuMs: num(cpuMs, 2),
-    heapBeforeKB: num(heapBefore / 1024, 1),
-    heapAfterKB: num(memory.heapUsed / 1024, 1),
-    heapPeakKB: num(Math.max(...heapArr), 1),
-    heapGrowthKB: num((memory.heapUsed - heapBefore) / 1024, 1),
-    heapSlopeKBPerTick: num(linearSlope(heapArr), 2),
-    rssKB: num(memory.rss / 1024, 1),
-    flushMs: num((writer?.ms ?? 0) + finalFlushMs, 3),
     measuredWallMs: num(measuredWallMs, 2),
+    tickLoopWallMs: num(tickLoopEndMs - afterWarmupWallMs, 2),
+    measuredCpuMs: num(measuredCpuMs, 2),
+    heapAtWarmupEndKB: num(heapAfterWarmup / 1024, 1),
+    heapAfterMeasuredKB: num(memory.heapUsed / 1024, 1),
+    heapGrowthMeasuredKB: num(heapGrowthMeasuredKB, 1),
+    heapPeakMeasuredKB: num(Math.max(...heapArr), 1),
+    heapSlopeMeasuredKBPerTick: num(linearSlope(heapArr), 2),
+    rssKB: num(memory.rss / 1024, 1),
+    flushMs: num(flushMeasuredMs, 3),
     retainedPeak: events ? events.retained : null,
     ticksPerSecond: measuredWallMs > 0 ? num((TICKS / measuredWallMs) * 1000, 2) : null,
     events,
+    warmup: {
+      wallMs: num(warmupWallMs, 2),
+      cpuMs: num(warmupCpuMs, 2),
+      heapGrowthKB: num(heapGrowthWarmupKB, 1),
+      eventsRecorded: warmupCounters?.recorded ?? null,
+      flushMs: writer ? num(warmupWriterMs, 3) : null,
+    },
+    totals: {
+      wallMs: num(totalWallMs, 2),
+      cpuMs: num(warmupCpuMs + measuredCpuMs, 2),
+      heapGrowthKB: num(heapGrowthWarmupKB + heapGrowthMeasuredKB, 1),
+      eventsRecorded: finalCounters?.recorded ?? null,
+    },
     rendering,
   };
 }
@@ -385,10 +465,13 @@ interface Aggregate {
   frameBuild: Stats | null;
   sync: Stats | null;
   render: Stats | null;
-  wall: Stats | null;
-  cpu: Stats | null;
-  heapGrowthKB: Stats | null;
+  /** Statistiche della FINestra misurata (non includono il warm-up). */
+  measuredWall: Stats | null;
+  measuredCpu: Stats | null;
+  heapGrowthMeasuredKB: Stats | null;
   heapSlopeKBPerTick: Stats | null;
+  measuredTicks: number;
+  recordedPerTick: number | null;
   ticksPerSecond: Stats | null;
   eventsPerSecond: Stats | null;
   recordedEvents: number | null;
@@ -400,7 +483,7 @@ interface Aggregate {
 
 function aggregate(runs: RunRecord[], population: number, config: ConfigName): Aggregate {
   const flat = (key: "tickMs" | "frameBuildMs" | "syncMs" | "renderMs") => runs.flatMap((r) => r[key]);
-  const stat = (key: "wallMs" | "cpuMs" | "heapGrowthKB" | "heapSlopeKBPerTick" | "ticksPerSecond") => {
+  const stat = (key: "measuredWallMs" | "measuredCpuMs" | "heapGrowthMeasuredKB" | "heapSlopeMeasuredKBPerTick" | "ticksPerSecond") => {
     const values = runs.map((r) => r[key]).filter((v): v is number => v !== null);
     return summarize(values);
   };
@@ -420,10 +503,13 @@ function aggregate(runs: RunRecord[], population: number, config: ConfigName): A
     frameBuild: summarize(flat("frameBuildMs")),
     sync: summarize(flat("syncMs")),
     render: summarize(flat("renderMs")),
-    wall: stat("wallMs"),
-    cpu: stat("cpuMs"),
-    heapGrowthKB: stat("heapGrowthKB"),
-    heapSlopeKBPerTick: stat("heapSlopeKBPerTick"),
+    measuredWall: stat("measuredWallMs"),
+    measuredCpu: stat("measuredCpuMs"),
+    heapGrowthMeasuredKB: stat("heapGrowthMeasuredKB"),
+    heapSlopeKBPerTick: stat("heapSlopeMeasuredKBPerTick"),
+    measuredTicks: runs.length ? runs[0].measuredTicks : 0,
+    recordedPerTick: eventsPresent
+      ? mean(runs.map((r) => r.events?.recordedPerTick).filter((v): v is number => v !== null)) : null,
     ticksPerSecond: stat("ticksPerSecond"),
     eventsPerSecond: eventsPresent
       ? summarize(runs.map((r) => r.events?.eventsPerSecond).filter((v): v is number => v !== null)) : null,
@@ -492,12 +578,39 @@ describe("IV1-B — Integrated Performance Benchmark", () => {
     "esegue la matrice 6 popolazioni x 4 configurazioni x 5 seed su World reali",
     () => {
       mkdirSync(OUT_DIR, { recursive: true });
+      const datasetPath = join(OUT_DIR, "dataset.raw.json");
       const runs: RunRecord[] = [];
       const aggregates: Aggregate[] = [];
       const byCell = new Map<string, RunRecord[]>();
+      let protocolPopulations: number[] = [...POPULATIONS];
+
+      if (RESUME && existsSync(datasetPath)) {
+        const previous = JSON.parse(readFileSync(datasetPath, "utf8")) as {
+          schema?: string; runs: RunRecord[]; protocol?: { populations?: number[] };
+        };
+        if (previous.schema !== "evoworld.iv1b.dataset.raw.v2") {
+          throw new Error("IV1B_RESUME richiede un dataset v2 (usare il backup v1 per eventuali confronti)");
+        }
+        for (const r of previous.runs) {
+          runs.push(r);
+          const key = `${r.population}:${r.config}`;
+          const bucket = byCell.get(key) ?? [];
+          bucket.push(r);
+          byCell.set(key, bucket);
+        }
+        protocolPopulations = Array.from(new Set([
+          ...(previous.protocol?.populations ?? []), ...POPULATIONS,
+        ])).sort((a, b) => a - b);
+        console.log(`IV1B_RESUME: caricati ${runs.length} run esistenti.`);
+      }
+
       const currentAggregates = (): Aggregate[] => {
         const out: Aggregate[] = [];
-        for (const population of POPULATIONS) {
+        const populations = Array.from(new Set([
+          ...protocolPopulations,
+          ...Array.from(byCell.keys()).map((k) => Number(k.split(":")[0])),
+        ])).sort((a, b) => a - b);
+        for (const population of populations) {
           for (const config of CONFIGS) {
             const bucket = byCell.get(`${population}:${config.name}`);
             if (bucket?.length) out.push(aggregate(bucket, population, config.name));
@@ -522,10 +635,22 @@ describe("IV1-B — Integrated Performance Benchmark", () => {
         }
         // Scrittura incrementale: se una popolazione elevata fallisce, i dati precedenti sopravvivono.
         writeFileSync(join(OUT_DIR, "dataset.raw.json"), JSON.stringify({
-          schema: "evoworld.iv1b.dataset.raw.v1",
+          schema: "evoworld.iv1b.dataset.raw.v2",
           protocol: {
+            // R1: finestre esplicite. Tutte le metriche *Measured* escludono il warm-up.
+            metricWindows: {
+              tickMs: "solo tick misurati",
+              measuredWallMs: "dopo warm-up, inclusivo del flush finale",
+              tickLoopWallMs: "solo loop dei tick misurati, senza flush finale",
+              measuredCpuMs: "dopo warm-up, inclusivo del flush finale",
+              heapGrowthMeasuredKB: "heapAfterMeasured - heapAtWarmupEnd",
+              events: "delta dei contatori tra afterWarmup e fine finestra misurata",
+              warmup: "dati separati in run[].warmup, mai uniti alle metriche misurate",
+              totals: "intera esecuzione (warm-up + misurazione), solo in run[].totals",
+            },
+            writer: "sintetico: throughBatch senza I/O su disco; propertyScan non è throughput reale",
             warmupTicks: WARMUP_TICKS, measuredTicks: TICKS, seeds: SEEDS,
-            populations: POPULATIONS, configs: CONFIGS.map((c) => c.name),
+            populations: protocolPopulations, configs: CONFIGS.map((c) => c.name),
             planetSize: PLANET_SIZE, snapshotEveryTicks: 0,
             flushEveryEvents: 5000, releaseAfterFlush: true,
             configOrderRotation: "CONFIGS[(i + seedIndex) % 4]",
@@ -550,7 +675,7 @@ describe("IV1-B — Integrated Performance Benchmark", () => {
       lineChart("P95 tempo per tick", "ms", aggregates, (a) => a.tick?.p95 ?? null, "chart-tick-p95.svg");
       lineChart("Tempo aggiornamento creature", "ms", aggregates, (a) => a.render?.mean ?? null, "chart-render-mean.svg");
       lineChart("Eventi registrati al secondo", "eventi/s", aggregates, (a) => a.eventsPerSecond?.mean ?? null, "chart-events-per-second.svg");
-      lineChart("Crescita heap per run", "KB", aggregates, (a) => a.heapGrowthKB?.mean ?? null, "chart-heap-growth.svg");
+      lineChart("Crescita heap misurata per run", "KB", aggregates, (a) => a.heapGrowthMeasuredKB?.mean ?? null, "chart-heap-growth.svg");
 
       const summaryRows = aggregates.map((a) => ({
         pop: a.population,
@@ -560,8 +685,8 @@ describe("IV1-B — Integrated Performance Benchmark", () => {
         tickP99: a.tick?.p99 ?? null,
         tps: a.ticksPerSecond?.mean ?? null,
         renderMean: a.render?.mean ?? null,
-        cpuMs: a.cpu?.mean ?? null,
-        heapKB: a.heapGrowthKB?.mean ?? null,
+        cpuMs: a.measuredCpu?.mean ?? null,
+        heapKB: a.heapGrowthMeasuredKB?.mean ?? null,
         evtPerSec: a.eventsPerSecond?.mean ?? null,
         recorded: a.recordedEvents,
         lost: a.lostEvents,
@@ -574,12 +699,26 @@ describe("IV1-B — Integrated Performance Benchmark", () => {
       console.table(summaryRows);
       console.log("IV1B_DATASET_JSON=" + JSON.stringify({ path: join(OUT_DIR, "dataset.raw.json"), runs: runs.length, aggregates: aggregates.length }));
 
-      expect(runs.length).toBe(POPULATIONS.length * CONFIGS.length * SEEDS.length);
+      const expectedRuns = protocolPopulations.length * CONFIGS.length * SEEDS.length;
+      expect(runs.length).toBe(expectedRuns);
+      const keys = runs.map((r) => `${r.population}:${r.config}:${r.seed}`);
+      expect(new Set(keys).size).toBe(keys.length);
       for (const run of runs) {
         expect(run.tickMs.length).toBe(TICKS);
         expect(run.renderMs.length).toBe(TICKS);
-        expect(Number.isFinite(run.wallMs)).toBe(true);
-        if (run.events) expect(run.events.recorded).toBeGreaterThanOrEqual(0);
+        expect(run.measuredTicks).toBe(TICKS);
+        expect(Number.isFinite(run.measuredWallMs)).toBe(true);
+        expect(Number.isFinite(run.measuredCpuMs)).toBe(true);
+        // I riferimenti temporali devono essere successivi al warm-up.
+        expect(run.warmup.wallMs).toBeGreaterThan(0);
+        expect(run.measuredWallMs).toBeGreaterThan(0);
+        expect(run.totals.wallMs).toBeCloseTo(run.warmup.wallMs + run.measuredWallMs, 1);
+        if (run.events) {
+          expect(run.events.recorded).toBeGreaterThanOrEqual(0);
+          expect(run.events.measuredTicks).toBe(TICKS);
+          // Il totale dell'esecuzione deve contenere integralmente il delta misurato.
+          expect(run.totals.eventsRecorded ?? 0).toBeGreaterThanOrEqual(run.events.recorded);
+        }
       }
     },
     3_600_000,

@@ -27,7 +27,22 @@ Nessuna logica biologica o di rendering è stata modificata per migliorare i ris
 
 **Ordine di esecuzione:** ruotato per seed — per il seed all'indice `k` l'ordine è `CONFIGS[(i + k) % 4]`. Ogni configurazione occupa quindi ciascuna posizione nel processo una volta su 4 seed, bilanciando effetti JIT/GC/thermal. Le configurazioni non vengono mai eseguite tutte in blocco.
 
-**Tick:** 5 di warm-up (esclusi) + 20 misurati per ogni run. Warm-up e misurazione usano la stessa `World`, ma solo i secondi alimentano il dataset. `ticksPerSecond` è calcolato sul solo tempo di misura (non include il warm-up).
+**Tick:** 5 di warm-up (esclusi) + 20 misurati per ogni run. Warm-up e misurazione usano la stessa `World`, ma solo i secondi alimentano le metriche pubblicate.
+
+**Finestre esplicite (R1):** i riferimenti di tempo (`performance.now`), CPU (`process.cpuUsage`) ed heap (`process.memoryUsage`) vengono acquisiti **dopo** il warm-up. Ogni run registra:
+
+| Campo | Finestra |
+|---|---|
+| `tickMs`, `frameBuildMs`, `syncMs`, `renderMs`, `heapKB` | solo i 20 tick misurati |
+| `measuredWallMs` | dopo il warm-up, fino dopo il flush finale |
+| `tickLoopWallMs` | solo il loop dei 20 tick, senza flush finale |
+| `measuredCpuMs` | dopo il warm-up, fino dopo il flush finale |
+| `heapAtWarmupEndKB`, `heapAfterMeasuredKB`, `heapGrowthMeasuredKB` | finestra misurata |
+| `events.*` | delta dei contatori sink tra fine warm-up e fine finestra misurata |
+| `warmup.*` | 5 tick di warm-up, tenuti separati e mai uniti alle metriche di cui sopra |
+| `totals.*` | intera esecuzione (warm-up + misurazione), solo per controllo |
+
+`ticksPerSecond` usa `measuredWallMs`. Il vecchio dataset v1 è conservato come `dataset.raw.v1.json`: in esso `wallMs`, `cpuMs` e `heapGrowthKB` includevano il warm-up e i contatori evento non erano separati.
 
 **Dimensione pianeta** (costante per popolazione, identica nelle 4 configurazioni): 64², 96², 160², 224², 288², 400².
 
@@ -64,14 +79,15 @@ new InMemoryEventSink({
 })
 ```
 
-`measuringWriter` è un contatore di batch/bytes con cronometro: non scrive su disco, così il costo di I/O non maschera quello della raccolta eventi. È infrastruttura di misurazione, documentata e isolata.
+`measuringWriter` è un contatore di batch/bytes con cronometro: **non scrive su disco**. `throughBatch` scorre gli eventi e ne conta le proprietà; `bytes` è un conteggio sintetico di campioni, non byte serializzati. I valori `flushMs` e `eventsPerSecond` misurano quindi il costo di elaborazione in memoria del writer sintetico, **non un throughput di persistenza reale**. I/O su disco, fsync e buffering del sistema operativo non sono stati misurati.
 
 **Nota sul buffer (dati mancanti / stima):** con `releaseAfterFlush: true` gli eventi flushati vengono rilasciati, quindi il buffer finale non è serializzabile. La profondità massima del buffer è misurata via `summary().retained` campionato a ogni tick; `bufferBytes` è una **stima** (`retainedMax × 582 B/evento`, dove 582 B/evento è la media misurata da E2.3.1 nel report N.9) ed è marcato come tale nel dataset (`bufferBytesIsEstimate: true`). La configurazione non rilasciata (`releaseAfterFlush: false`) è stata provata in calibrazione: 25 MB di JSONL a 100 organismi e 63 MB a 500 organismi in soli 3 tick, con crescita lineare che porterebbe a OOM a 10 000 organismi — quindi non è usata nella matrice completa. Questo vincolo è riportato come limite ambientale, non come risultato di scala.
 
 ## 5. Metriche
 
-- **Performance:** tempo/tick (media, mediana, P95, P99, min, max, dev.std), tick/s, tempo di `buildRenderFrame`, di `syncFrame`, di `updateCreatureInstances`, CPU utente+sistema (`process.cpuUsage`), heapUsed prima/dopo/picco, pendenza della crescita heap, RSS finale.
-- **Observability:** eventi tentati/s, registrati, persi (non-critici + critici + tipi disabilitati), sampler, flush (ms e numero batch), profondità massima del buffer (misurata), byte JSONL dei buffer (**stima**), overhead vs configurazioni OFF.
+- **Performance (finestra misurata):** tempo/tick (media, mediana, P95, P99, min, max, dev.std), tick/s, tempo di `buildRenderFrame`, di `syncFrame`, di `updateCreatureInstances`, CPU utente+sistema, heapUsed a inizio/fine/picco, pendenza della crescita heap, RSS finale. Warm-up e totali sono campi separati.
+- **Observability (finestra misurata):** eventi tentati, registrati, registrati/tick, eventi/s (denominatore `measuredWallMs`), persi (non-critici + critici + tipi disabilitati), sampler, flush (ms e numero batch, writer sintetico), profondità massima del buffer (**misurata**), byte buffer (**stima** `retainedMax × 582 B/evento`), overhead vs configurazioni OFF.
+- **Costo per evento (R1):** `(tickMs[observability] − tickMs[baseline]) × 1000 / eventiRegistratiPerTick`. Numeratore e denominatore appartengono alla stessa popolazione, agli stessi seed e alla stessa finestra misurata. Il totale degli eventi va diviso per `seed × tick misurati` prima di essere usato come denominatore.
 - **Rendering:** organismi aggiornati/saltati/cullati, LOD near/far, `droppedParts`, costo adaptive = `renderMs(rendering) − renderMs(baseline)`.
 
 ## 6. Ambiente
@@ -91,3 +107,13 @@ $env:VITE_CONFIG_NATIVE_IGNORE_WARNING = "true"
 ```
 
 Override facoltativi: `IV1B_POPULATIONS`, `IV1B_SEEDS`, `IV1B_TICKS`, `IV1B_WARMUP_TICKS`, `IV1B_OUT`.
+
+Se una matrice viene interrotta (ad esempio per timeout dell'ambiente), è possibile riprenderla senza perdere i run già scritti:
+
+```powershell
+$env:IV1B_RESUME = "1"
+$env:IV1B_POPULATIONS = "10000"   # sole popolazioni mancanti
+.\scripts\run_iv1b.ps1
+```
+
+`IV1B_RESUME=1` richiede un dataset v2 esistente, carica i run precedenti, verifica l'assenza di duplicati `(popolazione, configurazione, seed)` e riscrive il dataset con l'unione completa. Nella sessione R1 la prima esecuzione è stata interrotta dopo 100 run (5 popolazioni) e la popolazione 10 000 è stata completata con questa procedura; i log `r1-benchmark.log` e `r1-resume.log` documentano le due fasi.

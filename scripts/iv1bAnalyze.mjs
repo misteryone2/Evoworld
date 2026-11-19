@@ -12,8 +12,11 @@ const dataset = JSON.parse(readFileSync(input, "utf8"));
 const { populations, configs, seeds } = dataset.protocol;
 const aggs = dataset.aggregates;
 const get = (pop, cfg) => aggs.find((a) => a.population === pop && a.config === cfg);
-// wallMs grezzo include il warm-up: ricostruiamo il solo tempo misurato dai run.
+// R1: la finestra misurata e' esplicita nel dataset v2; per compatibilita' con
+// il v1 si accetta il fallback a measuredWallMs dei singoli run.
 const measuredWall = (pop, cfg) => {
+  const agg = get(pop, cfg);
+  if (agg?.measuredWall?.mean != null) return agg.measuredWall.mean;
   const xs = dataset.runs.filter((r) => r.population === pop && r.config === cfg).map((r) => r.measuredWallMs ?? r.wallMs);
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 };
@@ -66,19 +69,22 @@ const comparisons = populations.map((pop) => {
     events: {
       recorded: O.recordedEvents,
       lost: O.lostEvents,
+      measuredTicks: O.measuredTicks ?? dataset.protocol.measuredTicks,
+      recordedPerTick: O.recordedPerTick ?? null,
       perSecond: O.eventsPerSecond?.mean ?? null,
       flushMs: O.flushMs?.mean ?? null,
       bufferKB: O.bufferKB,
       integratedRecorded: I.recordedEvents,
       integratedLost: I.lostEvents,
+      integratedPerTick: I.recordedPerTick ?? null,
       integratedPerSecond: I.eventsPerSecond?.mean ?? null,
     },
     memory: {
-      heapGrowthKB: {
-        baseline: B.heapGrowthKB?.mean ?? null,
-        rendering: R.heapGrowthKB?.mean ?? null,
-        observability: O.heapGrowthKB?.mean ?? null,
-        integrated: I.heapGrowthKB?.mean ?? null,
+      heapGrowthMeasuredKB: {
+        baseline: B.heapGrowthMeasuredKB?.mean ?? B.heapGrowthKB?.mean ?? null,
+        rendering: R.heapGrowthMeasuredKB?.mean ?? R.heapGrowthKB?.mean ?? null,
+        observability: O.heapGrowthMeasuredKB?.mean ?? O.heapGrowthKB?.mean ?? null,
+        integrated: I.heapGrowthMeasuredKB?.mean ?? I.heapGrowthKB?.mean ?? null,
       },
       heapSlopeKBPerTick: {
         baseline: B.heapSlopeKBPerTick?.mean ?? null,
@@ -89,6 +95,26 @@ const comparisons = populations.map((pop) => {
     },
   };
 }).filter(Boolean);
+
+// --- R1: riconciliazione costo/evento ----------------------------------------
+// Numeratore: extra world.step() per tick (O - B), media sui 5 seed.
+// Denominatore: eventi registrati per tick nella STESSA cella (O), finestra misurata.
+const costPerEvent = comparisons.map((c) => {
+  const overheadMs = c.tickMs.observability - c.tickMs.baseline;
+  const perTick = c.events.recordedPerTick;
+  const totalTicks = (dataset.protocol.seeds?.length ?? 0) * (dataset.protocol.measuredTicks ?? 0);
+  const crossCheck = totalTicks > 0 ? c.events.recorded / totalTicks : null;
+  return {
+    population: c.population,
+    stepOverheadMs: overheadMs,
+    eventsRecordedMeasuredWindow: c.events.recorded,
+    measuredTicksPerSeed: c.events.measuredTicks,
+    totalMeasuredTicks: totalTicks,
+    eventsPerTick: perTick,
+    eventsPerTickCrossCheck: crossCheck,
+    microsecondsPerEvent: overheadMs != null && perTick ? (overheadMs * 1000) / perTick : null,
+  };
+});
 
 // --- esponente di scala (power law N^b) via regressione log-log ---------------
 function scaleExponent(values) {
@@ -105,24 +131,36 @@ function scaleExponent(values) {
 const scaling = Object.fromEntries(configs.map((cfg) => [cfg, {
   tickExponent: scaleExponent(populations.map((p) => get(p, cfg)?.tick?.mean ?? NaN)),
   renderExponent: scaleExponent(populations.map((p) => get(p, cfg)?.render?.mean ?? NaN)),
-  wallExponent: scaleExponent(populations.map((p) => get(p, cfg)?.wall?.mean ?? NaN)),
+  wallExponent: scaleExponent(populations.map((p) => get(p, cfg)?.measuredWall?.mean ?? get(p, cfg)?.wall?.mean ?? NaN)),
 }]));
 
 // --- verifica coerenza: le fasi non toccate dovrebbero essere uguali ---------
 const sanity = populations.map((pop) => {
-  const B = get(pop, "baseline"), R = get(pop, "rendering"), O = get(pop, "observability"), I = get(pop, "integrated");
+  const all = [get(pop, "baseline"), get(pop, "rendering"), get(pop, "observability"), get(pop, "integrated")].filter(Boolean);
+  if (!all.length) return null;
+  const spread = (key) => Math.max(...all.map((a) => a[key]?.mean ?? 0)) - Math.min(...all.map((a) => a[key]?.mean ?? 0));
   return {
     population: pop,
-    frameBuildSpreadMs: Math.max(...[B, R, O, I].map((a) => a.frameBuild?.mean ?? 0)) - Math.min(...[B, R, O, I].map((a) => a.frameBuild?.mean ?? 0)),
-    syncSpreadMs: Math.max(...[B, R, O, I].map((a) => a.sync?.mean ?? 0)) - Math.min(...[B, R, O, I].map((a) => a.sync?.mean ?? 0)),
-    populationSpread: Math.max(...[B, R, O, I].map((a) => a.initialPopulation ?? 0)) - Math.min(...[B, R, O, I].map((a) => a.initialPopulation ?? 0)),
+    frameBuildSpreadMs: spread("frameBuild"),
+    syncSpreadMs: spread("sync"),
+    populationSpread: Math.max(...all.map((a) => a.initialPopulation ?? 0)) - Math.min(...all.map((a) => a.initialPopulation ?? 0)),
   };
-});
+}).filter(Boolean);
 
 writeFileSync(join(outDir, "analysis.json"), JSON.stringify({
-  schema: "evoworld.iv1b.analysis.v1",
+  schema: "evoworld.iv1b.analysis.v2",
   source: "dataset.raw.json",
-  seeds, comparisons, scaling, sanity,
+  seeds,
+  metricWindows: dataset.protocol?.metricWindows ?? {
+    note: "dataset v1: solo tick e measuredWallMs esclusero il warm-up; il v2 misura esplicitamente tutte le finestre",
+  },
+  writer: dataset.protocol?.writer ?? "sintetico: nessun I/O su disco",
+  reconciliation: {
+    previousError: "Il report IV1-B divideva 36.300.058 eventi per 20 tick invece che per 5 seed x 20 tick = 100, ottenendo 363.001 eventi/tick e 6,4 us/evento.",
+    correction: "Il denominatore corretto e' il numero di tick misurati della stessa cella. Con 363.000,58 eventi/tick il costo e' ~1,26 us/evento; la finestra misurata v2 elimina anche il contributo del warm-up.",
+    costPerEvent,
+  },
+  comparisons, scaling, sanity,
 }, null, 2), "utf8");
 
 // --- TABLES.md ----------------------------------------------------------------
@@ -158,7 +196,9 @@ for (const c of comparisons) {
   L.push(`| ${c.population} | ${f(e.recorded, 0)} | ${f(e.lost, 0)} | ${f(e.perSecond, 0)} | ${f(e.flushMs)} | ${f(e.bufferKB, 1)} | ${f(drift)}× |`);
 }
 L.push("");
-L.push("> Il buffer è una **stima** (`retainedMax × 582 B/evento`); `summary().retained` è misurato, i byte no.");
+L.push("> Il buffer è una **stima** (`retainedMax × 582 B/evento`); `retainedMax` è misurato, i byte no.");
+L.push("");
+L.push("> `flush (ms)` misura il **writer sintetico**: throughBatch scorre gli eventi e conta le proprietà, senza scrittura su disco. Non è un throughput di persistenza reale.");
 L.push("");
 L.push("## 4. Memoria");
 L.push("");
@@ -166,7 +206,7 @@ L.push("| N | Δheap baseline (KB) | Δheap rendering | Δheap observability | �
 L.push("|---:|---:|---:|---:|---:|---:|---:|");
 for (const c of comparisons) {
   const m = c.memory;
-  L.push(`| ${c.population} | ${f(m.heapGrowthKB.baseline, 0)} | ${f(m.heapGrowthKB.rendering, 0)} | ${f(m.heapGrowthKB.observability, 0)} | ${f(m.heapGrowthKB.integrated, 0)} | ${f(m.heapSlopeKBPerTick.observability, 0)} | ${f(m.heapSlopeKBPerTick.integrated, 0)} |`);
+  L.push(`| ${c.population} | ${f(m.heapGrowthMeasuredKB.baseline, 0)} | ${f(m.heapGrowthMeasuredKB.rendering, 0)} | ${f(m.heapGrowthMeasuredKB.observability, 0)} | ${f(m.heapGrowthMeasuredKB.integrated, 0)} | ${f(m.heapSlopeKBPerTick.observability, 0)} | ${f(m.heapSlopeKBPerTick.integrated, 0)} |`);
 }
 L.push("");
 L.push(`> I delta heap grezzi includono effetti GC: valori negativi sono possibili e vanno letti come indicatori, non come conteggi di allocazione.`);
@@ -197,11 +237,25 @@ L.push("|---:|---|---:|---:|---:|---:|---:|");
 for (const pop of populations) {
   for (const cfg of configs) {
     const a = get(pop, cfg);
+    if (!a) continue;
     const w = measuredWall(pop, cfg);
     const step = a.tick?.mean ?? null;
     L.push(`| ${pop} | ${cfg} | ${f(step)} | ${f(a.frameBuild?.mean, 3)} | ${f(a.sync?.mean, 3)} | ${f(a.render?.mean)} | ${f(w)} |`);
   }
 }
+L.push("");
+
+L.push("## 8. Riconciliazione costo per evento (R1)");
+L.push("");
+L.push("Numeratore: extra `world.step()` per tick nella cella observability (`O − B`). Denominatore: eventi registrati per tick nella **stessa cella**, finestra misurata dopo warm-up.");
+L.push("");
+L.push("| N | overhead step (ms/tick) | eventi registrati (finestra misurata) | tick misurati totali | eventi/tick | us/evento |");
+L.push("|---:|---:|---:|---:|---:|---:|");
+for (const c of costPerEvent) {
+  L.push(`| ${c.population} | ${f(c.stepOverheadMs)} | ${f(c.eventsRecordedMeasuredWindow, 0)} | ${c.totalMeasuredTicks} | ${f(c.eventsPerTick, 0)} | ${f(c.microsecondsPerEvent, 3)} |`);
+}
+L.push("");
+L.push("> Correzione R1: il report IV1-B dichiarava 71 106 eventi/tick e 6,4 us/evento, valori non riproducibili dal dataset. Il denominatore corretto e' 5 seed x 20 tick = 100: con i contatori cumulativi v1 si ottengono 363 000,58 eventi/tick e 1,26 us/evento a 10 000. Il dataset v2 misura direttamente la finestra, rimuovendo anche il warm-up.");
 L.push("");
 
 writeFileSync(join(outDir, "TABLES.md"), L.join("\n"), "utf8");
