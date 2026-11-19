@@ -229,10 +229,12 @@ Override: `IV1B_POPULATIONS`, `IV1B_SEEDS`, `IV1B_TICKS`, `IV1B_WARMUP_TICKS`, `
 
 ## 13. Validazione
 
-- `npx tsc --noEmit --pretty false` → exit 0.
+- `npx tsc --noEmit --pretty false` → **exit 0**.
 - Suite focalizzata (E2.3.1 ×5 + G3.1): **56/56 test passati** sull'albero combinato.
 - Benchmark IV1-B: **1/1 test passato**, 120 run complete, nessuna eccezione, `flushErrors = 0`.
-- Lint e build: vedere il commit finale per gli esiti (lint ha warning pre-esistenti; `next build --webpack` richiesto per l'ambiente con `node_modules` junction).
+- `npm run lint` → **0 errori, 34 warning**: 33 pre-esistenti sul branch G3 e 1 (`observability.ts:796`) presente verbatim nel codice E2.3.1 importato. Nessun warning nei nuovi file di misurazione.
+- `npx next build --webpack` → **OK** (3 pagine statiche prerenderizzate). `--webpack` è obbligatorio in questo ambiente perché il default Turbopack fallisce con il junction `node_modules`.
+- Suite completa **non rieseguita** sull'albero combinato: i riferimenti storici (G3.1: 940 passati / 6 falliti pre-esistenti / 1 skippato; E2.3.1: 879 passati / 15 falliti pre-esistenti) vanno letti come contesto dei branch di partenza, non come risultato di questa sessione.
 - Nessun test modificato per far passare il benchmark; nessuna soglia allentata.
 
 ---
