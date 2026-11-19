@@ -31,6 +31,7 @@ import { computeSpeciesGenomeStats } from "../evolution/speciesAnalysis";
 import { TICKS_PER_YEAR, CHUNK_ACTIVATION_HALO } from "./constants";
 import { computeActiveChunkKeys } from "../planet/chunkActivity";
 import { RegionEstablishment } from "../ecology/regionEcology";
+import { NULL_EVENT_SINK, type EcologicalEventSink } from "../ecology/observability";
 
 /**
  * v1.2 — EXPERIMENTAL. Maximum extra per-tick death probability for an
@@ -98,6 +99,11 @@ export class World {
   private enableAdvancedGenome: boolean;
   /** Controllo neutro (esperimenti): i geni avanzati esistono ma non hanno effetto sul fenotipo. */
   private enableGeneEffects: boolean;
+  /**
+   * E2.3 — sink osservativo opzionale. Default no-op: il motore resta
+   * identico quando il logging è disabilitato. Nessun hook usa `this.rng`.
+   */
+  private eventSink: EcologicalEventSink = NULL_EVENT_SINK;
 
   constructor(
     config: PlanetConfig,
@@ -196,7 +202,7 @@ export class World {
       this.planet.chunkSize,
       CHUNK_ACTIVATION_HALO,
     );
-    this.planet.update(this.tick, activeChunks);
+    this.planet.update(this.tick, activeChunks, this.eventSink);
 
     // 2 & 3. metabolism + movement. Buckets are built once from
     // pre-movement positions and shared by every organism's behavioral bias
@@ -227,18 +233,52 @@ export class World {
     if (this.enableCollisions) resolveCollisions(this.organisms, this.planet);
 
     // 4. feeding (vegetation, weighted by 1 - carnivory)
-    feedOrganisms(this.organisms, this.planet, this.regionEstablishment ?? undefined);
+    feedOrganisms(this.organisms, this.planet, this.regionEstablishment ?? undefined, this.tick, this.eventSink);
 
     // 4b. predation (v0.3): carnivorous organisms may hunt nearby prey
-    const predationKills = huntPrey(this.organisms, this.planet, this.rng, this.tick, this.enableCollisions);
+    const predationKills = huntPrey(
+      this.organisms,
+      this.planet,
+      this.rng,
+      this.tick,
+      this.enableCollisions,
+      this.eventSink,
+    );
 
     // 5. death + removal (includes organisms killed by predation above)
     let deaths = 0;
     for (const o of this.organisms) {
       if (!o.alive) continue;
       if (isDying(o)) {
+        // E2.3 — cause dedotte dai predicati ESATTI usati da isDying().
+        // Nessuna causa inventata: se entrambi sono veri, vengono registrati entrambi.
+        const energyDeath = o.energy <= 0;
+        const ageDeath = o.age >= o.genome.lifespan;
+        const causes = [energyDeath ? "STARVATION" : null, ageDeath ? "OLD_AGE" : null].filter(
+          (c): c is string => c !== null,
+        );
         o.alive = false;
         deaths++;
+        this.eventSink.record({
+          type: "DEATH",
+          tick: this.tick,
+          entityIds: [o.id],
+          source: "simulation/core/world.ts:step:isDying",
+          correlationId: `death:natural:${this.tick}:${o.id}`,
+          payload: {
+            cause: causes.length ? causes.join("|") : "UNKNOWN",
+            causeCount: causes.length,
+            speciesId: o.speciesId,
+            age: o.age,
+            lifespan: o.genome.lifespan,
+            energy: o.energy,
+            energyDeath,
+            ageDeath,
+            positionX: o.position.x,
+            positionY: o.position.y,
+            settlementRisk: 0,
+          },
+        });
         continue;
       }
       // v1.2 — EXPERIMENTAL settlement risk: an organism living in a
@@ -257,6 +297,28 @@ export class World {
         if (settlementRisk > 0 && this.rng.chance(settlementRisk)) {
           o.alive = false;
           deaths++;
+          this.eventSink.record({
+            type: "DEATH",
+            tick: this.tick,
+            entityIds: [o.id],
+            source: "simulation/core/world.ts:step:settlementMortality",
+            correlationId: `death:settlement:${this.tick}:${o.id}`,
+            payload: {
+              cause: "ENVIRONMENT_SETTLEMENT",
+              causeCount: 1,
+              speciesId: o.speciesId,
+              age: o.age,
+              lifespan: o.genome.lifespan,
+              energy: o.energy,
+              positionX: o.position.x,
+              positionY: o.position.y,
+              settlementRisk,
+              regionKey: regionKey(
+                Math.round(o.position.x) % this.planet.width,
+                Math.round(o.position.y) % this.planet.height,
+              ),
+            },
+          });
         }
       }
     }
@@ -265,7 +327,16 @@ export class World {
     }
 
     // 6 & 7. reproduction + mutation (mate compatibility is genetic-distance-based)
-    const offspring = reproduceOrganisms(this.organisms, this.planet, this.rng, () => this.nextOrganismId++, this.enableCollisions, this.enableAdvancedGenome);
+    const offspring = reproduceOrganisms(
+      this.organisms,
+      this.planet,
+      this.rng,
+      () => this.nextOrganismId++,
+      this.enableCollisions,
+      this.enableAdvancedGenome,
+      this.tick,
+      this.eventSink,
+    );
     if (offspring.length > 0) this.organisms.push(...offspring);
 
     // 8a. species bookkeeping: population counts + extinction detection
@@ -281,6 +352,88 @@ export class World {
 
     // 8c. statistics
     this.lastStats = this.computeStats(offspring.length, deaths, predationKills);
+
+    // 8d. E2.3 — snapshot aggregati (livello B), mai mescolati con eventi individuali.
+    this.emitSnapshots();
+  }
+
+  /**
+   * E2.3 — osservazioni aggregate a intervalli regolari. Leggono solo stato
+   * già calcolato: nessun nuovo RNG, nessuna modifica del motore. La risorsa
+   * è limitata ai chunk materializzati (architettura lazy del pianeta): lo
+   * scope è dichiarato esplicitamente nel payload.
+   */
+  private emitSnapshots(): void {
+    const every = this.eventSink.snapshotEveryTicks;
+    if (!every || every <= 0 || this.tick % every !== 0) return;
+
+    const stats = this.lastStats;
+    let energySum = 0;
+    let ageSum = 0;
+    for (const o of this.organisms) {
+      energySum += o.energy;
+      ageSum += o.age;
+    }
+    const population = this.organisms.length;
+    this.eventSink.record({
+      type: "ECOSYSTEM_SNAPSHOT",
+      tick: this.tick,
+      entityIds: [],
+      source: "simulation/core/world.ts:emitSnapshots",
+      correlationId: `ecosystem:${this.tick}`,
+      payload: {
+        population,
+        speciesAlive: stats.speciesAlive,
+        speciesExtinct: stats.speciesExtinct,
+        speciesTotalEver: stats.speciesTotalEver,
+        births: stats.births,
+        deaths: stats.deaths,
+        predationKills: stats.predationKills,
+        meanEnergy: population > 0 ? energySum / population : 0,
+        meanAge: population > 0 ? ageSum / population : 0,
+        completedTicks: this.tick,
+        year: stats.year,
+        season: stats.season,
+      },
+    });
+
+    const chunks = this.planet.getMaterializedChunks();
+    let cellCount = 0;
+    let landCellCount = 0;
+    let totalVegetation = 0;
+    let minVegetation = Number.POSITIVE_INFINITY;
+    let maxVegetation = Number.NEGATIVE_INFINITY;
+    for (const chunk of chunks) {
+      for (const cell of chunk.cells) {
+        cellCount++;
+        if (cell.terrain === "ocean") continue;
+        landCellCount++;
+        totalVegetation += cell.vegetation;
+        minVegetation = Math.min(minVegetation, cell.vegetation);
+        maxVegetation = Math.max(maxVegetation, cell.vegetation);
+      }
+    }
+    if (landCellCount === 0) {
+      minVegetation = 0;
+      maxVegetation = 0;
+    }
+    this.eventSink.record({
+      type: "RESOURCE_SNAPSHOT",
+      tick: this.tick,
+      entityIds: [],
+      source: "simulation/core/world.ts:emitSnapshots",
+      correlationId: `resource:${this.tick}`,
+      payload: {
+        cellCount,
+        landCellCount,
+        meanVegetation: landCellCount > 0 ? totalVegetation / landCellCount : 0,
+        totalVegetation,
+        minVegetation,
+        maxVegetation,
+        materializedChunkCount: chunks.length,
+        scope: "materialized_chunks",
+      },
+    });
   }
 
   private computeStats(births: number, deaths: number, predationKills: number): SimulationStats {
@@ -306,6 +459,15 @@ export class World {
 
   getStats(): SimulationStats {
     return this.lastStats;
+  }
+
+  /**
+   * E2.3 — collega (o scollega, passando NULL_EVENT_SINK) un sink osservativo.
+   * Non modifica lo stato biologico: può essere chiamato in qualsiasi momento,
+   * anche su un World ricostruito da snapshot da una perturbazione.
+   */
+  setEventSink(sink: EcologicalEventSink): void {
+    this.eventSink = sink;
   }
 
   /** Full species genealogy (living and extinct), for the UI/albero evolutivo. */
@@ -366,6 +528,9 @@ export class World {
     world.enableDispersalCost = false;
     world.enableCollisions = true; // v1.9.1 — i mondi salvati riprendono con le collisioni, come uno nuovo
     world.regionEstablishment = null;
+    // E2.3 — il sink non fa parte dello stato biologico: un World ripristinato
+    // riparte senza osservatore finché il runner non lo ri-collega.
+    world.eventSink = NULL_EVENT_SINK;
     world.lastStats = world.computeStats(0, 0, 0);
     return world;
   }

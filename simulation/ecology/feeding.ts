@@ -4,6 +4,7 @@ import { environmentalFitness } from "../biology/environment";
 import { phenotypeOf } from "../biology/geneExpression";
 import { MAX_ENERGY } from "../biology/energy";
 import type { RegionEstablishment } from "./regionEcology";
+import { NULL_EVENT_SINK, type EcologicalEventSink } from "./observability";
 
 const ENERGY_PER_VEGETATION = 40;
 
@@ -104,7 +105,13 @@ function demandWeight(o: Organism): number {
   return o.genome.ext ? base * phenotypeOf(o.genome).grazingDemandFactor : base;
 }
 
-export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstablishment?: RegionEstablishment): void {
+export function feedOrganisms(
+  organisms: Organism[],
+  planet: Planet,
+  regionEstablishment?: RegionEstablishment,
+  tick = 0,
+  sink: EcologicalEventSink = NULL_EVENT_SINK,
+): void {
   // Group living organisms by the cell they currently occupy. v1.1 — the
   // cell itself (not just an index) is captured alongside its occupants:
   // with terrain now lazily chunked (see simulation/planet/planet.ts),
@@ -213,8 +220,42 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
       const rawGained = Math.min(rawCellGain, sustainableShare);
       // v1.11.0 — FIS-02 (efficienza digestiva) e FIS-01 (tetto di energia) dal fenotipo; neutro = invariato
       const phenotype = phenotypeOf(o.genome);
-      const gained = rawGained * environmentalFitness(o.genome, cell) * settlementEfficiency * phenotype.digestionFactor;
+      const fitness = environmentalFitness(o.genome, cell);
+      const gained = rawGained * fitness * settlementEfficiency * phenotype.digestionFactor;
+      // E2.3 — osservazione del guadagno energetico reale calcolato dal motore.
+      const energyBefore = o.energy;
+      const stockBefore = cell.vegetation;
       o.energy = Math.min(MAX_ENERGY * phenotype.energyCapFactor, o.energy + gained);
+      if (gained > 0) {
+        sink.record({
+          type: "RESOURCE_CONSUMPTION",
+          tick,
+          entityIds: [o.id],
+          source: "simulation/ecology/feeding.ts:feedOrganisms",
+          correlationId: `feed:${tick}:${key}:${o.id}`,
+          payload: {
+            organismId: o.id,
+            speciesId: o.speciesId,
+            cellX: x,
+            cellY: y,
+            regionKey: key,
+            energyGained: gained,
+            energyBefore,
+            energyAfter: o.energy,
+            stockBefore,
+            demand,
+            demandShare,
+            cellShare,
+            rawCellGain,
+            sustainableShare,
+            environmentalFitness: fitness,
+            settlementEfficiency,
+            digestionFactor: phenotype.digestionFactor,
+            energyCapFactor: phenotype.energyCapFactor,
+            carnivory: o.genome.carnivory,
+          },
+        });
+      }
     }
   }
 
@@ -234,7 +275,31 @@ export function feedOrganisms(organisms: Organism[], planet: Planet, regionEstab
     const depletionPerCell = (demand * 0.05) / land.length;
     for (const { x: lx, y: ly } of land) {
       const landCell = planet.getCell(lx, ly);
+      const stockBefore = landCell.vegetation;
       landCell.vegetation = Math.max(0, landCell.vegetation - Math.min(landCell.vegetation, depletionPerCell));
+      // E2.3 — depletion reale di cella: quantità non attribuibile a un singolo
+      // organismo (il motore la distribuisce sull'area), quindi nessuna
+      // attribuzione individuale fabricata.
+      if (landCell.vegetation !== stockBefore) {
+        sink.record({
+          type: "RESOURCE_DEPLETION",
+          tick,
+          entityIds: [],
+          source: "simulation/ecology/feeding.ts:feedOrganisms",
+          correlationId: `deplete:${tick}:${key}:${lx},${ly}`,
+          payload: {
+            cellX: lx,
+            cellY: ly,
+            regionKey: key,
+            stockBefore,
+            stockAfter: landCell.vegetation,
+            quantityRemoved: stockBefore - landCell.vegetation,
+            demand,
+            landCellCount: land.length,
+            depletionPerCell,
+          },
+        });
+      }
     }
   }
 

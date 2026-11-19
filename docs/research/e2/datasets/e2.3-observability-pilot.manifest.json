@@ -1,0 +1,38 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.3-observability-pilot.json.gz",
+  "payloadSha256": "6b29d6f650ad48e3c85bc82099e1e09de9090a2d0eb8284a1ac124fd29061671",
+  "archiveSha256": "aaf7dff404a808f9462af10e427644ea261b4c2b1f5a8b6bafe6bf96a5d5d35b",
+  "phase": "E2.3-technical-pilot",
+  "experiment": "E2.3-OBSERVABILITY-PILOT",
+  "codeCommit": "6fedffd07faa29945ff5e1dfc257e460868994e5",
+  "workingTreeDirty": false,
+  "sourceSha256": "4fb82b49d41da3ce2ff7a5f82ac8a66ceb7fad6f387f7adc80aaf14b9e870a7a",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-19T12:03:01.538Z",
+  "scenarioIds": [
+    null
+  ],
+  "seeds": [
+    7,
+    11
+  ],
+  "totalRuns": 2,
+  "reproduction": {
+    "env": {
+      "E2_3_CODE_COMMIT": "6fedffd07faa29945ff5e1dfc257e460868994e5",
+      "E2_3_PILOT_SEEDS": "7,11",
+      "E2_3_PILOT_TICKS": "40",
+      "E2_3_PILOT_POPULATION": "60",
+      "E2_3_PILOT_WIDTH": "24",
+      "E2_3_PILOT_HEIGHT": "24",
+      "E2_3_PILOT_SNAPSHOT_EVERY": "10"
+    },
+    "command": "E2_3_CODE_COMMIT=6fedffd07faa29945ff5e1dfc257e460868994e5 E2_3_PILOT_SEEDS=7,11 E2_3_PILOT_TICKS=40 E2_3_PILOT_POPULATION=60 E2_3_PILOT_WIDTH=24 E2_3_PILOT_HEIGHT=24 E2_3_PILOT_SNAPSHOT_EVERY=10 npx vitest run --config vitest.experiment.config.ts scripts/e2_observability_pilot.experiment.ts"
+  },
+  "note": "E2.3: pilota tecnico di osservabilità; nessuna conclusione ecologica."
+}

@@ -1,0 +1,50 @@
+{
+  "schema": "evoworld.e2.manifest.v1",
+  "artifact": "e2.2-foodweb-iaaft-review.json.gz",
+  "payloadSha256": "d65c1dc8fe33025b991d1b577ccba13adfd9c77d492336410a0903ad1f538f03",
+  "archiveSha256": "828189b5d9a033ae342f1e534e758ad768292fb0b3fb5d5e81f20c27225c60c4",
+  "phase": "E2.2-foodweb-review",
+  "experiment": "E2.2 food web dynamics: sign-aware, lag-corrected inference with exact-length IAAFT",
+  "codeCommit": "23778c4e8a29f0bf2e2d968a9322b50b5907f2c8",
+  "workingTreeDirty": false,
+  "sourceSha256": "f1473528df31677d242cfc374300b2380f090ff08e3eafb4841d96079a645c6c",
+  "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe",
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "executedAt": "2026-11-18T14:40:00.000Z",
+  "scenarioIds": [
+    "S04_herbivore_monoculture",
+    "S05_carnivore_stress",
+    "S06_predator_prey_mixed"
+  ],
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "totalRuns": 120,
+  "reproduction": {
+    "env": {
+      "E2_FOODWEB_REANALYSIS_MAIN": "<raw>/e2.2-main.json",
+      "E2_FOODWEB_REANALYSIS_SEED": "<raw>/e2.2-seed.json",
+      "E2_FOODWEB_REANALYSIS_DURATION": "<raw>/e2.2-duration.json",
+      "E2_FOODWEB_REANALYSIS_SAMPLING": "<raw>/e2.2-sampling.json",
+      "E2_FOODWEB_REANALYSIS_EXECUTED_AT": "2026-11-18T14:10:00.000Z",
+      "E2_FOODWEB_SENS_EXECUTED_AT": "2026-11-18T14:20:00.000Z",
+      "E2_FOODWEB_VALIDATION_EXECUTED_AT": "2026-11-18T14:30:00.000Z"
+    },
+    "command": "# Original 120 executed runs are unchanged; see the e2.2-foodweb archive.\nE2_FOODWEB_REANALYSIS_* E2_FOODWEB_REANALYSIS_*_OUT=<review>/... npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_reanalysis.experiment.ts\nE2_FOODWEB_SENS_MAIN=<review>/main E2_FOODWEB_SENS_SEED=<review>/seed E2_FOODWEB_SENS_DURATION=<review>/duration E2_FOODWEB_SENS_SAMPLING=<review>/sampling E2_FOODWEB_SENS_OUT=<review>/sensitivity.json npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_sensitivity.experiment.ts\nE2_FOODWEB_VALIDATION_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_review_validation.experiment.ts\nE2_FOODWEB_DATASET_* npx vitest run --config vitest.experiment.config.ts scripts/e2_foodweb_dataset.experiment.ts"
+  },
+  "note": "Dataset E2.2 review P1: stesse 120 corse grezze, analisi rigenerata con IAAFT a lunghezza esatta (Cooley-Tukey/Rader), nessun padding/troncamento, errore spettrale verificato, criterio di convergenza e iterazioni registrati. Segno di r e del lag separati, p-value del massimo su tutti i lag, Fisher cross-seed. Tratti ≠ ruoli, kills ≠ mortalità totale, correlazione ≠ causalità."
+}
