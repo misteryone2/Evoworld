@@ -40,7 +40,7 @@ function mesh(capacity: number, colored = false): THREE.InstancedMesh {
   return m;
 }
 
-function makeRefs(detail: 1 | 2 | 3 = 3, withGeneric = false): SceneRefs {
+function makeRefs(detail: 1 | 2 | 3 = 3, withGeneric = false, withCamera = false): SceneRefs {
   const refs = {
     bodyMesh: mesh(CAP),
     headMesh: mesh(CAP),
@@ -68,7 +68,25 @@ function makeRefs(detail: 1 | 2 | 3 = 3, withGeneric = false): SceneRefs {
       refs.genericMeshes[key] = mesh(CAP * slots, key !== "eye");
     }
   }
+  if (withCamera) {
+    refs.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
+    refs.camera.position.set(0, 0, 24);
+    refs.camera.updateMatrixWorld(true);
+  }
   return refs;
+}
+
+/** Camera che lascia tutte le creature oltre la soglia LOD: scenario severely-far. */
+const FAR_CAMERA = new THREE.Vector3(1000, 0, 0);
+
+function enableAdaptive(refs: SceneRefs, farStride: number): void {
+  refs.adaptive = {
+    enabled: true,
+    nearDistanceScales: 30,
+    farStride,
+    cullBehindCamera: false,
+  };
+  refs.adaptiveState = null;
 }
 
 const mid = (k: keyof typeof TRAIT_RANGES) => (TRAIT_RANGES[k].min + TRAIT_RANGES[k].max) / 2;
@@ -160,6 +178,74 @@ interface Sample {
   heapDeltaKB: number | null;
 }
 
+interface PairedResult {
+  population: number;
+  baselineMedianMs: number;
+  adaptiveMedianMs: number;
+  deltaMs: number;
+  ratio: number;
+  baselineP95Ms: number;
+  adaptiveP95Ms: number;
+  updated: number | null;
+  skipped: number | null;
+  culled: number | null;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function percentile(values: number[], q: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+}
+
+/**
+ * Confronto A/B nella STESSA istanza di processo: baseline G3 e adattivo
+ * alternati a ogni iterazione, stesso frame, stessa sorgente, stessa camera.
+ * Riduce la varianza di macchina presente tra esecuzioni separate.
+ */
+function pairedComparison(n: number, farStride: number): PairedResult {
+  const baselineRefs = makeRefs(3, true, true);
+  const adaptiveRefs = makeRefs(3, true, true);
+  const frame = makeFrame(n, true);
+  const baselineSource = createRuntimeAnatomyRenderSource(`paired-baseline-${n}`);
+  baselineSource.syncFrame(frame);
+  const adaptiveSource = createRuntimeAnatomyRenderSource(`paired-adaptive-${n}`);
+  adaptiveSource.syncFrame(frame);
+  enableAdaptive(adaptiveRefs, farStride);
+  const runBaseline = () => updateCreatureInstances(baselineRefs, frame, null, null, 16, FAR_CAMERA, baselineSource);
+  const runAdaptive = () => updateCreatureInstances(adaptiveRefs, frame, null, null, 16, FAR_CAMERA, adaptiveSource);
+  for (let i = 0; i < WARMUP; i++) { runBaseline(); runAdaptive(); }
+  const baselineTimes: number[] = [];
+  const adaptiveTimes: number[] = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    if (i % 2 === 0) {
+      let t = performance.now(); runBaseline(); baselineTimes.push(performance.now() - t);
+      t = performance.now(); runAdaptive(); adaptiveTimes.push(performance.now() - t);
+    } else {
+      let t = performance.now(); runAdaptive(); adaptiveTimes.push(performance.now() - t);
+      t = performance.now(); runBaseline(); baselineTimes.push(performance.now() - t);
+    }
+  }
+  const baselineMedianMs = median(baselineTimes);
+  const adaptiveMedianMs = median(adaptiveTimes);
+  const stats = adaptiveRefs.creatureRenderStats;
+  return {
+    population: n,
+    baselineMedianMs: Number(baselineMedianMs.toFixed(3)),
+    adaptiveMedianMs: Number(adaptiveMedianMs.toFixed(3)),
+    deltaMs: Number((baselineMedianMs - adaptiveMedianMs).toFixed(3)),
+    ratio: Number((baselineMedianMs / Math.max(1e-6, adaptiveMedianMs)).toFixed(3)),
+    baselineP95Ms: Number(percentile(baselineTimes, 0.95).toFixed(3)),
+    adaptiveP95Ms: Number(percentile(adaptiveTimes, 0.95).toFixed(3)),
+    updated: stats?.updated ?? null,
+    skipped: stats?.skipped ?? null,
+    culled: stats?.culled ?? null,
+  };
+}
+
 const proc = (globalThis as { process?: { memoryUsage?: () => { heapUsed: number } } }).process;
 
 function sample(label: string, fn: () => void, warmup: number, samples: number): Sample {
@@ -221,6 +307,12 @@ function sceneMetrics(refs: SceneRefs, frame: RenderFrame): Record<string, numbe
     poolCapacity: stats?.poolCapacity ? JSON.stringify(stats.poolCapacity) : null,
     poolGrowth: stats?.poolGrowth?.length ?? 0,
     fallbackReasons: stats?.fallbackReasons?.join(";") || null,
+    adaptive: stats?.adaptive ? 1 : 0,
+    creaturesUpdated: stats?.updated ?? null,
+    creaturesSkipped: stats?.skipped ?? null,
+    creaturesCulled: stats?.culled ?? null,
+    lodNear: stats?.lodNear ?? null,
+    lodFar: stats?.lodFar ?? null,
     // Node non ha un WebGLRenderer: questi valori sono acquisiti nel QA browser.
     gpuBytes: null,
     fps: null,
@@ -262,6 +354,17 @@ describe("G3 — benchmark CPU (senza GPU)", () => {
         }, WARMUP, SAMPLES));
         metrics[`g2-optimized/${n}`] = sceneMetrics(optRefs, optFrame);
 
+        // G3.1 — percorso adattivo: stessa sorgente/frame, camera lontana, stride 4.
+        const adaptiveRefs = makeRefs(3, true, true);
+        const adaptiveFrame = makeFrame(n, true);
+        const adaptiveSource = createRuntimeAnatomyRenderSource("bench-g3-adaptive");
+        adaptiveSource.syncFrame(adaptiveFrame);
+        enableAdaptive(adaptiveRefs, 4);
+        rows.push(sample(`updateCreatureInstances/g3-adaptive/${n}`, () => {
+          updateCreatureInstances(adaptiveRefs, adaptiveFrame, null, null, 16, FAR_CAMERA, adaptiveSource);
+        }, WARMUP, SAMPLES));
+        metrics[`g3-adaptive/${n}`] = sceneMetrics(adaptiveRefs, adaptiveFrame);
+
         // syncFrame separato: percorso caldo (stessi array) e rigenerazione (array MOR nuovi)
         rows.push(sample(`syncFrame/warm/${n}`, () => {
           optSource.syncFrame({ ...optFrame });
@@ -271,6 +374,21 @@ describe("G3 — benchmark CPU (senza GPU)", () => {
           optSource.syncFrame(regenerateFrame(optFrame, ++jitter));
         }, 2, 6));
       }
+
+      // A/B accoppiato: la tabella precedente è sequenziale, questa è
+      // interleaved nello stesso processo ed è il confronto da usare nel report.
+      const paired = POPULATIONS.map((n) => pairedComparison(n, 4));
+      console.table(paired.map((p) => ({
+        popolazione: p.population,
+        baseline_ms: p.baselineMedianMs,
+        adattivo_ms: p.adaptiveMedianMs,
+        delta_ms: p.deltaMs,
+        ratio: p.ratio,
+        baseline_p95: p.baselineP95Ms,
+        adattivo_p95: p.adaptiveP95Ms,
+        aggiornate: p.updated,
+        saltate: p.skipped,
+      })));
 
       const frame3000 = makeFrame(3000);
       rows.push(sample("buildCreatureVisualDescriptor/3000", () => {
@@ -314,6 +432,13 @@ describe("G3 — benchmark CPU (senza GPU)", () => {
           heapDeltaKB: r.heapDeltaKB,
         })),
         metrics,
+        paired,
+        environment: {
+          node: (proc as { version?: string } | undefined)?.version ?? null,
+          platform: (proc as { platform?: string } | undefined)?.platform ?? null,
+          gpu: null,
+          note: "CPU main-thread Node; FPS/upload GPU non misurabili; paired e' interleaved nello stesso processo.",
+        },
       }));
 
       for (const row of rows) {

@@ -5,7 +5,10 @@ import type { MutableHeading } from "../../../lib/creatureHeading";
 import type { VisualMotion } from "../../../lib/naturalMotion";
 import type { LivingState } from "../../../lib/livingBehavior";
 import type { CreatureAnatomy } from "../../../lib/creatureAnatomy";
-import type { CreatureAnatomyRenderSource, CreatureRenderPartKey } from "../../../lib/visual/anatomyRenderPlan";
+import type {
+  AnatomyRenderPlan, CreatureAnatomyRenderSource, CreatureRenderPartKey,
+} from "../../../lib/visual/anatomyRenderPlan";
+import type { AdaptiveRenderSettings, AdaptiveRenderState } from "../../../lib/adaptiveRender";
 
 export interface HeightmapSample {
   elevation: Float32Array;
@@ -39,6 +42,27 @@ export interface CreatureTrack extends MutableHeading {
   aVision: number;
   aEvasion: number;
   aHunting: number;
+  /** G3.1 — taglia/specie viste l'ultima volta (percorso legacy senza piano G2). */
+  aSize: number;
+  aSpecies: number;
+  // ---- G3.1 — stato solo grafico, usato dagli aggiornamenti adattivi ----
+  /** Piano usato l'ultima volta: un cambio di identità invalida i dati grafici. */
+  renderPlan: AnatomyRenderPlan | null;
+  /** Sorgente che ha fornito il piano (cambio sorgente = refresh). */
+  renderSource: CreatureAnatomyRenderSource | null;
+  /** Ultima classificazione: cambia LOD o visibilità => aggiornamento immediato. */
+  wasNear: boolean;
+  wasVisible: boolean;
+  /** G3.1 — gli slot sono già stati azzerati (evita riscritture per cull persistenti). */
+  slotZeroed: boolean;
+  /** Offset di partenza delle parti generiche nell'ultimo frame (cursori densi). */
+  gSegment: number;
+  gAppendage: number;
+  gEye: number;
+  /** Conteggio delle parti generiche scritte l'ultima volta. */
+  cSegment: number;
+  cAppendage: number;
+  cEye: number;
 }
 
 export interface SceneRefs {
@@ -94,6 +118,10 @@ export interface SceneRefs {
   genericSlotsPerCreature?: Partial<Record<CreatureRenderPartKey, number>>;
   /** Statistiche di rendering del frame, mutate in posto per evitare allocazioni. */
   creatureRenderStats?: CreatureRendererStats;
+  /** G3.1 — aggiornamenti adattivi: assenti o `enabled:false` = comportamento G3 invariato. */
+  adaptive?: AdaptiveRenderSettings | null;
+  /** G3.1 — stato interno dell'eventuale scheduler adattivo. */
+  adaptiveState?: AdaptiveRenderState | null;
 }
 
 export interface CreatureRendererStats {
@@ -112,4 +140,12 @@ export interface CreatureRendererStats {
   poolGrowth?: string[];
   /** G3 — parti che non hanno trovato slot: deve restare 0 per anatomie supportate. */
   droppedParts?: number;
+  /** G3.1 — true quando il frame è stato prodotto con aggiornamenti adattivi. */
+  adaptive?: boolean;
+  /** G3.1 — creature aggiornate, differite, cullate e classificate per LOD. */
+  updated?: number;
+  skipped?: number;
+  culled?: number;
+  lodNear?: number;
+  lodFar?: number;
 }

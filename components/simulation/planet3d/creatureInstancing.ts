@@ -18,6 +18,10 @@ import { bodyRadiusUnits } from "../../../simulation/core/scale";
 import { pushOutOfTrunks, type XY } from "../../../lib/trunkAvoid";
 import { projectToSphereInto, type SpherePoint } from "../../../lib/sphereProjection";
 import { computeRenderStride } from "../../../lib/renderSampling";
+import {
+  createAdaptiveState, farUpdateDue,
+  DEFAULT_CULL_MARGIN_UNITS, DEFAULT_FAR_STRIDE, DEFAULT_NEAR_DISTANCE_SCALES,
+} from "../../../lib/adaptiveRender";
 import { groundContains } from "../../../lib/localGround";
 import { AGGRESSION_VISIBLE_THRESHOLD, CONE_BASE_RADIUS, LEGS_PER_CREATURE, PLANET_RADIUS } from "./constants";
 import { restingRadius } from "./terrainSampling";
@@ -76,6 +80,8 @@ const GENERIC_KEYS = Object.keys(GENERIC_RENDER_SLOTS) as CreatureRenderPartKey[
 const Q_TIP_BACK = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 /** Rotates a cone so its tip points forward (+Z): the jaw. */
 const Q_TIP_FORWARD = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+// G3.1 — direzione della camera per il culling dietro il piano di imaging.
+const tmpCameraForward = new THREE.Vector3();
 
 /** Writes `parent * local(position, rotation, scale)` into `mesh` instance `index`. */
 function setPart(
@@ -218,6 +224,41 @@ function flagInstanceUpdates(mesh: THREE.InstancedMesh): void {
 }
 
 /**
+ * G3.1 — Azzera tutte le istanze di una creatura uscita dalla visuale. Serve
+ * perché i buffer sono persistenti: senza questo, le matrici del frame
+ * precedente resterebbero disegnate come "fantasmi". Nessun dato biologico
+ * viene toccato; gli slot sono quelli dell'ultimo frame della creatura.
+ */
+function zeroCreatureSlots(refs: SceneRefs, slot: number, track: CreatureTrack): void {
+  refs.bodyMesh.setMatrixAt(slot, ZERO_MATRIX);
+  refs.headMesh.setMatrixAt(slot, ZERO_MATRIX);
+  refs.shadowMesh.setMatrixAt(slot, ZERO_MATRIX);
+  if (refs.detail >= 2) {
+    refs.eyeMesh.setMatrixAt(slot * 2, ZERO_MATRIX);
+    refs.eyeMesh.setMatrixAt(slot * 2 + 1, ZERO_MATRIX);
+    refs.tailMesh.setMatrixAt(slot, ZERO_MATRIX);
+    refs.jawMesh.setMatrixAt(slot, ZERO_MATRIX);
+    for (let n = 0; n < LEGS_PER_CREATURE; n++) refs.legMesh.setMatrixAt(slot * LEGS_PER_CREATURE + n, ZERO_MATRIX);
+  }
+  if (refs.detail >= 3) {
+    for (let n = 0; n < 2; n++) refs.earMesh.setMatrixAt(slot * 2 + n, ZERO_MATRIX);
+    for (let n = 0; n < MAX_SPIKES; n++) refs.spikeMesh.setMatrixAt(slot * MAX_SPIKES + n, ZERO_MATRIX);
+  }
+  if (refs.genericMeshes) {
+    const ranges: readonly [CreatureRenderPartKey, number, number][] = [
+      ["segment", track.gSegment, track.cSegment],
+      ["appendage", track.gAppendage, track.cAppendage],
+      ["eye", track.gEye, track.cEye],
+    ];
+    for (const [key, start, count] of ranges) {
+      const mesh = refs.genericMeshes[key];
+      if (!mesh) continue;
+      for (let n = 0; n < count; n++) mesh.setMatrixAt(start + n, ZERO_MATRIX);
+    }
+  }
+}
+
+/**
  * v1.8.0 — Ogni InstancedMesh va esclusa dal frustum culling. Three.js ne calcola
  * la sfera di ingombro una volta sola, quando ha ancora zero istanze: resta una
  * sfera vuota al centro del pianeta. Dalla vista dall'alto il centro è
@@ -293,6 +334,32 @@ export function updateCreatureInstances(
     if (!stats.poolGrowth) stats.poolGrowth = [];
     else stats.poolGrowth.length = 0;
   }
+
+  // G3.1 — percorso adattivo OPT-IN: senza `refs.adaptive.enabled` questa
+  // funzione resta byte-per-byte equivalente al percorso G3.
+  const settings = refs.adaptive && refs.adaptive.enabled ? refs.adaptive : null;
+  const adaptiveOn = settings !== null;
+  const farStride = adaptiveOn ? Math.max(1, Math.min(16, Math.floor(settings!.farStride ?? DEFAULT_FAR_STRIDE))) : 1;
+  const nearDistance = adaptiveOn ? Math.max(1, settings!.nearDistanceScales ?? DEFAULT_NEAR_DISTANCE_SCALES) : 0;
+  const cullBehind = adaptiveOn && !!settings!.cullBehindCamera && !!refs.camera;
+  const cullMargin = settings?.cullMarginUnits ?? DEFAULT_CULL_MARGIN_UNITS;
+  const adaptiveState = refs.adaptiveState ?? (refs.adaptiveState = createAdaptiveState());
+  adaptiveState.frame++;
+  const viewKey = refs.camera ? refs.camera.aspect * 1000 + refs.camera.fov : 0;
+  const refreshAll = adaptiveState.detail !== refs.detail || adaptiveState.capacity !== refs.capacity
+    || adaptiveState.viewKey !== viewKey;
+  if (refreshAll) {
+    adaptiveState.detail = refs.detail;
+    adaptiveState.capacity = refs.capacity;
+    adaptiveState.viewKey = viewKey;
+  }
+  if (cullBehind) refs.camera.getWorldDirection(tmpCameraForward);
+  let updatedCount = 0;
+  let skippedCount = 0;
+  let culledCount = 0;
+  let nearCount = 0;
+  let farCount = 0;
+
   if (renderSource) configureGenericPools(refs, renderSource, stats);
   const {
     organismsX,
@@ -413,10 +480,89 @@ export function updateCreatureInstances(
       track.x = x;
       track.y = y;
     } else {
-      track = { motion: createVisualMotion(), living: createLivingState(id), x, y, hasHeading: false, hx: 0, hy: -1, phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0 };
+      track = {
+        motion: createVisualMotion(), living: createLivingState(id), x, y, hasHeading: false, hx: 0, hy: -1,
+        phase: 0, gen: 0, anatomy: null, aSpeed: 0, aCarnivory: 0, aVision: 0, aEvasion: 0, aHunting: 0,
+        aSize: 0, aSpecies: 0, renderPlan: null, renderSource: null, wasNear: false, wasVisible: false,
+        slotZeroed: false, gSegment: 0, gAppendage: 0, gEye: 0, cSegment: 0, cAppendage: 0, cEye: 0,
+      };
       refs.creatureTrack.set(id, track);
     }
     track.gen = generation;
+
+    // ---- G3.1 — decisione adattiva (solo grafica) ----
+    if (adaptiveOn) {
+      let near = true;
+      if (cameraPosition) {
+        const cameraDx = tmpPosition.x - cameraPosition.x;
+        const cameraDy = tmpPosition.y - cameraPosition.y;
+        const cameraDz = tmpPosition.z - cameraPosition.z;
+        const distanceInScales = Math.sqrt(cameraDx * cameraDx + cameraDy * cameraDy + cameraDz * cameraDz) / Math.max(1e-6, scaleI);
+        near = distanceInScales <= nearDistance;
+      }
+      if (near) nearCount++; else farCount++;
+
+      let visible = true;
+      if (cullBehind) {
+        const vx = tmpPosition.x - refs.camera.position.x;
+        const vy = tmpPosition.y - refs.camera.position.y;
+        const vz = tmpPosition.z - refs.camera.position.z;
+        visible = vx * tmpCameraForward.x + vy * tmpCameraForward.y + vz * tmpCameraForward.z > -cullMargin;
+      }
+
+      // Identity del piano: invalida subito i dati grafici se geni, MOR, specie,
+      // taglia o sorgente cambiano — anche per una creatura che verrebbe saltata.
+      const planCandidate = renderSource ? renderSource.planFor(id, frame.tick) : null;
+      const dirty = refreshAll
+        || refs.instanceOrganismId[writeIndex] !== id
+        || track.wasNear !== near
+        || track.wasVisible !== visible
+        || track.renderSource !== renderSource
+        || planCandidate !== track.renderPlan
+        || (!renderSource && (
+          organismsSize[i] !== track.aSize || organismsSpecies[i] !== track.aSpecies
+          || organismsSpeed[i] !== track.aSpeed || organismsCarnivory[i] !== track.aCarnivory
+          || organismsVision[i] !== track.aVision || organismsEvasion[i] !== track.aEvasion
+          || organismsHuntingSkill[i] !== track.aHunting));
+      const due = near || farUpdateDue(adaptiveState.frame, writeIndex, farStride);
+
+      if (!visible) {
+        // Il primo frame gli slot contengono matrici identità: vanno azzerati
+        // anche se la creatura non era stata disegnata prima.
+        if (!track.slotZeroed) {
+          zeroCreatureSlots(refs, writeIndex, track);
+          track.slotZeroed = true;
+        }
+        refs.instanceOrganismId[writeIndex] = 0;
+        genericCursors.segment += track.cSegment;
+        genericCursors.appendage += track.cAppendage;
+        genericCursors.eye += track.cEye;
+        track.wasVisible = false;
+        track.wasNear = near;
+        culledCount++;
+        writeIndex++;
+        continue;
+      }
+      if (!dirty && !due) {
+        // Nessun arretrato: il dato dell'ultimo aggiornamento resta nei buffer.
+        refs.instanceOrganismId[writeIndex] = id;
+        genericCursors.segment += track.cSegment;
+        genericCursors.appendage += track.cAppendage;
+        genericCursors.eye += track.cEye;
+        track.wasVisible = true;
+        track.wasNear = near;
+        track.slotZeroed = false;
+        skippedCount++;
+        writeIndex++;
+        continue;
+      }
+      track.wasVisible = true;
+      track.slotZeroed = false;
+      track.wasNear = near;
+      track.renderSource = renderSource;
+      track.renderPlan = planCandidate;
+    }
+
     const phase = track.phase;
     const ahead = projectToSphereInto(tmpAhead, drawX + (track.hasHeading ? track.hx : 0) * 0.5, drawY + (track.hasHeading ? track.hy : -1) * 0.5, planetWidth, planetHeight, restingR);
     tmpTangent.set(ahead.x - point.x, ahead.y - point.y, ahead.z - point.z);
@@ -444,7 +590,9 @@ export function updateCreatureInstances(
     const gHunting = organismsHuntingSkill[i];
     let plan: AnatomyRenderPlan | null = null;
     if (renderSource) {
-      const candidate: AnatomyRenderPlan | null = renderSource.planFor(id, frame.tick);
+      // G3.1 — in modalità adattiva il piano è già stato letto per la verifica
+      // di invalidazione: rileggerlo due volte per creatura sarebbe uno spreco.
+      const candidate: AnatomyRenderPlan | null = adaptiveOn ? track.renderPlan : renderSource.planFor(id, frame.tick);
       const usable = isUsableAnatomyRenderPlanCached(candidate);
       if (candidate && usable) {
         plan = candidate;
@@ -474,6 +622,10 @@ export function updateCreatureInstances(
       }
       anatomy = legacy;
       if (stats) stats.legacy++;
+    }
+    if (adaptiveOn) {
+      track.aSize = organismsSize[i];
+      track.aSpecies = organismsSpecies[i];
     }
 
     // sizeScale di G2 è una scala di rappresentazione: si applica una volta sola,
@@ -569,7 +721,20 @@ export function updateCreatureInstances(
     }
     // G-REV-02 — i pool generici G2 ricevono la stessa posa e lo stesso colore,
     // ma restano vuoti (e invisibili) finché non viene fornita una sorgente.
+    // G3.1 — memorizza l'intervallo scritto nei pool densi: serve per azzerare
+    // solo questa creatura se esce dalla visuale e per mantenere allineati i
+    // cursori delle creature saltate nei frame successivi.
+    if (adaptiveOn) {
+      track.gSegment = genericCursors.segment;
+      track.gAppendage = genericCursors.appendage;
+      track.gEye = genericCursors.eye;
+    }
     writeGenericParts(refs, plan?.parts ?? null, genericCursors, tmpCreatureMatrix, lift, tmpColor, genericActive, stats);
+    if (adaptiveOn) {
+      track.cSegment = genericCursors.segment - track.gSegment;
+      track.cAppendage = genericCursors.appendage - track.gAppendage;
+      track.cEye = genericCursors.eye - track.gEye;
+    }
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
     refs.headMesh.setColorAt(writeIndex, tmpColor);
     if (refs.detail >= 2) {
@@ -599,6 +764,7 @@ export function updateCreatureInstances(
 
     refs.instanceOrganismId[writeIndex] = id;
     writeIndex++;
+    if (adaptiveOn) updatedCount++;
   }
   // v1.9.0 — chi non è stato disegnato in questo frame esce dalla traccia (come prima), senza ricostruire la mappa.
   for (const [trackId, t] of refs.creatureTrack) {
@@ -629,8 +795,24 @@ export function updateCreatureInstances(
     flagInstanceUpdates(mesh);
   }
   if (stats) {
-    stats.drawn = writeIndex;
+    stats.drawn = adaptiveOn ? writeIndex - culledCount : writeIndex;
     stats.sourceReason = renderSource?.fallbackReason?.() ?? null;
+    if (adaptiveOn) {
+      stats.adaptive = true;
+      stats.updated = updatedCount;
+      stats.skipped = skippedCount;
+      stats.culled = culledCount;
+      stats.lodNear = nearCount;
+      stats.lodFar = farCount;
+    } else if (stats.adaptive) {
+      // Ritorno al percorso G3: i contatori adattivi non sono più validi.
+      stats.adaptive = false;
+      stats.updated = 0;
+      stats.skipped = 0;
+      stats.culled = 0;
+      stats.lodNear = 0;
+      stats.lodFar = 0;
+    }
   }
   // v1.10.5 (consolidamento) — quante creature sono state disegnate: chi chiama sa se c'è una posa viva da far proseguire (pausa).
   return writeIndex;

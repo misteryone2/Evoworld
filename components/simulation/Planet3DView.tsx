@@ -758,6 +758,11 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
       genericMeshes,
       genericSlotsPerCreature,
       creatureRenderStats: { drawn: 0, mapped: 0, legacy: 0, fallback: 0, unsupported: 0, fallbackReasons: [] },
+      // G3.1 — aggiornamenti adattivi: solo la rappresentazione grafica. Le
+      // creature vicine restano a 60 Hz; le lontane ruotano su 4 frame. Il
+      // culling dietro la camera evita scritture invisibili in terza persona.
+      adaptive: { enabled: true, nearDistanceScales: 55, farStride: 4, cullBehindCamera: true, cullMarginUnits: 4 },
+      adaptiveState: null,
     };
 
     // G3 — snapshot di QA in development: espose solo statistiche, non muta la scena.
@@ -774,6 +779,14 @@ export function Planet3DView({ frame, viewportFrame = null, onRequestViewport, s
             textures: renderer.info.memory.textures,
           },
           renderStats: { ...sceneRef.current?.creatureRenderStats },
+          adaptive: {
+            enabled: sceneRef.current?.adaptive?.enabled ?? false,
+            updated: sceneRef.current?.creatureRenderStats?.updated ?? null,
+            skipped: sceneRef.current?.creatureRenderStats?.skipped ?? null,
+            culled: sceneRef.current?.creatureRenderStats?.culled ?? null,
+            lodNear: sceneRef.current?.creatureRenderStats?.lodNear ?? null,
+            lodFar: sceneRef.current?.creatureRenderStats?.lodFar ?? null,
+          },
           anatomySource: runtimeAnatomySourceRef.current.stats(),
         }),
       };
