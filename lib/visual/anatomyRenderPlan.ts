@@ -97,6 +97,24 @@ export function isUsableAnatomyRenderPlan(value: unknown): boolean {
   return true;
 }
 
+/**
+ * G3 — i piani prodotti da `partsPlanFromAnatomyDescriptor` sono congelati e
+ * immutabili: validarli una sola volta evita, per ogni creatura e ogni frame,
+ * la costruzione di un array di 29 numeri e decine di callback `.every`.
+ * I piani esterni non congelati vengono invece rivalidati sempre, così una
+ * sorgente override che li muta non può aggirare il gate di sicurezza.
+ */
+const validatedPlans = new WeakMap<object, boolean>();
+export function isUsableAnatomyRenderPlanCached(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (!Object.isFrozen(value)) return isUsableAnatomyRenderPlan(value);
+  const cached = validatedPlans.get(value);
+  if (cached !== undefined) return cached;
+  const usable = isUsableAnatomyRenderPlan(value);
+  validatedPlans.set(value, usable);
+  return usable;
+}
+
 function geometryFinite(g: AnatomyRenderGeometry): boolean {
   const numbers = [
     g.bodyHalfWidth, g.bodyHalfHeight, g.bodyHalfLength, g.headRadius, g.headY, g.headZ,

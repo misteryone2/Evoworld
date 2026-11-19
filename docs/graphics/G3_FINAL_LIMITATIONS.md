@@ -2,7 +2,7 @@
 
 **Data:** 2026-11-18  
 **Branch:** `graphics/g3-renderer-integration` (da `graphics/g-final-consolidation` @ `27995b0`)  
-Questo documento elenca limiti noti, scelte di progetto e verifiche non eseguibili. Integra — senza sostituirli — `G_FINAL_KNOWN_LIMITATIONS.md` e i report G3.
+Questo documento elenca limiti noti, scelte di progetto e verifiche non eseguibili. Integra — senza sostituirli — `G_FINAL_KNOWN_LIMITATIONS.md` e i report G3. Aggiornamenti di questa sessione (cache, performance, pool, StatsPanel, benchmark fino a 10000) sono in `G3_CACHE_PERFORMANCE_STATS_REPORT.md`.
 
 ---
 
@@ -12,7 +12,7 @@ Questo documento elenca limiti noti, scelte di progetto e verifiche non eseguibi
 2. **Canale MOR minimo.** Il `RenderFrame` trasporta solo `bodyStature`, `furDensity`, `dermalArmor` e la maschera di presenza. Tutti gli altri tratti morfologici non sono disponibili al renderer senza estendere il contratto del frame.
 3. **Tetti dei pool.** `RENDER_POOL_LIMITS` (32 segmenti, 64 appendici, 16 occhi) è un limite dichiarato: oltre questi valori il piano diventa `unsupported` e la creatura usa il fallback legacy. Nessuna parte viene tagliata silenziosamente, ma le anatomie eccedenti non vengono disegnate con geometria G3.
 4. **Capacità iniziale ≠ tetto.** `GENERIC_RENDER_SLOTS` (6/12/2) è la capacità di partenza; la crescita con headroom 25% arrotondato a 64 aumenta la memoria CPU delle istanze (fino a ~13.7 MB nei proxy di benchmark a 3000 creature).
-5. **Costo per frame maggiore.** A parità di popolazione, G2 ottimizzato è più lento di G2 attuale (80.1 vs 69.5 ms mediani a 3000 creature). È il costo della fedeltà: tutte le parti anatomiche vengono emesse. Ogni ottimizzazione che tagliasse parti violerebbe il requisito di assenza di perdite silenziose.
+5. **Costo per frame maggiore (ridisimensionato).** Il documento storico riportava 80.1 vs 69.5 ms a 3000 creature. Dopo validazione memoizzata dei piani e layout denso dei pool, il benchmark riprodotto su questa macchina misura 31.2 ms per G3 ottimizzato e 24.5 ms per G2 attuale a 3000 (baseline pre-ottimizzazione: 65.2 e 53.8 ms). Il divario residuo è il costo della fedeltà: tutte le parti anatomiche vengono emesse. Ogni ottimizzazione che tagliasse parti violerebbe il requisito di assenza di perdite silenziose.
 6. **Fallback legacy.** Frame senza MOR, geni corrotti o piani fuori capacità ricadono sul rendering G1. È un comportamento dichiarato e misurabile (`renderStats.fallback`, `fallbackReasons`), non un errore.
 7. **Renderer non proprietario della biologia.** L’unica modifica sotto `simulation/**` è l’aggiunta di 26 righe in `renderFrame.ts` per copiare i tre valori MOR. Biologia, evoluzione, persistence, salvataggi e caricamenti sono invariati.
 8. **Snapshot QA solo dev.** `window.__EVOWORLD_G3__` è esposto solo in development; non è un’API pubblica e non va usato in produzione.
@@ -33,7 +33,7 @@ Questo documento elenca limiti noti, scelte di progetto e verifiche non eseguibi
 ## 3. Difetti pre-esistenti (non introdotti da G3)
 
 1. **Suite completa:** `7 failed | 911 passed | 1 skipped (919)`. La baseline G_FINAL era `11 failed | 889 passed | 1 skipped (901)`. I 7 fallimenti sono in `fauna180`, `hydrology`, `reproduction`, `settlementDefaults`, `vibeGenome` (biologia/simulazione). Nessuno riguarda il renderer. Non sono stati corretti per non alterare aspettative di test fuori dal percorso G3.
-2. **`StatsPanel.tsx:171` — `TypeError: value.toFixed is not a function`.** Comparando l’uscita dalla modalità immersiva con un organismo selezionato poi morto. `StatsPanel` non risulta modificato nel diff G3.
+2. **`StatsPanel` — `TypeError: value.toFixed is not a function` ( RISOLTO ).** Il riferimento storico a `StatsPanel.tsx:171` è obsoleto (il file ha 84 righe). La causa reale è `averageGenome.ext`, un oggetto `Record<string, number>` passato a `toFixed()`: il difetto è pre-esistente e indipendente dagli organismi morti. Ora `lib/formatAverageGenome.ts` converte i tratti base e i 20 geni estesi in righe numeriche; 4 test dedicati e QA browser confermano la correzione. Vedi il report A–I.
 3. **`NotFoundError: setPointerCapture`** durante la QA: deriva da eventi pointer sintetici senza pointer reale attivo. Non riprodotto con input umano.
 
 ---
@@ -44,7 +44,7 @@ Questo documento elenca limiti noti, scelte di progetto e verifiche non eseguibi
 - Mobile reale / emulazione viewport completa.
 - Profilazione CPU/GPU di Chromium, trace di rendering e misura FPS in scena reale.
 - Test di longevità oltre la sessione QA (nessun test di molte ore o migliaia di cicli di qualità).
-- Popolazioni superiori a 3000 nel benchmark e a 1217 nel browser.
+- Popolazioni superiori a 10000 nel benchmark (100/500/1500/3000/5000/10000 ora eseguiti) e oltre 86 organismi in browser.
 - Dispositivi con WebGL1-only o senza supporto `InstancedMesh` (la baseline G_FINAL già dichiarava requisiti WebGL2).
 
 ---

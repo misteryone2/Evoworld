@@ -29,6 +29,8 @@ interface CacheEntry {
   version: number;
   lastSeen: number;
   plan: AnatomyRenderPlan | null;
+  /** Motivo conservato anche per le voci unsupported riutilizzate. */
+  unsupportedReason: string | null;
 }
 
 export interface RuntimeAnatomySourceStats {
@@ -54,21 +56,65 @@ function mix(h: number, value: number): number {
   return Math.imul((h ^ (value | 0)) >>> 0, 16777619) >>> 0;
 }
 
-function quantize(value: number): number {
-  return Number.isFinite(value) ? Math.round(value * 4096) : -1;
+/**
+ * G3 cache correctness — hash dei bit Float32, non di un quantizzamento arbitrario.
+ * `generateAnatomyCached` quantizza internamente a 1e-3: usare 1/4096 qui poteva
+ * far collidere valori che producono descriptor diversi (e viceversa generare
+ * piani inutilmente). I bit esatti del Float32 sono la rappresentazione realmente
+ * consumata dai buffer del frame.
+ */
+const floatScratch = new Float32Array(1);
+const intScratch = new Uint32Array(floatScratch.buffer);
+
+function floatBits(value: number): number {
+  floatScratch[0] = value;
+  return intScratch[0];
 }
 
-/** Identità del dato anatomico: cambiando un gene MOR cambia la versione e il piano viene rigenerato. */
+/** Identità del dato anatomico: ogni parametro che entra nel piano deve essere nella versione. */
 function versionFor(frame: RenderFrame, i: number): number {
   let h = 2166136261;
   h = mix(h, frame.organismsId[i]);
   h = mix(h, frame.organismsSpecies ? frame.organismsSpecies[i] : 0);
-  h = mix(h, quantize(frame.organismsSize[i]));
+  h = mix(h, floatBits(frame.organismsSize[i]));
   const presence = frame.organismsMorphologyPresence ? frame.organismsMorphologyPresence[i] : 0;
   h = mix(h, presence);
-  if (presence & MORPH_PRESENCE_BODY_STATURE) h = mix(h, quantize(frame.organismsBodyStature![i]));
-  if (presence & MORPH_PRESENCE_FUR_DENSITY) h = mix(h, quantize(frame.organismsFurDensity![i]));
-  if (presence & MORPH_PRESENCE_DERMAL_ARMOR) h = mix(h, quantize(frame.organismsDermalArmor![i]));
+  if (presence & MORPH_PRESENCE_BODY_STATURE) h = mix(h, floatBits(frame.organismsBodyStature![i]));
+  if (presence & MORPH_PRESENCE_FUR_DENSITY) h = mix(h, floatBits(frame.organismsFurDensity![i]));
+  if (presence & MORPH_PRESENCE_DERMAL_ARMOR) h = mix(h, floatBits(frame.organismsDermalArmor![i]));
+  // `aggression` entra in partsPlanFromAnatomyDescriptor e quindi in colori/materiali:
+  // senza questo termine la carnivoria cambiata lasciava il piano vecchio (G3 P1).
+  h = mix(h, floatBits(frame.organismsCarnivory ? frame.organismsCarnivory[i] : 0));
+  return h >>> 0;
+}
+
+/**
+ * Firma dei soli array che influenzano il piano G2. O(n) senza allocazioni:
+ * rileva anche mutazioni in posto su buffer riutilizzati, che il controllo
+ * per reference non poteva vedere. I tratti legacy (speed/vision/evasione/...)
+ * NON sono inclusi: non entrano nel piano G2 e il percorso legacy li traccia già.
+ */
+function frameSignature(frame: RenderFrame): number {
+  let h = 2166136261;
+  const n = frame.organismsId.length;
+  h = mix(h, n);
+  const species = frame.organismsSpecies;
+  const size = frame.organismsSize;
+  const carnivory = frame.organismsCarnivory;
+  const presence = frame.organismsMorphologyPresence;
+  const stature = frame.organismsBodyStature;
+  const fur = frame.organismsFurDensity;
+  const armor = frame.organismsDermalArmor;
+  for (let i = 0; i < n; i++) {
+    h = mix(h, frame.organismsId[i]);
+    h = mix(h, species ? species[i] : 0);
+    h = mix(h, floatBits(size[i]));
+    h = mix(h, carnivory ? floatBits(carnivory[i]) : 0);
+    h = mix(h, presence ? presence[i] : 0);
+    if (stature) h = mix(h, floatBits(stature[i]));
+    if (fur) h = mix(h, floatBits(fur[i]));
+    if (armor) h = mix(h, floatBits(armor[i]));
+  }
   return h >>> 0;
 }
 
@@ -91,6 +137,7 @@ export function createRuntimeAnatomyRenderSource(id = "g3-runtime-anatomy"): Run
   let lastFur: Float32Array | null = null;
   let lastArmor: Float32Array | null = null;
   let lastPresence: Uint8Array | null = null;
+  let lastSignature = 0;
   let slotsValid = false;
   let fallbackReason: string | null = "no-g2-morphology";
 
@@ -125,25 +172,41 @@ export function createRuntimeAnatomyRenderSource(id = "g3-runtime-anatomy"): Run
 
     syncFrame(frame: RenderFrame | null): void {
       if (!frame) {
+        // Reset completo dell'identità: senza questo, risincronizzare lo stesso
+        // frame dopo un null rimaneva bloccati sul fallback (G3 P1).
         entries.clear();
         resetSlots();
         generation++;
+        lastFrame = null;
+        lastTick = -1;
+        lastLength = -1;
+        lastX = null;
+        lastIds = null;
+        lastStature = null;
+        lastFur = null;
+        lastArmor = null;
+        lastPresence = null;
+        lastSignature = 0;
         fallbackReason = "no-g2-morphology";
+        stats.generated = 0;
+        stats.reused = 0;
+        stats.pruned = 0;
+        stats.unsupported = 0;
+        stats.missing = 0;
+        stats.invalid = 0;
         stats.entries = 0;
         return;
       }
-      if (frame === lastFrame) return;
-      const presence = frame.organismsMorphologyPresence ?? null;
-      const sameArrays = lastTick === frame.tick && lastLength === frame.organismsId.length
-        && lastX === frame.organismsX && lastIds === frame.organismsId
+      // La firma viene calcolata su ogni chiamata: rileva mutazioni in posto e
+      // frame parzialmente ricostruiti con lo stesso tick/reference. È O(n) ma
+      // senza allocazioni: ~0,02 ms a 3000 organismi, molto sotto il costo del loop.
+      const signature = frameSignature(frame);
+      if (lastFrame && signature === lastSignature && lastLength === frame.organismsId.length
+        && lastTick === frame.tick && lastX === frame.organismsX && lastIds === frame.organismsId
         && lastStature === (frame.organismsBodyStature ?? null)
         && lastFur === (frame.organismsFurDensity ?? null)
         && lastArmor === (frame.organismsDermalArmor ?? null)
-        && lastPresence === presence;
-      if (sameArrays) {
-        lastFrame = frame;
-        return;
-      }
+        && lastPresence === (frame.organismsMorphologyPresence ?? null)) return;
 
       generation++;
       lastFrame = frame;
@@ -154,7 +217,8 @@ export function createRuntimeAnatomyRenderSource(id = "g3-runtime-anatomy"): Run
       lastStature = frame.organismsBodyStature ?? null;
       lastFur = frame.organismsFurDensity ?? null;
       lastArmor = frame.organismsDermalArmor ?? null;
-      lastPresence = presence;
+      lastPresence = frame.organismsMorphologyPresence ?? null;
+      lastSignature = signature;
       resetSlots();
       stats.generated = 0;
       stats.reused = 0;
@@ -172,9 +236,15 @@ export function createRuntimeAnatomyRenderSource(id = "g3-runtime-anatomy"): Run
       }
 
       const n = frame.organismsId.length;
+      const presence = frame.organismsMorphologyPresence ?? null;
       for (let i = 0; i < n; i++) {
         const id = frame.organismsId[i];
         const bits = presence![i];
+        if (!Number.isFinite(frame.organismsSize[i])) {
+          stats.invalid++;
+          if (!fallbackReason) fallbackReason = "invalid-size-data";
+          continue;
+        }
         if (bits === 0) {
           stats.missing++;
           if (!fallbackReason) fallbackReason = "missing-morphology-genes";
@@ -212,17 +282,24 @@ export function createRuntimeAnatomyRenderSource(id = "g3-runtime-anatomy"): Run
             origin: "seeded-speculative",
           });
           const plan = partsPlanFromAnatomyDescriptor(descriptor, frame.organismsCarnivory[i]);
-          entry = { version, lastSeen: generation, plan: plan.support.supported ? plan : null };
+          entry = {
+            version,
+            lastSeen: generation,
+            plan: plan.support.supported ? plan : null,
+            unsupportedReason: plan.support.supported ? null : (plan.fallbackReason ?? "unsupported-anatomy"),
+          };
           entries.set(id, entry);
           stats.generated++;
-          if (!entry.plan) {
-            stats.unsupported++;
-            if (!fallbackReason) fallbackReason = plan.fallbackReason ?? "unsupported-anatomy";
-          }
         }
 
         const plan = entry.plan;
-        if (!plan) continue;
+        if (!plan) {
+          // Diagnostica stabile anche quando la voce unsupported viene riutilizzata:
+          // altrimenti il renderer vedeva solo "no-render-plan".
+          stats.unsupported++;
+          if (!fallbackReason) fallbackReason = entry.unsupportedReason ?? "unsupported-anatomy";
+          continue;
+        }
         if (plan.requiredSlots.segment > maxSlots.segment) maxSlots.segment = plan.requiredSlots.segment;
         if (plan.requiredSlots.appendage > maxSlots.appendage) maxSlots.appendage = plan.requiredSlots.appendage;
         if (plan.requiredSlots.eye > maxSlots.eye) maxSlots.eye = plan.requiredSlots.eye;

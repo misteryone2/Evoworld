@@ -205,18 +205,22 @@ describe("G-REV-02 — integrazione G2 nel renderer 3D", () => {
     updateCreatureInstances(refs, f);
 
     expect(refs.bodyMesh.count).toBe(2);
-    const segmentSlots = GENERIC_RENDER_SLOTS.segment;
-    expect(refs.genericMeshes?.segment?.count).toBe(2 * segmentSlots);
-    expect(refs.genericMeshes?.appendage?.count).toBe(2 * GENERIC_RENDER_SLOTS.appendage);
-    expect(refs.genericMeshes?.eye?.count).toBe(2 * GENERIC_RENDER_SLOTS.eye);
+    // Layout denso G3: `count` copre solo le parti reali, non la capacità
+    // riservata del pool. Il tetto GENERIC_RENDER_SLOTS resta la capacità iniziale.
+    const perKey = (key: "segment" | "appendage" | "eye") =>
+      (plan.parts ?? []).filter((part) => part.key === key && part.visible).length * 2;
+    expect(refs.genericMeshes?.segment?.count).toBe(perKey("segment"));
+    expect(refs.genericMeshes?.appendage?.count).toBe(perKey("appendage"));
+    expect(refs.genericMeshes?.eye?.count).toBe(perKey("eye"));
     expect(refs.genericMeshes?.segment?.visible).toBe(true);
+    expect(refs.genericMeshes?.segment!.instanceMatrix.count).toBeGreaterThanOrEqual(GENERIC_RENDER_SLOTS.segment * 2);
 
-    // La seconda creatura usa gli slot 6..; gli slot inutilizzati restano a matrice zero.
-    expect(Math.abs(det(refs.genericMeshes!.segment!, 6))).toBeGreaterThan(0);
-    expect(det(refs.genericMeshes!.segment!, 9)).toBe(0);
+    // La seconda creatura inizia subito dopo le parti reali della prima.
+    const perCreatureSegments = plan.requiredSlots.segment;
+    expect(perCreatureSegments).toBeGreaterThan(0);
+    expect(Math.abs(det(refs.genericMeshes!.segment!, perCreatureSegments))).toBeGreaterThan(0);
     expect(refs.instanceOrganismId[0]).toBe(42);
     expect(refs.instanceOrganismId[1]).toBe(43);
-    expect(refs.instanceOrganismId[Math.floor(6 / segmentSlots)]).toBe(43);
 
     // Rimuovendo la sorgente i pool generici spariscono senza toccare i mesh legacy.
     refs.renderSource = null;

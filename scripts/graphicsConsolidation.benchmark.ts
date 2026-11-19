@@ -26,7 +26,7 @@ import type { RenderFrame } from "../types";
  * li acquisisce da `renderer.info` tramite `window.__EVOWORLD_G3__.snapshot()`.
  */
 
-const POPULATIONS = [100, 500, 1500, 3000];
+const POPULATIONS = [100, 500, 1500, 3000, 5000, 10000];
 const WARMUP = 20;
 const SAMPLES = 80;
 const MAX_SPIKES = 3;
@@ -151,27 +151,41 @@ function makeG2Source(frame: RenderFrame): CreatureAnatomyRenderSource {
   return Object.freeze({ id: "bench-g2-source", planFor: (organismId: number) => plans.get(organismId) ?? null });
 }
 
-interface Sample { label: string; medianMs: number; p95Ms: number; meanMs: number }
+interface Sample {
+  label: string;
+  medianMs: number;
+  p95Ms: number;
+  p99Ms: number;
+  meanMs: number;
+  heapDeltaKB: number | null;
+}
+
+const proc = (globalThis as { process?: { memoryUsage?: () => { heapUsed: number } } }).process;
 
 function sample(label: string, fn: () => void, warmup: number, samples: number): Sample {
   for (let i = 0; i < warmup; i++) fn();
+  const heapBefore = proc?.memoryUsage?.().heapUsed ?? null;
   const times: number[] = [];
   for (let i = 0; i < samples; i++) {
     const t0 = performance.now();
     fn();
     times.push(performance.now() - t0);
   }
+  const heapAfter = proc?.memoryUsage?.().heapUsed ?? null;
   times.sort((a, b) => a - b);
   return {
     label,
     medianMs: times[Math.floor(times.length / 2)],
     p95Ms: times[Math.min(times.length - 1, Math.floor(times.length * 0.95))],
+    p99Ms: times[Math.min(times.length - 1, Math.floor(times.length * 0.99))],
     meanMs: times.reduce((a, b) => a + b, 0) / times.length,
+    // Delta heap grezzo sull'intera serie: include GC e va letto come indicatore, non come conteggio di allocazioni.
+    heapDeltaKB: heapBefore !== null && heapAfter !== null ? Number(((heapAfter - heapBefore) / 1024).toFixed(1)) : null,
   };
 }
 
 /** Metriche statiche della scena dopo un aggiornamento: proxy main-thread dei costi GPU. */
-function sceneMetrics(refs: SceneRefs, frame: RenderFrame): Record<string, number | null> {
+function sceneMetrics(refs: SceneRefs, frame: RenderFrame): Record<string, number | string | null> {
   const meshes = [
     refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh,
     refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh,
@@ -192,23 +206,34 @@ function sceneMetrics(refs: SceneRefs, frame: RenderFrame): Record<string, numbe
     const array = frame[key];
     if (array) cpuBytes += (array as ArrayLike<number> & { byteLength?: number }).byteLength ?? 0;
   }
+  const stats = refs.creatureRenderStats;
   return {
     drawCalls: meshes.length,
     geometries: geometries.size,
     materials: materials.size,
+    instances: meshes.reduce((sum, m) => sum + m.count, 0),
     cpuKB: Number((cpuBytes / 1024).toFixed(1)),
+    creaturesDrawn: stats?.drawn ?? null,
+    creaturesMapped: stats?.mapped ?? null,
+    creaturesLegacy: stats?.legacy ?? null,
+    creaturesFallback: stats?.fallback ?? null,
+    droppedParts: stats?.droppedParts ?? null,
+    poolCapacity: stats?.poolCapacity ? JSON.stringify(stats.poolCapacity) : null,
+    poolGrowth: stats?.poolGrowth?.length ?? 0,
+    fallbackReasons: stats?.fallbackReasons?.join(";") || null,
     // Node non ha un WebGLRenderer: questi valori sono acquisiti nel QA browser.
     gpuBytes: null,
     fps: null,
+    frameTimeMs: null,
   };
 }
 
 describe("G3 — benchmark CPU (senza GPU)", () => {
   it(
-    "confronta legacy, G2 attuale e G2 ottimizzato su 100/500/1500/3000 organismi",
+    "confronta legacy, G2 attuale e G2 ottimizzato su 100/500/1500/3000/5000/10000 organismi",
     () => {
       const rows: Sample[] = [];
-      const metrics: Record<string, Record<string, number | null>> = {};
+      const metrics: Record<string, Record<string, number | string | null>> = {};
       for (const n of POPULATIONS) {
         // legacy — nessuna sorgente G2
         const legacyRefs = makeRefs();
@@ -271,7 +296,9 @@ describe("G3 — benchmark CPU (senza GPU)", () => {
         misura: r.label,
         mediana_ms: r.medianMs.toFixed(3),
         p95_ms: r.p95Ms.toFixed(3),
+        p99_ms: r.p99Ms.toFixed(3),
         media_ms: r.meanMs.toFixed(3),
+        heap_delta_kb: r.heapDeltaKB,
       })));
       console.table(Object.entries(metrics).map(([scenario, m]) => ({
         scenario, ...m,
@@ -282,7 +309,9 @@ describe("G3 — benchmark CPU (senza GPU)", () => {
           label: r.label,
           medianMs: Number(r.medianMs.toFixed(3)),
           p95Ms: Number(r.p95Ms.toFixed(3)),
+          p99Ms: Number(r.p99Ms.toFixed(3)),
           meanMs: Number(r.meanMs.toFixed(3)),
+          heapDeltaKB: r.heapDeltaKB,
         })),
         metrics,
       }));

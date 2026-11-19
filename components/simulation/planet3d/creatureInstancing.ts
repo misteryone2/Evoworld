@@ -3,7 +3,7 @@ import type { RenderFrame } from "../../../types";
 import { speciesHue } from "../../../lib/speciesColor";
 import { hueShiftFromVariation, stableVariation01 } from "../../../lib/visual/creatureVisualDescriptor";
 import {
-  GENERIC_RENDER_SLOTS, RENDER_POOL_LIMITS, isUsableAnatomyRenderPlan,
+  GENERIC_RENDER_SLOTS, RENDER_POOL_LIMITS, isUsableAnatomyRenderPlanCached,
   type AnatomyRenderPlan, type CreatureAnatomyRenderSource, type CreaturePartInstance, type CreatureRenderPartKey,
 } from "../../../lib/visual/anatomyRenderPlan";
 import { computeCreatureAnatomy, MAX_SPIKES, type CreatureAnatomy } from "../../../lib/creatureAnatomy";
@@ -110,11 +110,6 @@ function commitPart(mesh: THREE.InstancedMesh, index: number, parent: THREE.Matr
 }
 
 // ---- G-REV-02: pool generici G2. Nessuna allocazione per parte/frame. ----
-function genericSlots(refs: SceneRefs, key: CreatureRenderPartKey): number {
-  const configured = refs.genericSlotsPerCreature?.[key];
-  return typeof configured === "number" && Number.isInteger(configured) && configured > 0 ? configured : GENERIC_RENDER_SLOTS[key];
-}
-
 /**
  * G3 — crescita controllata: il mesh viene sostituito solo quando la domanda
  * supera la capacità, con headroom del 25% arrotondato a 64 istanze. Geometria
@@ -166,44 +161,59 @@ function configureGenericPools(refs: SceneRefs, source: CreatureAnatomyRenderSou
   }
 }
 
-function clearGenericParts(refs: SceneRefs, creatureIndex: number): void {
-  if (!refs.genericMeshes) return;
-  for (const key of GENERIC_KEYS) {
-    const mesh = refs.genericMeshes[key];
-    if (!mesh) continue;
-    const slots = genericSlots(refs, key);
-    for (let s = 0; s < slots; s++) mesh.setMatrixAt(creatureIndex * slots + s, ZERO_MATRIX);
-  }
-}
+type GenericCursors = Record<CreatureRenderPartKey, number>;
 
+/**
+ * G3 — layout denso dei pool generici: le parti reali vengono scritte in
+ * sequenza da zero e `mesh.count` copre solo quelle scritte. Non serve più
+ * azzerare tutti gli slot di ogni creatura (fino a 112 matrici each): le
+ * istanze oltre `count` non vengono disegnate, quindi non c'è contaminazione
+ * tra anatomie diverse. L'ordine delle parti resta quello del piano, e ogni
+ * parte conserva posa, rotazione e colore propri: nessuna perdita di fedeltà.
+ */
 function writeGenericParts(
   refs: SceneRefs,
   parts: readonly CreaturePartInstance[] | null,
-  creatureIndex: number,
+  cursors: GenericCursors,
   parent: THREE.Matrix4,
   lift: number,
   color: THREE.Color,
   active: boolean,
   stats?: SceneRefs["creatureRenderStats"],
 ): void {
-  if (!refs.genericMeshes || !active) return;
-  clearGenericParts(refs, creatureIndex);
-  if (!parts) return;
+  if (!refs.genericMeshes || !active || !parts) return;
   for (const part of parts) {
     if (!part.visible) continue;
     const mesh = refs.genericMeshes[part.key];
     if (!mesh) continue;
-    const slots = genericSlots(refs, part.key);
-    if (part.slot < 0 || part.slot >= slots) {
+    // Difesa residua: i piani validati hanno slot < requiredSlots <= limite.
+    if (part.slot < 0 || part.slot >= RENDER_POOL_LIMITS[part.key]) {
       if (stats) stats.droppedParts = (stats.droppedParts ?? 0) + 1;
       continue;
     }
-    const slot = creatureIndex * slots + part.slot;
+    const slot = cursors[part.key]++;
     tmpLocalPos.set(part.position[0], part.position[1] + lift, part.position[2]);
     tmpLocalScale.set(part.scale[0], part.scale[1], part.scale[2]);
     tmpGenericQuat.set(part.rotation[0], part.rotation[1], part.rotation[2], part.rotation[3]);
     commitPart(mesh, slot, parent, tmpGenericQuat);
     if (mesh.instanceColor) mesh.setColorAt(slot, color);
+  }
+}
+
+/** Carica su GPU solo l'intervallo realmente scritto, non l'intera capacità del pool. */
+function flagInstanceUpdates(mesh: THREE.InstancedMesh): void {
+  mesh.instanceMatrix.clearUpdateRanges();
+  if (mesh.count > 0) {
+    mesh.instanceMatrix.addUpdateRange(0, mesh.count * 16);
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+  const color = mesh.instanceColor;
+  if (color) {
+    color.clearUpdateRanges();
+    if (mesh.count > 0) {
+      color.addUpdateRange(0, mesh.count * 3);
+      color.needsUpdate = true;
+    }
   }
 }
 
@@ -267,7 +277,7 @@ export function updateCreatureInstances(
 ): number {
   const renderSource = sourceOverride ?? refs.renderSource ?? null;
   const genericActive = renderSource !== null && !!refs.genericMeshes;
-  let genericPartsUsed = false;
+  const genericCursors: GenericCursors = { segment: 0, appendage: 0, eye: 0 };
   const stats = refs.creatureRenderStats;
   if (stats) {
     stats.drawn = 0;
@@ -435,7 +445,7 @@ export function updateCreatureInstances(
     let plan: AnatomyRenderPlan | null = null;
     if (renderSource) {
       const candidate: AnatomyRenderPlan | null = renderSource.planFor(id, frame.tick);
-      const usable = isUsableAnatomyRenderPlan(candidate);
+      const usable = isUsableAnatomyRenderPlanCached(candidate);
       if (candidate && usable) {
         plan = candidate;
         if (stats) stats.mapped++;
@@ -559,8 +569,7 @@ export function updateCreatureInstances(
     }
     // G-REV-02 — i pool generici G2 ricevono la stessa posa e lo stesso colore,
     // ma restano vuoti (e invisibili) finché non viene fornita una sorgente.
-    if (plan?.parts && plan.parts.length > 0) genericPartsUsed = true;
-    writeGenericParts(refs, plan?.parts ?? null, writeIndex, tmpCreatureMatrix, lift, tmpColor, genericActive, stats);
+    writeGenericParts(refs, plan?.parts ?? null, genericCursors, tmpCreatureMatrix, lift, tmpColor, genericActive, stats);
     refs.bodyMesh.setColorAt(writeIndex, tmpColor);
     refs.headMesh.setColorAt(writeIndex, tmpColor);
     if (refs.detail >= 2) {
@@ -610,19 +619,14 @@ export function updateCreatureInstances(
     for (const key of GENERIC_KEYS) {
       const mesh = refs.genericMeshes[key];
       if (!mesh) continue;
-      const slots = genericSlots(refs, key);
-      mesh.count = genericActive && genericPartsUsed ? writeIndex * slots : 0;
+      mesh.count = genericActive ? genericCursors[key] : 0;
       mesh.visible = mesh.count > 0;
-      if (mesh.count > 0) {
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      }
+      flagInstanceUpdates(mesh);
     }
   }
 
   for (const mesh of [refs.bodyMesh, refs.headMesh, refs.eyeMesh, refs.tailMesh, refs.jawMesh, refs.spikeMesh, refs.legMesh, refs.earMesh, refs.shadowMesh]) {
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    flagInstanceUpdates(mesh);
   }
   if (stats) {
     stats.drawn = writeIndex;

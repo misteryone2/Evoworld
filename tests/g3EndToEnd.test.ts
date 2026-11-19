@@ -135,7 +135,10 @@ describe("G3 — integrazione end-to-end anatomia generata → renderer", () => 
         const meshRef = refs.genericMeshes![key]!;
         const slots = refs.creatureRenderStats!.poolCapacity![key]!;
         expect(slots).toBeGreaterThanOrEqual(plan!.requiredSlots[key]);
-        expect(meshRef.count).toBe(slots);
+        // Layout denso G3: count copre solo le parti reali scritte, non la
+        // capacità riservata del pool (che resta un tetto dichiarato).
+        const visibleParts = plan!.parts!.filter((part) => part.key === key && part.visible).length;
+        expect(meshRef.count).toBe(visibleParts);
       }
       expect(Math.abs(det(refs.genericMeshes!.segment!, 0))).toBeGreaterThan(0);
 
