@@ -1,0 +1,745 @@
+{
+  "schema": "evoworld.e2.3.pilot-report.v1",
+  "codeCommit": "6fedffd07faa29945ff5e1dfc257e460868994e5",
+  "workingTreeDirty": false,
+  "runtime": {
+    "node": "v22.14.0",
+    "v8": "12.4.254.21-node.22"
+  },
+  "seeds": [
+    7,
+    11
+  ],
+  "config": {
+    "ticks": 40,
+    "population": 60,
+    "width": 24,
+    "height": 24,
+    "snapshotEveryTicks": 10
+  },
+  "checks": {
+    "runStarted": true,
+    "manifest": true,
+    "eventsGenerated": true,
+    "predationObserved": true,
+    "mortalityObserved": true,
+    "consumptionObserved": true,
+    "snapshotsBuilt": true,
+    "eventSequenceReconstructed": true,
+    "validation": true,
+    "export": true,
+    "integrity": true,
+    "reproducibility": true
+  },
+  "comparisons": [
+    {
+      "seed": 7,
+      "runId": "pilot-seed-7",
+      "reproducible": true,
+      "differences": [],
+      "primaryEventPayloadSha256": "8d07835a7f1bedfb6be4b1e65096625f1849cd1e064431b0d24a3eed3393b5bc",
+      "replicateEventPayloadSha256": "8d07835a7f1bedfb6be4b1e65096625f1849cd1e064431b0d24a3eed3393b5bc"
+    },
+    {
+      "seed": 11,
+      "runId": "pilot-seed-11",
+      "reproducible": true,
+      "differences": [],
+      "primaryEventPayloadSha256": "5ac44a00698a579ed9098ae1304650393c97c9be7a741ae0201b44a02c5ac218",
+      "replicateEventPayloadSha256": "5ac44a00698a579ed9098ae1304650393c97c9be7a741ae0201b44a02c5ac218"
+    }
+  ],
+  "runs": [
+    {
+      "runId": "pilot-seed-7",
+      "seed": 7,
+      "configSha256": "35922290b09c02cb60de477d86eac8c3af2bc7cda7801783c690f8fe9696943b",
+      "completedTicks": 40,
+      "initialPopulation": 60,
+      "finalPopulation": 20,
+      "extinctAt": null,
+      "eventSummary": {
+        "total": 41777,
+        "byType": {
+          "RESOURCE_REGENERATION": 20546,
+          "RESOURCE_CONSUMPTION": 1448,
+          "RESOURCE_DEPLETION": 19622,
+          "HUNT_ATTEMPT": 113,
+          "DEATH": 40,
+          "ECOSYSTEM_SNAPSHOT": 4,
+          "RESOURCE_SNAPSHOT": 4
+        },
+        "sampled": 0,
+        "droppedNonCritical": 0,
+        "completeness": "COMPLETE",
+        "firstTick": 1,
+        "lastTick": 40,
+        "criticalDropped": 0
+      },
+      "eventPayloadSha256": "8d07835a7f1bedfb6be4b1e65096625f1849cd1e064431b0d24a3eed3393b5bc",
+      "validation": {
+        "valid": true,
+        "errors": []
+      },
+      "aggregates": {
+        "schema": "evoworld.e2.3.aggregate.v1",
+        "eventSchema": "evoworld.e2.3.event.v1",
+        "runId": "pilot-seed-7",
+        "seed": 7,
+        "completedTicks": 40,
+        "eventCounts": {
+          "RESOURCE_REGENERATION": 20546,
+          "RESOURCE_CONSUMPTION": 1448,
+          "RESOURCE_DEPLETION": 19622,
+          "HUNT_ATTEMPT": 113,
+          "DEATH": 40,
+          "ECOSYSTEM_SNAPSHOT": 4,
+          "RESOURCE_SNAPSHOT": 4
+        },
+        "huntViews": {
+          "HUNT_ATTEMPT": 113,
+          "HUNT_SUCCESS": 23,
+          "HUNT_FAILURE": 90,
+          "PREDATION": 23
+        },
+        "deathCauses": {
+          "PREDATION": 23,
+          "STARVATION": 17
+        },
+        "foodWeb": [
+          {
+            "category": "OBSERVED",
+            "predatorSpeciesId": 2,
+            "preySpeciesId": 1,
+            "attempts": 113,
+            "successes": 23,
+            "failures": 90,
+            "energyTransferred": 762.2038389750292,
+            "firstTick": 1,
+            "lastTick": 39
+          }
+        ],
+        "ledgerTotals": {
+          "VEGETATION_GAIN": 135.25178646966003,
+          "HUNT_ATTEMPT_COST": -1393.7296806782483,
+          "BURST_COST_PREY": -27.78375362791121,
+          "PREDATION_GAIN": 762.2038389750292
+        },
+        "snapshots": {
+          "ecosystem": [
+            {
+              "eventId": "pilot-seed-7:0000000010:00010870",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 10,
+              "simulationTime": 10,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 45,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 0,
+                "predationKills": 1,
+                "meanEnergy": 43.69233674809137,
+                "meanAge": 10,
+                "completedTicks": 10,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:10",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000020:00021379",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 20,
+              "simulationTime": 20,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 38,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 0,
+                "predationKills": 1,
+                "meanEnergy": 31.71815559487113,
+                "meanAge": 20,
+                "completedTicks": 20,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:20",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000030:00031773",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 30,
+              "simulationTime": 30,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 26,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 2,
+                "predationKills": 0,
+                "meanEnergy": 34.423995440553846,
+                "meanAge": 30,
+                "completedTicks": 30,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:30",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000040:00041775",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 40,
+              "simulationTime": 40,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 20,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 0,
+                "predationKills": 0,
+                "meanEnergy": 33.65764163930382,
+                "meanAge": 40,
+                "completedTicks": 40,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:40",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            }
+          ],
+          "resource": [
+            {
+              "eventId": "pilot-seed-7:0000000010:00010871",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 10,
+              "simulationTime": 10,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 900,
+                "meanVegetation": 0.19143313594309036,
+                "totalVegetation": 172.2898223487813,
+                "minVegetation": 0,
+                "maxVegetation": 0.5019657088695613,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:10",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000020:00021380",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 20,
+              "simulationTime": 20,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 900,
+                "meanVegetation": 0.18112044917022127,
+                "totalVegetation": 163.00840425319913,
+                "minVegetation": 0,
+                "maxVegetation": 0.5060147974893326,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:20",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000030:00031774",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 30,
+              "simulationTime": 30,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 900,
+                "meanVegetation": 0.17625606288861786,
+                "totalVegetation": 158.6304565997561,
+                "minVegetation": 0,
+                "maxVegetation": 0.5073686095061938,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:30",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-7:0000000040:00041776",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-7",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-7",
+              "tick": 40,
+              "simulationTime": 40,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 900,
+                "meanVegetation": 0.1745169324064618,
+                "totalVegetation": 157.06523916581563,
+                "minVegetation": 0,
+                "maxVegetation": 0.5019833215632004,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:40",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            }
+          ]
+        },
+        "completeness": "COMPLETE",
+        "eventPayloadSha256": "8d07835a7f1bedfb6be4b1e65096625f1849cd1e064431b0d24a3eed3393b5bc"
+      }
+    },
+    {
+      "runId": "pilot-seed-11",
+      "seed": 11,
+      "configSha256": "6c43268e1735fff00bf301bf9e1f8d01d2083c303bfe5240aa9bdfb2addac4bc",
+      "completedTicks": 40,
+      "initialPopulation": 60,
+      "finalPopulation": 18,
+      "extinctAt": null,
+      "eventSummary": {
+        "total": 41466,
+        "byType": {
+          "RESOURCE_REGENERATION": 20127,
+          "RESOURCE_CONSUMPTION": 1537,
+          "RESOURCE_DEPLETION": 19653,
+          "HUNT_ATTEMPT": 99,
+          "DEATH": 42,
+          "ECOSYSTEM_SNAPSHOT": 4,
+          "RESOURCE_SNAPSHOT": 4
+        },
+        "sampled": 0,
+        "droppedNonCritical": 0,
+        "completeness": "COMPLETE",
+        "firstTick": 1,
+        "lastTick": 40,
+        "criticalDropped": 0
+      },
+      "eventPayloadSha256": "5ac44a00698a579ed9098ae1304650393c97c9be7a741ae0201b44a02c5ac218",
+      "validation": {
+        "valid": true,
+        "errors": []
+      },
+      "aggregates": {
+        "schema": "evoworld.e2.3.aggregate.v1",
+        "eventSchema": "evoworld.e2.3.event.v1",
+        "runId": "pilot-seed-11",
+        "seed": 11,
+        "completedTicks": 40,
+        "eventCounts": {
+          "RESOURCE_REGENERATION": 20127,
+          "RESOURCE_CONSUMPTION": 1537,
+          "RESOURCE_DEPLETION": 19653,
+          "HUNT_ATTEMPT": 99,
+          "DEATH": 42,
+          "ECOSYSTEM_SNAPSHOT": 4,
+          "RESOURCE_SNAPSHOT": 4
+        },
+        "huntViews": {
+          "HUNT_ATTEMPT": 99,
+          "HUNT_SUCCESS": 25,
+          "HUNT_FAILURE": 74,
+          "PREDATION": 25
+        },
+        "deathCauses": {
+          "PREDATION": 25,
+          "STARVATION": 17
+        },
+        "foodWeb": [
+          {
+            "category": "OBSERVED",
+            "predatorSpeciesId": 2,
+            "preySpeciesId": 1,
+            "attempts": 99,
+            "successes": 25,
+            "failures": 74,
+            "energyTransferred": 835.1909315060825,
+            "firstTick": 1,
+            "lastTick": 39
+          }
+        ],
+        "ledgerTotals": {
+          "VEGETATION_GAIN": 124.40315010539528,
+          "HUNT_ATTEMPT_COST": -1225.5790510877966,
+          "BURST_COST_PREY": -40.96632732599976,
+          "PREDATION_GAIN": 835.1909315060825
+        },
+        "snapshots": {
+          "ecosystem": [
+            {
+              "eventId": "pilot-seed-11:0000000010:00010572",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 10,
+              "simulationTime": 10,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 46,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 0,
+                "predationKills": 1,
+                "meanEnergy": 41.968547684953386,
+                "meanAge": 10,
+                "completedTicks": 10,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:10",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000020:00020762",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 20,
+              "simulationTime": 20,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 37,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 1,
+                "predationKills": 0,
+                "meanEnergy": 35.35067292012043,
+                "meanAge": 20,
+                "completedTicks": 20,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:20",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000030:00031135",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 30,
+              "simulationTime": 30,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 31,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 3,
+                "predationKills": 0,
+                "meanEnergy": 31.457958739261823,
+                "meanAge": 30,
+                "completedTicks": 30,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:30",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000040:00041464",
+              "eventType": "ECOSYSTEM_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 40,
+              "simulationTime": 40,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "population": 18,
+                "speciesAlive": 2,
+                "speciesExtinct": 0,
+                "speciesTotalEver": 2,
+                "births": 0,
+                "deaths": 1,
+                "predationKills": 0,
+                "meanEnergy": 35.771082667498064,
+                "meanAge": 40,
+                "completedTicks": 40,
+                "year": 0,
+                "season": "primavera"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "ecosystem:40",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            }
+          ],
+          "resource": [
+            {
+              "eventId": "pilot-seed-11:0000000010:00010573",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 10,
+              "simulationTime": 10,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 936,
+                "meanVegetation": 0.16715174650775155,
+                "totalVegetation": 156.45403473125546,
+                "minVegetation": 0,
+                "maxVegetation": 0.5,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:10",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000020:00020763",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 20,
+              "simulationTime": 20,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 936,
+                "meanVegetation": 0.15312871057923166,
+                "totalVegetation": 143.32847310216084,
+                "minVegetation": 0,
+                "maxVegetation": 0.5,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:20",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000030:00031136",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 30,
+              "simulationTime": 30,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 936,
+                "meanVegetation": 0.14308751313862772,
+                "totalVegetation": 133.92991229775555,
+                "minVegetation": 0,
+                "maxVegetation": 0.5,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:30",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            },
+            {
+              "eventId": "pilot-seed-11:0000000040:00041465",
+              "eventType": "RESOURCE_SNAPSHOT",
+              "schemaVersion": "evoworld.e2.3.event.v1",
+              "simulationId": "e2.3-sim-11",
+              "experimentId": "E2.3-OBSERVABILITY-PILOT",
+              "runId": "pilot-seed-11",
+              "tick": 40,
+              "simulationTime": 40,
+              "simulationYear": 0,
+              "category": "OBSERVED",
+              "entityIds": [],
+              "payload": {
+                "cellCount": 1024,
+                "landCellCount": 936,
+                "meanVegetation": 0.1388452823965216,
+                "totalVegetation": 129.95918432314423,
+                "minVegetation": 0,
+                "maxVegetation": 0.5,
+                "materializedChunkCount": 1,
+                "scope": "materialized_chunks"
+              },
+              "source": "simulation/core/world.ts:emitSnapshots",
+              "correlationId": "resource:40",
+              "metadata": {
+                "completeness": "COMPLETE",
+                "sampled": false,
+                "engineDerived": true
+              }
+            }
+          ]
+        },
+        "completeness": "COMPLETE",
+        "eventPayloadSha256": "5ac44a00698a579ed9098ae1304650393c97c9be7a741ae0201b44a02c5ac218"
+      }
+    }
+  ],
+  "artifacts": {
+    "archive": "e2.3-observability-pilot.json.gz",
+    "payloadSha256": "6b29d6f650ad48e3c85bc82099e1e09de9090a2d0eb8284a1ac124fd29061671",
+    "archiveSha256": "aaf7dff404a808f9462af10e427644ea261b4c2b1f5a8b6bafe6bf96a5d5d35b",
+    "manifestSha256": "66a334930e3f4d6c6b83a70b2a4c905beb3a6902eac68159ccd2ea55b6167662",
+    "sourceSha256": "4fb82b49d41da3ce2ff7a5f82ac8a66ceb7fad6f387f7adc80aaf14b9e870a7a",
+    "e1SourceSha256": "24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe"
+  },
+  "integrityErrors": []
+}

@@ -26,6 +26,12 @@ Questa cartella contiene la documentazione scientifica, i protocolli e i dataset
 - 120 corse (36 primarie + 36 replica seed + 36 durata + 12 campionamento); `codeCommit` e hash nel manifest.
 - Audit: [E2_2_FOOD_WEB_AUDIT.md](E2_2_FOOD_WEB_AUDIT.md) · matrice: [E2_2_EXPERIMENTAL_MATRIX.md](E2_2_EXPERIMENTAL_MATRIX.md) · report: [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md).
 
+## Dataset E2.3 (osservabilità)
+
+- [e2.3-observability-pilot.json.gz](datasets/e2.3-observability-pilot.json.gz) · [manifest](datasets/e2.3-observability-pilot.manifest.json) · [report](datasets/e2.3-observability-pilot.report.json)
+- 2 corse osservate + 2 repliche, 2 seed, 40 tick; 83.243 eventi reali; 12/12 check tecnici superati; hash e provenance nel manifest.
+- [Report](E2_3_OBSERVABILITY_REPORT.md) · [schema eventi](E2_3_EVENT_SCHEMA.md). Nessuna conclusione ecologica prodotta.
+
 ## Strumenti
 
 - `tools/e2/` — metriche additive, serie temporali con detrending, isolamento variabili, resilienza appaiata, biodiversità, report e dataset; `observabilityRunner.ts` e `observabilityPipeline.ts` per E2.3.

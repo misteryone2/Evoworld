@@ -148,6 +148,7 @@ warning only; it does not alter tests.
 | `npx vitest run --reporter=verbose` (full suite, E2.3 tree) | 858 passed, 1 skipped, **10 failed**, exit 1 |
 | `npx vitest run --reporter=dot` (full suite, untouched baseline worktree at `7df1015`) | 839 passed, 1 skipped, **the same 10 failed**, exit 1 |
 | `npx vitest run --config vitest.experiment.config.ts scripts/e2_observability_pilot.experiment.ts` (pre-commit validation) | **PASS**, 1/1, 12/12 technical checks, exit 0 |
+| same pilot command with `E2_3_CODE_COMMIT=6fedffd07faa29945ff5e1dfc257e460868994e5`, `E2_3_WORKTREE_DIRTY=0` (final artifact) | **PASS**, 1/1, 12/12 checks, exit 0 |
 | `npm run build` | **PASS**, exit 0; compiled, TypeScript OK, 3 static pages |
 | `npm run lint` | **FAIL**, exit 2 — ESLint 9 cannot find `eslint.config.js`; identical failure on untouched baseline; pre-existing repository issue |
 
@@ -178,8 +179,11 @@ Pre-commit validation run (final artifact run recorded in §L/I):
 | Validation | every event structurally valid; zero duplicate IDs; zero critical drops; `COMPLETE` |
 | Artifact | gzip dataset + manifest; `readDataset` verification passed |
 
-These counts demonstrate that the observation path works; they are **not**
-interpreted as ecological findings.
+The final artifact run produced the same two per-run event hashes
+(`8d07835a…` for seed 7, `5ac44a00…` for seed 11) with `workingTreeDirty=false`
+and `codeCommit=6fedffd07faa29945ff5e1dfc257e460868994e5`; only the dataset-level
+hash changed because provenance fields changed. These counts demonstrate that
+the observation path works; they are **not** interpreted as ecological findings.
 
 ---
 
@@ -264,7 +268,26 @@ converted into a positive result. The dataset's `scientificVerdict` is
 
 ## L. Commits and final artifacts
 
-_To be filled after the final commit and final pilot run._
+| Item | Value |
+|---|---|
+| Implementation + docs commit | `6fedffd07faa29945ff5e1dfc257e460868994e5` (`feat(e2.3): add passive ecological event observability`) |
+| Artifact commit | immediately following commit on the same branch (see `git log`) |
+| Branch after work | `research/e2-ecosystem-dynamics` |
+| `main` / `origin/main` | unchanged at `d330c12f345ab26ab7405b908c729e2e2f6bcc22` |
+| Merge / PR / branch deletion | none |
+| Dataset | `docs/research/e2/datasets/e2.3-observability-pilot.json.gz` (10,143,615 bytes) |
+| Manifest | `docs/research/e2/datasets/e2.3-observability-pilot.manifest.json` |
+| Machine-readable pilot report | `docs/research/e2/datasets/e2.3-observability-pilot.report.json` |
+| `payloadSha256` | `6b29d6f650ad48e3c85bc82099e1e09de9090a2d0eb8284a1ac124fd29061671` |
+| `archiveSha256` | `aaf7dff404a808f9462af10e427644ea261b4c2b1f5a8b6bafe6bf96a5d5d35b` |
+| `manifestSha256` | `66a334930e3f4d6c6b83a70b2a4c905beb3a6902eac68159ccd2ea55b6167662` |
+| `sourceSha256` | `4fb82b49d41da3ce2ff7a5f82ac8a66ceb7fad6f387f7adc80aaf14b9e870a7a` |
+| `e1SourceSha256` | `24dec478620f48fa26633227e9652067653277dd652dbbeca9d110894c2851fe` |
+| Executed at | `2026-11-19T12:03:01.538Z` (excluded from all hashes) |
+
+The pilot was executed after the implementation commit on a clean working tree;
+the artifact commit only adds generated data and documentation, so
+`sourceSha256` still describes the exact instrumented code that was run.
 
 ---
 
