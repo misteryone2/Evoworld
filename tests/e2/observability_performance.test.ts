@@ -56,7 +56,14 @@ describe("E2.3 logging overhead (measured, not threshold-gated)", () => {
   it("measures disabled logging, full logging, low-frequency logging and bounded buffer across repeated trials", () => {
     const full = measure("full", (r) => new InMemoryEventSink({ simulationId: "sim", experimentId: "perf", runId: `full-${r}` }));
     const lowFrequency = measure("low-frequency (DEATH only)", (r) =>
-      new InMemoryEventSink({ simulationId: "sim", experimentId: "perf", runId: `low-${r}`, enabledTypes: ["DEATH"] }),
+      new InMemoryEventSink({
+        simulationId: "sim",
+        experimentId: "perf",
+        runId: `low-${r}`,
+        profile: "partial",
+        enabledTypes: ["DEATH"],
+        disabledReason: "benchmark: subset profile",
+      }),
     );
     const bounded = measure("bounded non-critical buffer", (r) =>
       new InMemoryEventSink({ simulationId: "sim", experimentId: "perf", runId: `bounded-${r}`, maxNonCriticalEvents: 200 }),

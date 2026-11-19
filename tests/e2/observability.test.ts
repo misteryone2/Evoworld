@@ -18,6 +18,7 @@ function observation(partial: Partial<EcologicalObservation> = {}): EcologicalOb
     tick: 1,
     entityIds: [1, 2],
     source: "test:unit",
+    correlationId: "hunt:1:0",
     payload: {
       outcome: "SUCCESS",
       predatorId: 1,
@@ -30,6 +31,26 @@ function observation(partial: Partial<EcologicalObservation> = {}): EcologicalOb
       burstCostPredator: 1,
       burstCostPrey: 2,
       preyDeathCorrelationId: "hunt:1:0:death",
+    },
+    ...partial,
+  };
+}
+
+function predationDeath(partial: Partial<EcologicalObservation> = {}): EcologicalObservation {
+  return {
+    type: "DEATH",
+    tick: 1,
+    entityIds: [2],
+    source: "test:unit",
+    correlationId: "hunt:1:0:death",
+    payload: {
+      cause: "PREDATION",
+      speciesId: 20,
+      energy: 1,
+      age: 3,
+      predatorId: 1,
+      predatorSpeciesId: 10,
+      huntCorrelationId: "hunt:1:0",
     },
     ...partial,
   };
@@ -155,10 +176,26 @@ describe("E2.3 logger policy", () => {
 describe("E2.3 derived views (no fabricated events)", () => {
   it("exposes hunt attempt/success/failure/predation as views of one record", () => {
     const sink = new InMemoryEventSink(SINK_CONFIG);
-    sink.record(observation({ tick: 1, correlationId: "h1", payload: { ...observation().payload, outcome: "SUCCESS" } }));
+    sink.record(observation({
+      tick: 1,
+      correlationId: "h1",
+      payload: { ...observation().payload, outcome: "SUCCESS", preyDeathCorrelationId: "h1:death" },
+    }));
+    sink.record(predationDeath({
+      tick: 1,
+      correlationId: "h1:death",
+      payload: {
+        cause: "PREDATION",
+        speciesId: 20,
+        energy: 1,
+        age: 3,
+        predatorId: 1,
+        huntCorrelationId: "h1",
+      },
+    }));
     sink.record(observation({ tick: 2, correlationId: "h2", payload: { ...observation().payload, outcome: "FAILURE", energyTransferred: 0, preyDeathCorrelationId: null } }));
     const events = sink.eventsSnapshot();
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(3);
     expect(selectHuntEvents(events, "HUNT_ATTEMPT")).toHaveLength(2);
     expect(selectHuntEvents(events, "HUNT_SUCCESS")).toHaveLength(1);
     expect(selectHuntEvents(events, "HUNT_FAILURE")).toHaveLength(1);
@@ -169,6 +206,7 @@ describe("E2.3 derived views (no fabricated events)", () => {
   it("builds energy ledger and food web only from observed payloads", () => {
     const sink = new InMemoryEventSink(SINK_CONFIG);
     sink.record(observation());
+    sink.record(predationDeath());
     const events = sink.eventsSnapshot();
     const ledger = energyLedger(events);
     expect(ledger.every((f) => f.category === "DERIVED")).toBe(true);

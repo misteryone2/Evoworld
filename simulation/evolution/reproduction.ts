@@ -184,13 +184,20 @@ export function reproduceOrganisms(
         parentIds: parentIds.join(","),
         parentCount: parentIds.length,
         mode: mateId === null ? "ASEXUAL" : "SEXUAL",
-        mateId,
-        parentEnergyCost: organismEnergyBefore - organismEnergyAfter,
-        parentEnergyBefore: organismEnergyBefore,
-        parentEnergyAfter: organismEnergyAfter,
-        mateEnergyCost: mateEnergyBefore === null || mateEnergyAfter === null ? 0 : mateEnergyBefore - mateEnergyAfter,
-        mateEnergyBefore,
-        mateEnergyAfter,
+        // E2.3.1 — ruoli espliciti: il costo non viene mai dedotto dall'ordine
+        // di `parentIds`. Il secondo genitore esiste solo nella riproduzione
+        // sessuata; in quella asessuata tutti i suoi campi restano `null`.
+        primaryParentId: organism.id,
+        primaryParentEnergyCost: organismEnergyBefore - organismEnergyAfter,
+        primaryParentEnergyBefore: organismEnergyBefore,
+        primaryParentEnergyAfter: organismEnergyAfter,
+        secondaryParentId: mateId,
+        secondaryParentEnergyCost: mateEnergyBefore === null || mateEnergyAfter === null
+          ? null
+          : mateEnergyBefore - mateEnergyAfter,
+        secondaryParentEnergyBefore: mateEnergyBefore,
+        secondaryParentEnergyAfter: mateEnergyAfter,
+        costAttribution: mateId === null ? "PRIMARY_ONLY" : "PRIMARY_AND_SECONDARY",
         offspringEnergy: child.energy,
         offspringFactor,
         speciesId: child.speciesId,

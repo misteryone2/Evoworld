@@ -17,15 +17,22 @@ import {
 import { sha256 } from "../e1/dataset";
 import {
   ECOLOGICAL_EVENT_SCHEMA,
+  EVENT_IMPORTANCE,
   buildObservedFoodWeb,
   canonicalEventString,
   energyLedger,
+  energyLedgerSummary,
   filterEvents,
   selectHuntEvents,
   validateEvent,
+  verifyEnergyConservation,
+  verifyPredationCorrelations,
   type EcologicalEvent,
+  type EnergyConservationReport,
+  type EventSinkSummary,
+  type PredationCorrelationReport,
 } from "../../simulation/ecology/observability";
-import { eventsSha256, type ObservabilityRunResult } from "./observabilityRunner";
+import { eventsSha256, type ObservabilityRunManifest, type ObservabilityRunResult } from "./observabilityRunner";
 
 export interface ObservabilityAggregate {
   schema: "evoworld.e2.3.aggregate.v1";
@@ -38,6 +45,9 @@ export interface ObservabilityAggregate {
   deathCauses: Record<string, number>;
   foodWeb: ReturnType<typeof buildObservedFoodWeb>;
   ledgerTotals: Record<string, number>;
+  ledgerSummary: ReturnType<typeof energyLedgerSummary>;
+  correlation: PredationCorrelationReport;
+  energyConservation: EnergyConservationReport;
   snapshots: { ecosystem: EcologicalEvent[]; resource: EcologicalEvent[] };
   completeness: "COMPLETE" | "PARTIAL";
   eventPayloadSha256: string;
@@ -46,21 +56,23 @@ export interface ObservabilityAggregate {
 /** Aggregazione puramente derivata da eventi validati: nessuna nuova inferenza ecologica. */
 export function aggregateRun(run: ObservabilityRunResult): ObservabilityAggregate {
   const events = run.events;
+  const correlationOptions = {
+    completeness: run.eventSummary.completeness,
+    requiredTypes: run.eventSummary.requiredTypes,
+  };
+  const correlation = verifyPredationCorrelations(events, correlationOptions);
   const huntByView = {
     HUNT_ATTEMPT: selectHuntEvents(events, "HUNT_ATTEMPT").length,
     HUNT_SUCCESS: selectHuntEvents(events, "HUNT_SUCCESS").length,
     HUNT_FAILURE: selectHuntEvents(events, "HUNT_FAILURE").length,
-    PREDATION: selectHuntEvents(events, "PREDATION").length,
+    PREDATION: selectHuntEvents(events, "PREDATION", correlationOptions).length,
   };
   const deathCauses: Record<string, number> = {};
   for (const event of filterEvents(events, { types: ["DEATH"] })) {
     const cause = String(event.payload.cause ?? "UNKNOWN");
     deathCauses[cause] = (deathCauses[cause] ?? 0) + 1;
   }
-  const ledgerTotals: Record<string, number> = {};
-  for (const flow of energyLedger(events)) {
-    ledgerTotals[flow.flowType] = (ledgerTotals[flow.flowType] ?? 0) + flow.amount;
-  }
+  const ledgerSummary = energyLedgerSummary(events);
   return {
     schema: "evoworld.e2.3.aggregate.v1",
     eventSchema: ECOLOGICAL_EVENT_SCHEMA,
@@ -71,7 +83,10 @@ export function aggregateRun(run: ObservabilityRunResult): ObservabilityAggregat
     huntViews: huntByView,
     deathCauses,
     foodWeb: buildObservedFoodWeb(events),
-    ledgerTotals,
+    ledgerTotals: { ...ledgerSummary.byFlowType },
+    ledgerSummary,
+    correlation,
+    energyConservation: verifyEnergyConservation(events),
     snapshots: {
       ecosystem: filterEvents(events, { types: ["ECOSYSTEM_SNAPSHOT"] }),
       resource: filterEvents(events, { types: ["RESOURCE_SNAPSHOT"] }),
@@ -91,11 +106,30 @@ export function validateRunForExport(run: ObservabilityRunResult): string[] {
     const check = validateEvent(event);
     if (!check.ok) errors.push(`${event.eventId}: ${check.errors.join("; ")}`);
   }
-  if (run.eventSummary.criticalDropped > 0) {
+  const summary = run.eventSummary;
+  if (summary.criticalDropped > 0) {
     errors.push(`${run.manifest.runId}: critical events dropped (forbidden)`);
   }
+  if (summary.completeness === "COMPLETE" && (!summary.coverageComplete || summary.missingRequiredTypes.length > 0)) {
+    errors.push(`${run.manifest.runId}: COMPLETE declared with incomplete required coverage`);
+  }
+  if (summary.flushErrors > 0) errors.push(`${run.manifest.runId}: flush errors (${summary.flushErrorMessages.join("; ")})`);
+  if (run.manifest.logging.profile !== summary.profile) {
+    errors.push(`${run.manifest.runId}: manifest profile differs from sink profile`);
+  }
+  if (canonicalEventString(run.manifest.logging.enabledTypes) !== canonicalEventString(summary.enabledTypes)
+    || canonicalEventString(run.manifest.logging.requiredTypes) !== canonicalEventString(summary.requiredTypes)) {
+    errors.push(`${run.manifest.runId}: manifest type coverage differs from sink configuration`);
+  }
+  const aggregate = aggregateRun(run);
+  if (!aggregate.energyConservation.ok) {
+    errors.push(`${run.manifest.runId}: reproduction energy conservation mismatches`);
+  }
+  if (aggregate.correlation.status === "INCONSISTENT") {
+    errors.push(`${run.manifest.runId}: inconsistent predation/mortality correlations`);
+  }
   const expected = filterEvents(run.events, { types: ["HUNT_ATTEMPT"] }).length;
-  const views = aggregateRun(run).huntViews;
+  const views = aggregate.huntViews;
   if (views.HUNT_SUCCESS + views.HUNT_FAILURE !== expected || views.PREDATION > views.HUNT_SUCCESS) {
     errors.push(`${run.manifest.runId}: inconsistent hunt views`);
   }
@@ -174,6 +208,13 @@ export function exportObservabilityDataset(input: ObservabilityExportInput): Obs
       deathCauses: a.deathCauses,
       foodWeb: a.foodWeb,
       ledgerTotals: a.ledgerTotals,
+      ledgerSummary: a.ledgerSummary,
+      energyConservation: a.energyConservation,
+      correlation: {
+        status: a.correlation.status,
+        counts: a.correlation.counts,
+        errors: a.correlation.errors,
+      },
       completeness: a.completeness,
       eventPayloadSha256: a.eventPayloadSha256,
     })),
@@ -199,7 +240,14 @@ export function exportObservabilityDataset(input: ObservabilityExportInput): Obs
     ),
     energyLedgerCategory: "DERIVED",
     foodWebCategory: "OBSERVED",
+    eventImportanceByType: EVENT_IMPORTANCE,
     completenessByRun: Object.fromEntries(input.runs.map((run) => [run.manifest.runId, run.eventSummary])),
+    energyConservationByRun: Object.fromEntries(
+      input.runs.map((run) => [run.manifest.runId, verifyEnergyConservation(run.events)]),
+    ),
+    predationCorrelationByRun: Object.fromEntries(
+      aggregates.map((aggregate) => [aggregate.runId, aggregate.correlation]),
+    ),
     eventPayloadSha256ByRun: Object.fromEntries(
       input.runs.map((run) => [run.manifest.runId, eventsSha256(run.events)]),
     ),
@@ -273,6 +321,14 @@ export function verifyObservabilityArtifact(
   if (auxiliary.eventSchema !== ECOLOGICAL_EVENT_SCHEMA) errors.push("unexpected event schema");
   const eventsByRun = (auxiliary.eventsByRun ?? {}) as Record<string, EcologicalEvent[]>;
   const expectedHashes = (auxiliary.eventPayloadSha256ByRun ?? {}) as Record<string, string>;
+  const summaries = (auxiliary.completenessByRun ?? {}) as Record<string, EventSinkSummary>;
+  const jsonl = (auxiliary.jsonlByRun ?? {}) as Record<string, string>;
+  const jsonlHashes = (auxiliary.jsonlSha256ByRun ?? {}) as Record<string, string>;
+  const manifests = new Map<string, ObservabilityRunManifest>();
+  for (const result of ((dataset as unknown as { results?: readonly Record<string, unknown>[] }).results ?? [])) {
+    const manifest = result.manifest as ObservabilityRunManifest | undefined;
+    if (manifest?.runId) manifests.set(manifest.runId, manifest);
+  }
   for (const [runId, events] of Object.entries(eventsByRun)) {
     if (eventsSha256(events) !== expectedHashes[runId]) errors.push(`${runId}: eventPayloadSha256 mismatch`);
     const ids = new Set(events.map((event) => event.eventId));
@@ -281,12 +337,29 @@ export function verifyObservabilityArtifact(
       const check = validateEvent(event);
       if (!check.ok) errors.push(`${event.eventId}: ${check.errors.join("; ")}`);
     }
-  }
-  const jsonl = (auxiliary.jsonlByRun ?? {}) as Record<string, string>;
-  for (const [runId, text] of Object.entries(jsonl)) {
-    if (sha256(text) !== (auxiliary.jsonlSha256ByRun as Record<string, string>)[runId]) {
-      errors.push(`${runId}: jsonlSha256 mismatch`);
+    const summary = summaries[runId];
+    if (!summary) {
+      errors.push(`${runId}: missing completeness declaration`);
+    } else {
+      if (summary.completeness === "COMPLETE" && (!summary.coverageComplete || summary.missingRequiredTypes.length > 0)) {
+        errors.push(`${runId}: COMPLETE declared with incomplete required coverage`);
+      }
+      const manifest = manifests.get(runId);
+      if (manifest && (manifest.logging.profile !== summary.profile
+        || canonicalEventString(manifest.logging.enabledTypes) !== canonicalEventString(summary.enabledTypes)
+        || canonicalEventString(manifest.logging.requiredTypes) !== canonicalEventString(summary.requiredTypes))) {
+        errors.push(`${runId}: manifest logging configuration differs from event summary`);
+      }
     }
+    const correlation = verifyPredationCorrelations(events, {
+      completeness: summary?.completeness,
+      requiredTypes: summary?.requiredTypes,
+    });
+    if (correlation.status === "INCONSISTENT") errors.push(`${runId}: ${correlation.errors.join("; ")}`);
+    if (!verifyEnergyConservation(events).ok) errors.push(`${runId}: reproduction energy conservation mismatch`);
+    const canonicalJsonl = events.map((event) => canonicalEventString(event)).join("\n") + (events.length ? "\n" : "");
+    if (jsonl[runId] !== canonicalJsonl) errors.push(`${runId}: jsonl content differs from canonical events`);
+    if (sha256(jsonl[runId] ?? "") !== jsonlHashes[runId]) errors.push(`${runId}: jsonlSha256 mismatch`);
   }
   return {
     ok: errors.length === 0,

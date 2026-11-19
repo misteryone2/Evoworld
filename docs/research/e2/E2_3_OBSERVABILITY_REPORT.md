@@ -302,3 +302,164 @@ and merged by its owner, a separate filone may use these observed events to
 formulate hypotheses — always labeling them `OBSERVED`, `DERIVED`, `INFERRED`
 or `NON_EVALUABLE` and never treating the derived energy ledger as a closed
 conservation law.
+
+---
+
+# N. E2.3.1 — Independent-review corrections
+
+**Date:** 2026-11-19
+**Scope:** integrity defects `E-REV-01`, `E-REV-02`, `E-REV-03`, full audit
+chain, measured scaling, and a new reproducible pilot. No new ecological
+conclusion is produced. The E2.3 sections above remain the historical record;
+where they conflict with this section, **this section prevails**.
+
+## N.1 Commits and scope
+
+| Item | Value |
+|---|---|
+| Branch | `research/e2-ecosystem-dynamics` only |
+| HEAD before E2.3.1 | `f2957b965eb8a741e9747839a95c8592eec55923` (clean tree) |
+| `main` / `origin/main` before and after | `d330c12f345ab26ab7405b908c729e2e2f6bcc22` (unchanged) |
+| E2.3 implementation commit | `6fedffd07faa29945ff5e1dfc257e460868994e5` |
+| E2.3 dataset commit | `f2957b965eb8a741e9747839a95c8592eec55923` |
+| E2.3.1 implementation commit | `<<IMPLEMENTATION_COMMIT>>` |
+| E2.3.1 final artifact commit | `<<ARTIFACT_COMMIT>>` |
+| Merge / PR / branch deletion / filone G | none |
+| `tools/e1/**` and `main` | untouched |
+
+## N.2 Problems found and fixes
+
+| ID | Defect | Fix | Verification |
+|---|---|---|---|
+| `E-REV-01` | Reproduction energy ledger could debit the primary cost twice and use a mate cost even in asexual events; missing costs risked becoming `0` | Schema v2 with explicit `primaryParentId` / `secondaryParentId`, separate costs and before/after deltas, `costAttribution`; `null` is preserved as `NON_EVALUABLE`; `energyLedgerSummary()` and `verifyEnergyConservation()` added | Deterministic cases A–E in `tests/e2/observability_integrity.test.ts`; all engine births verified |
+| `E-REV-02` | Importance and completeness were implicit; a reduced dataset could be labeled complete | Centralized `EVENT_IMPORTANCE`, three profiles, authoritative `EventSinkSummary`, forced `PARTIAL` for disabled/critical/sampled/overflow/flush errors, manifest coverage block + `loggingSha256` | Eight completeness cases in integrity tests; manifest/sink coherence checked by runner, export and import verification |
+| `E-REV-03` | `PREDATION` view trusted only the presence of `preyDeathCorrelationId` | Real relation verification (correlation ID, prey ID, predator ID, run, tick, cause, hunt link); six statuses; verified-only `PREDATION`; one death cannot verify two attempts | Nine correlation cases + shared-death negative control |
+| Audit | Possible silent loss/unstable IDs/false completeness/valid export after failure | Lifetime counters survive flush release; immutable deterministic IDs; fail-closed export; canonical JSONL/hash re-check after gzip/import; `hashChain` pilot check | Integrity tests, scaling test, pilot 19/19 |
+| Performance | No scale measurement or incremental flush | `EventBatchWriter`, `flushEveryEvents`, `releaseAfterFlush`, measured 10k/50k/100k test | `tests/e2/observability_scaling.test.ts` |
+
+No biological formula, RNG call, mortality rule or resource amount was changed.
+The reproduction payload changed additively; v1 events remain importable.
+
+## N.3 Changed files
+
+| File | Change |
+|---|---|
+| `simulation/ecology/observability.ts` | v1/v2 constants, centralized importance/profiles, v2 validation, profile-enforcing sink, lifetime/flush counters, correlation verifier, verified predation view, null-safe ledger, conservation/summary APIs |
+| `simulation/evolution/reproduction.ts` | emits explicit v2 parent roles and costs; formulas and RNG order unchanged |
+| `tools/e2/observabilityRunner.ts` | single sink/manifest config source, profile/coverage manifest, `loggingSha256`, correlation and conservation results, fail-closed validation |
+| `tools/e2/observabilityPipeline.ts` | ledger/conservation/correlation aggregates, manifest-sink coherence, import-time completeness/correlation/hash checks |
+| `scripts/e2_observability_pilot.experiment.ts` | new checks: v2 schema, critical coverage, no silent loss, hash chain; report schema v1.1 |
+| `tests/e2/observability.test.ts` | updated v2 views/ledger fixtures |
+| `tests/e2/observability_engine.test.ts` | explicit role assertions and conservation on real births |
+| `tests/e2/observability_performance.test.ts` | low-frequency mode uses `partial` profile |
+| `tests/e2/observability_integrity.test.ts` | **new**: cases A–E, 8 completeness cases, 10 correlation cases, export-failure case |
+| `tests/e2/observability_scaling.test.ts` | **new**: 10k/50k/100k measurements, incremental flush/release, disabled sink |
+| `docs/research/e2/E2_3_EVENT_SCHEMA.md` | normative v2 schema, profiles, verified correlations, audit chain |
+| `docs/research/e2/E2_3_OBSERVABILITY_REPORT.md` | this E2.3.1 section |
+| `docs/research/e2/README.md` | index updated to E2.3.1 |
+
+## N.4 Updated schema
+
+Current event schema is `evoworld.e2.3.event.v2`; `evoworld.e2.3.event.v1`
+remains accepted by `validateEvent()` and role extraction for imported legacy
+datasets, but is never emitted. The run manifest still uses
+`evoworld.e2.3.run-manifest.v1` and now declares `eventSchema`, `profile`,
+`requiredTypes`, `enabledTypes`, `disabledTypes`, `disabledReason`,
+`importanceByType`, `sampleRates`, limits, `loggingSha256` and
+`criticalEventsNeverSampled`. Normalization/category rules are unchanged:
+`OBSERVED` engine records, `DERIVED` projections, `INFERRED` not produced,
+`NON_EVALUABLE` preserved.
+
+## N.5 Tests actually executed
+
+| Command | Outcome |
+|---|---|
+| `npx tsc --noEmit --pretty false` | PASS, exit 0 (re-run after final edits) |
+| `npx vitest run tests/e2/observability.test.ts tests/e2/observability_engine.test.ts tests/e2/observability_integrity.test.ts tests/e2/observability_scaling.test.ts tests/e2/observability_performance.test.ts` | PASS, 5 files / 45 tests, exit 0 |
+| `npx vitest run --config vitest.experiment.config.ts scripts/e2_observability_pilot.experiment.ts` (final artifact run) | PASS, 1/1, **19/19** checks, exit 0 |
+| `npm run build` | PASS (re-run after final edits) |
+| `npm run lint` | FAIL, pre-existing missing `eslint.config.js`; unchanged |
+| `npx vitest run --reporter=dot` (full suite) | re-run after final edits; result recorded below |
+
+Final re-run results are recorded in §N.13. No test was disabled and no
+threshold was loosened.
+
+## N.6 Energy ledger results (E-REV-01)
+
+| Case | Result |
+|---|---|
+| A — asexual | 1 parent, 1 `REPRODUCTION_COST` of −55, `verified=1`, no second debit |
+| B — sexual | primary −55 and secondary −20, distinct entities, `MATE_COST` separate, zero incomplete flows |
+| C — null mate cost | `amount=null`, `missingFields` contains `secondaryParentEnergyCost`, no `MATE_COST` total, no fabricated entity total, conservation `incomplete=1` |
+| D — missing fields | all affected flows `NON_EVALUABLE`/`INCOMPLETE` with named fields; validation rejects structurally invalid v2; no arbitrary values; conservation remains `ok` with `incomplete=1` |
+| E — conservation | correct before/after deltas verify; a deliberately wrong delta produces one `PRIMARY_PARENT` mismatch with expected 56 vs recorded 55 |
+
+Engine run: every emitted `REPRODUCTION` has positive explicit primary cost,
+correct mode-specific secondary fields, and `verifyEnergyConservation().ok`
+with `checked === number of births`. The ledger is still **not** a closed
+global conservation law.
+
+## N.7 Completeness results (E-REV-02)
+
+| Case | Result |
+|---|---|
+| 1 | All critical types enabled → `COMPLETE`, no missing required types |
+| 2 | Disabling a critical type throws in `scientific_full`; `partial` records reason, `PARTIAL`, missing type and lost attempt |
+| 3 | Disabling a non-critical type under `partial` → `PARTIAL`, category `NON_CRITICAL` reported missing |
+| 4 | `diagnostic` profile remains `PARTIAL` and is never a complete scientific dataset |
+| 5 | Critical overflow → `criticalDropped=1`, `PARTIAL`, loss attributed by type |
+| 6 | Flush exception → `flushErrors=1`, message retained, `PARTIAL`, automatic flush suspended |
+| 7 | Export failure throws; no valid-looking dataset is produced |
+| 8 | Manifest and sink agree on profile, enabled/required types, reason and v2 schema |
+
+Run summaries always derive completeness from coverage plus losses; per-event
+`metadata.completeness` is only a snapshot at emission time.
+
+## N.8 Correlation results (E-REV-03)
+
+| Case | Result |
+|---|---|
+| 1 | Coherent hunt + death → `VERIFIED`, counts.VERIFIED=1 |
+| 2 | Hunt without death → `UNVERIFIED`, status `NON_EVALUABLE`; not confirmed predation |
+| 3 | Non-predatory death is not an orphan; predation death without hunt is `ORPHAN` / `INCONSISTENT` in a complete dataset |
+| 4 | Wrong correlation ID → `INCONSISTENT` |
+| 5 | Wrong prey ID → `INCONSISTENT` (`prey ID mismatch`) |
+| 6 | Wrong run ID → `INCONSISTENT` (`runId mismatch`) |
+| 7 | Wrong tick → `INCONSISTENT` (`tick mismatch`) |
+| 8 | Two deaths for one attempt → `AMBIGUOUS`, zero verified |
+| 9 | `PARTIAL` dataset with missing death → `NON_EVALUABLE` |
+| Control | One death referenced by two hunts → both `AMBIGUOUS`, never double-counted |
+
+`PREDATION` counts are computed only from `VERIFIED` attempts.
+
+## N.9 Benchmark (measured, no extrapolation)
+
+| Events | Record time | µs/event | Events/s | Bytes/event | Serialize | Compressed | Compress | Flush | Retained |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 29.3 ms | 2.93 | 341,120 | 581.7 | 144.7 ms | 155,409 B | 36.8 ms | 0 ms | 10,000 |
+| 50,000 | 87.7 ms | 1.75 | 570,451 | 582.6 | 690.4 ms | 763,804 B | 239.4 ms | 0 ms | 50,000 |
+| 100,000 | 187.7 ms | 1.88 | 532,814 | 584.7 | 1,584.9 ms | 1,524,240 B | 419.7 ms | 0 ms | 100,000 |
+
+Disabled sink: 100,000 records in 26.8 ms. Incremental flush with
+`releaseAfterFlush=true`: 50,000 recorded/flushed events, lifetime by-type
+count 50,000, retained ≤1,000, empty final snapshot. Repeated 20-tick engine
+overhead (median of 7 trials): disabled 70.0 ms, full 115.9 ms,
+`DEATH` only 70.8 ms, bounded non-critical 77.4 ms;
+`ratio_full_over_disabled=1.65`. These are measurements, not acceptance
+thresholds.
+
+## N.10 Pilot and manifest
+
+`<<PILOT_SUMMARY>>`
+
+## N.11 Verified hashes
+
+`<<HASH_TABLE>>`
+
+## N.12 Residual issues
+
+`<<RESIDUAL>>`
+
+## N.13 Final validation and commit hashes
+
+`<<FINAL_VALIDATION>>`

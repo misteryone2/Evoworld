@@ -8,13 +8,24 @@
  */
 import { World } from "../../simulation/core/world";
 import {
+  CRITICAL_EVENT_TYPES,
+  DEFAULT_REQUIRED_TYPES,
   ECOLOGICAL_EVENT_SCHEMA,
+  ECOLOGICAL_EVENT_TYPES,
+  EVENT_IMPORTANCE,
   InMemoryEventSink,
   canonicalEventString,
   validateEvent,
+  verifyEnergyConservation,
+  verifyPredationCorrelations,
   type EcologicalEvent,
   type EcologicalEventType,
+  type EnergyConservationReport,
+  type EventImportance,
+  type EventSinkConfig,
   type EventSinkSummary,
+  type ObservationProfile,
+  type PredationCorrelationReport,
 } from "../../simulation/ecology/observability";
 import { sha256 } from "../e1/dataset";
 import { applySetupWithInfo, type SetupKind } from "../e1/initialConditions";
@@ -35,6 +46,11 @@ export interface ObservabilityRunSpec {
   readonly sampleRates?: Partial<Record<EcologicalEventType, number>>;
   readonly samplingSeed?: number;
   readonly maxNonCriticalEvents?: number;
+  readonly maxCriticalEvents?: number;
+  /** E2.3.1 — profilo di completezza; default `scientific_full`. */
+  readonly profile?: ObservationProfile;
+  readonly requiredTypes?: readonly EcologicalEventType[];
+  readonly disabledReason?: string;
   readonly enableAdvancedGenome?: boolean;
   readonly enableGeneEffects?: boolean;
 }
@@ -48,12 +64,20 @@ export interface ObservabilityRunManifest {
   readonly seed: number;
   readonly config: Readonly<Record<string, unknown>>;
   readonly configSha256: string;
+  readonly loggingSha256: string;
   readonly logging: Readonly<{
     enabled: boolean;
-    enabledTypes: readonly EcologicalEventType[] | null;
+    eventSchema: typeof ECOLOGICAL_EVENT_SCHEMA;
+    profile: ObservationProfile;
+    requiredTypes: readonly EcologicalEventType[];
+    enabledTypes: readonly EcologicalEventType[];
+    disabledTypes: readonly EcologicalEventType[];
+    disabledReason: string | null;
+    importanceByType: Readonly<Record<EcologicalEventType, EventImportance>>;
     sampleRates: Partial<Record<EcologicalEventType, number>> | null;
     samplingSeed: number;
     maxNonCriticalEvents: number | null;
+    maxCriticalEvents: number | null;
     snapshotEveryTicks: number | null;
     criticalEventsNeverSampled: true;
   }>;
@@ -69,9 +93,32 @@ export interface ObservabilityRunResult {
   readonly events: readonly EcologicalEvent[];
   readonly eventSummary: EventSinkSummary;
   readonly eventPayloadSha256: string;
+  /** Stato reale della correlazione predazione ↔ morte, calcolato sugli eventi emessi. */
+  readonly correlation: PredationCorrelationReport;
+  readonly energyConservation: EnergyConservationReport;
   readonly validation: { valid: boolean; errors: string[] };
   /** Variabile: escluso da hash, dataset e confronto di riproducibilità. */
   readonly elapsedMs: number;
+}
+
+/** Unica fonte di verità per sink e manifest: impedisce configurazioni divergenti. */
+export function resolveSinkConfig(spec: ObservabilityRunSpec): EventSinkConfig {
+  return {
+    simulationId: spec.simulationId,
+    experimentId: spec.experimentId,
+    runId: spec.runId,
+    enabledTypes: spec.enabledTypes,
+    profile: spec.profile,
+    requiredTypes: spec.requiredTypes,
+    disabledReason: spec.disabledReason,
+    tickDuration: 1,
+    ticksPerYear: 400,
+    sampleRates: spec.sampleRates,
+    samplingSeed: spec.samplingSeed ?? 1,
+    maxNonCriticalEvents: spec.maxNonCriticalEvents,
+    maxCriticalEvents: spec.maxCriticalEvents,
+    snapshotEveryTicks: spec.snapshotEveryTicks,
+  };
 }
 
 /** Costruisce il manifest senza campi variabili. */
@@ -87,6 +134,35 @@ export function buildObservabilityManifest(spec: ObservabilityRunSpec): Observab
     enableAdvancedGenome: spec.enableAdvancedGenome ?? true,
     enableGeneEffects: spec.enableGeneEffects ?? true,
   };
+  const sinkConfig = resolveSinkConfig(spec);
+  const profile = sinkConfig.profile ?? "scientific_full";
+  const requiredTypes = sinkConfig.requiredTypes ?? DEFAULT_REQUIRED_TYPES[profile];
+  const enabledTypes = sinkConfig.enabledTypes ?? ECOLOGICAL_EVENT_TYPES;
+  const disabledTypes = ECOLOGICAL_EVENT_TYPES.filter((type) => !enabledTypes.includes(type));
+  if (profile === "scientific_full") {
+    const disabledCritical = ECOLOGICAL_EVENT_TYPES.filter(
+      (type) => CRITICAL_EVENT_TYPES.has(type) && disabledTypes.includes(type),
+    );
+    if (disabledCritical.length) {
+      throw new Error(`E2.3.1: scientific_full profile forbids disabling critical event types: ${disabledCritical.join(", ")}`);
+    }
+  }
+  const logging: ObservabilityRunManifest["logging"] = {
+    enabled: true,
+    eventSchema: ECOLOGICAL_EVENT_SCHEMA,
+    profile,
+    requiredTypes,
+    enabledTypes,
+    disabledTypes,
+    disabledReason: sinkConfig.disabledReason ?? null,
+    importanceByType: EVENT_IMPORTANCE,
+    sampleRates: sinkConfig.sampleRates ?? null,
+    samplingSeed: sinkConfig.samplingSeed ?? 1,
+    maxNonCriticalEvents: sinkConfig.maxNonCriticalEvents ?? null,
+    maxCriticalEvents: sinkConfig.maxCriticalEvents ?? null,
+    snapshotEveryTicks: sinkConfig.snapshotEveryTicks ?? null,
+    criticalEventsNeverSampled: true,
+  };
   return {
     schema: "evoworld.e2.3.run-manifest.v1",
     eventSchema: ECOLOGICAL_EVENT_SCHEMA,
@@ -96,15 +172,8 @@ export function buildObservabilityManifest(spec: ObservabilityRunSpec): Observab
     seed: spec.seed,
     config,
     configSha256: sha256(canonicalEventString(config)),
-    logging: {
-      enabled: true,
-      enabledTypes: spec.enabledTypes ?? null,
-      sampleRates: spec.sampleRates ?? null,
-      samplingSeed: spec.samplingSeed ?? 1,
-      maxNonCriticalEvents: spec.maxNonCriticalEvents ?? null,
-      snapshotEveryTicks: spec.snapshotEveryTicks ?? null,
-      criticalEventsNeverSampled: true,
-    },
+    loggingSha256: sha256(canonicalEventString(logging)),
+    logging,
     engineOptions: {
       enableAdvancedGenome: spec.enableAdvancedGenome ?? true,
       enableGeneEffects: spec.enableGeneEffects ?? true,
@@ -131,18 +200,8 @@ export function runObservability(spec: ObservabilityRunSpec): ObservabilityRunRe
   const prepared = applySetupWithInfo(world, spec.setup);
   const activeWorld = prepared.world;
 
-  const sink = new InMemoryEventSink({
-    simulationId: spec.simulationId,
-    experimentId: spec.experimentId,
-    runId: spec.runId,
-    enabledTypes: spec.enabledTypes,
-    tickDuration: 1,
-    ticksPerYear: 400,
-    sampleRates: spec.sampleRates,
-    samplingSeed: spec.samplingSeed ?? 1,
-    maxNonCriticalEvents: spec.maxNonCriticalEvents,
-    snapshotEveryTicks: spec.snapshotEveryTicks,
-  });
+  const sinkConfig = resolveSinkConfig(spec);
+  const sink = new InMemoryEventSink(sinkConfig);
   activeWorld.setEventSink(sink);
 
   const initialPopulation = activeWorld.organisms.length;
@@ -152,8 +211,15 @@ export function runObservability(spec: ObservabilityRunSpec): ObservabilityRunRe
     if (activeWorld.organisms.length === 0 && extinctAt === null) extinctAt = activeWorld.tick;
     if (activeWorld.organisms.length === 0) break;
   }
+  sink.flush();
 
   const events = sink.eventsSnapshot();
+  const eventSummary = sink.summary();
+  const correlation = verifyPredationCorrelations(events, {
+    completeness: eventSummary.completeness,
+    requiredTypes: eventSummary.requiredTypes,
+  });
+  const energyConservation = verifyEnergyConservation(events);
   const errors: string[] = [];
   for (const event of events) {
     const result = validateEvent(event);
@@ -161,6 +227,14 @@ export function runObservability(spec: ObservabilityRunSpec): ObservabilityRunRe
   }
   const ids = new Set(events.map((event) => event.eventId));
   if (ids.size !== events.length) errors.push("duplicate eventId");
+  if (eventSummary.completeness === "COMPLETE" && !eventSummary.coverageComplete) {
+    errors.push("inconsistent COMPLETE classification with incomplete coverage");
+  }
+  if (eventSummary.flushErrors > 0) errors.push(`flush errors: ${eventSummary.flushErrorMessages.join("; ")}`);
+  if (!energyConservation.ok) {
+    errors.push(`energy conservation mismatches: ${energyConservation.mismatches.map((m) => `${m.eventId}/${m.role}`).join("; ")}`);
+  }
+  if (correlation.status === "INCONSISTENT") errors.push(...correlation.errors);
 
   return {
     manifest: buildObservabilityManifest(spec),
@@ -169,8 +243,10 @@ export function runObservability(spec: ObservabilityRunSpec): ObservabilityRunRe
     finalPopulation: activeWorld.organisms.length,
     extinctAt,
     events,
-    eventSummary: sink.summary(),
+    eventSummary,
     eventPayloadSha256: eventsSha256(events),
+    correlation,
+    energyConservation,
     validation: { valid: errors.length === 0, errors },
     elapsedMs: Date.now() - started,
   };
@@ -183,6 +259,7 @@ export function compareRuns(a: ObservabilityRunResult, b: ObservabilityRunResult
 } {
   const differences: string[] = [];
   if (a.manifest.configSha256 !== b.manifest.configSha256) differences.push("configSha256");
+  if (a.manifest.loggingSha256 !== b.manifest.loggingSha256) differences.push("loggingSha256");
   if (a.eventPayloadSha256 !== b.eventPayloadSha256) differences.push("eventPayloadSha256");
   if (a.completedTicks !== b.completedTicks) differences.push("completedTicks");
   if (a.initialPopulation !== b.initialPopulation) differences.push("initialPopulation");

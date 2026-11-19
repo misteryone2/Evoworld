@@ -6,6 +6,7 @@ import {
   canonicalEventString,
   filterEvents,
   selectHuntEvents,
+  verifyEnergyConservation,
   type EcologicalEvent,
 } from "../../simulation/ecology/observability";
 import { applySetupWithInfo, type SetupKind } from "../../tools/e1/initialConditions";
@@ -131,8 +132,19 @@ describe("E2.3 engine hooks (observer-only)", () => {
       expect(birth.payload).toHaveProperty("offspringId");
       expect(birth.payload).toHaveProperty("parentIds");
       expect(["SEXUAL", "ASEXUAL"]).toContain(birth.payload.mode);
-      expect(birth.payload.parentEnergyCost).toBeGreaterThan(0);
+      expect(birth.payload.primaryParentEnergyCost).toBeGreaterThan(0);
+      expect(birth.payload.primaryParentEnergyBefore).toBeGreaterThan(birth.payload.primaryParentEnergyAfter as number);
+      if (birth.payload.mode === "SEXUAL") {
+        expect(birth.payload.secondaryParentId).not.toBeNull();
+        expect(birth.payload.secondaryParentEnergyCost).toBeGreaterThan(0);
+      } else {
+        expect(birth.payload.secondaryParentId).toBeNull();
+        expect(birth.payload.secondaryParentEnergyCost).toBeNull();
+      }
     }
+    const conservation = verifyEnergyConservation(births);
+    expect(conservation.ok).toBe(true);
+    expect(conservation.checked).toBe(births.length);
   });
 
   it("records vegetation consumption, depletion and regeneration with before/after stock", () => {

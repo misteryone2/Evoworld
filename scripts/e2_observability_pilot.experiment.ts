@@ -15,7 +15,14 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ECOLOGICAL_EVENT_SCHEMA, filterEvents, selectHuntEvents } from "../simulation/ecology/observability";
+import {
+  CRITICAL_EVENT_TYPES,
+  ECOLOGICAL_EVENT_SCHEMA,
+  ECOLOGICAL_EVENT_SCHEMA_V1,
+  canonicalEventString,
+  filterEvents,
+  selectHuntEvents,
+} from "../simulation/ecology/observability";
 import { e1SourceFiles, checksumSources } from "../tools/e2/dataset";
 import { compareRuns, runObservability, type ObservabilityRunResult, type ObservabilityRunSpec } from "../tools/e2/observabilityRunner";
 import { aggregateRun, exportObservabilityDataset, verifyObservabilityArtifact } from "../tools/e2/observabilityPipeline";
@@ -124,19 +131,27 @@ describe("E2.3 observability pilot", () => {
       extraAuxiliary: {
         reproducibility: comparisons,
         eventSchema: ECOLOGICAL_EVENT_SCHEMA,
+        supportedEventSchemas: [ECOLOGICAL_EVENT_SCHEMA_V1, ECOLOGICAL_EVENT_SCHEMA],
       },
     });
 
     const verified = verifyObservabilityArtifact(exported.archivePath, exported.manifestPath);
-    const manifestSha256 = createHash("sha256").update(readFileSync(exported.manifestPath)).digest("hex");
+    const manifestBytes = readFileSync(exported.manifestPath);
+    const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
+    const archiveSha256OnDisk = createHash("sha256").update(readFileSync(exported.archivePath)).digest("hex");
     const checks = buildChecks(runs);
+    checks.hashChain = archiveSha256OnDisk === exported.archiveSha256
+      && archiveSha256OnDisk === exported.manifest.archiveSha256
+      && exported.payloadSha256 === exported.manifest.payloadSha256
+      && manifestSha256.length === 64
+      && verified.ok;
     checks.export = exported.validationErrors.length === 0;
     checks.integrity = verified.ok;
     checks.reproducibility = comparisons.every((c) => c.reproducible);
-    checks.manifest = runs.every((r) => r.manifest.schema === "evoworld.e2.3.run-manifest.v1");
+    checks.manifest = checks.manifest && runs.every((r) => r.manifest.schema === "evoworld.e2.3.run-manifest.v1");
 
     const report = {
-      schema: "evoworld.e2.3.pilot-report.v1",
+      schema: "evoworld.e2.3.pilot-report.v1.1",
       codeCommit: CODE_COMMIT,
       workingTreeDirty: WORKTREE_DIRTY,
       runtime: { node: process.version, v8: process.versions.v8 },
@@ -162,6 +177,7 @@ describe("E2.3 observability pilot", () => {
         payloadSha256: exported.payloadSha256,
         archiveSha256: exported.archiveSha256,
         manifestSha256,
+        archiveSha256OnDisk,
         sourceSha256,
         e1SourceSha256,
       },
@@ -186,18 +202,45 @@ function buildChecks(runs: readonly ObservabilityRunResult[]): Record<string, bo
   const all = runs.flatMap((run) => [...run.events]);
   const hunts = selectHuntEvents(all, "HUNT_ATTEMPT");
   const successes = selectHuntEvents(all, "PREDATION");
+  const reproduced = filterEvents(all, { types: ["REPRODUCTION"] }).length;
+  const criticalCovered = runs.every((run) =>
+    [...CRITICAL_EVENT_TYPES].every((type) => run.eventSummary.enabledTypes.includes(type)
+      && run.eventSummary.missingRequiredTypes.length === 0));
   return {
     runStarted: runs.every((run) => run.completedTicks > 0),
-    manifest: runs.every((run) => run.manifest.schema === "evoworld.e2.3.run-manifest.v1"),
+    manifest: runs.every((run) =>
+      run.manifest.schema === "evoworld.e2.3.run-manifest.v1"
+      && run.manifest.logging.profile === run.eventSummary.profile
+      && canonicalEventString(run.manifest.logging.enabledTypes) === canonicalEventString(run.eventSummary.enabledTypes)
+      && canonicalEventString(run.manifest.logging.requiredTypes) === canonicalEventString(run.eventSummary.requiredTypes)
+      && run.manifest.loggingSha256.length === 64),
     eventsGenerated: all.length > 0,
+    eventSchemaV2: runs.every((run) =>
+      run.manifest.eventSchema === ECOLOGICAL_EVENT_SCHEMA
+      && run.events.every((event) => event.schemaVersion === ECOLOGICAL_EVENT_SCHEMA)),
+    criticalTypesCovered: criticalCovered,
+    completenessDeclared: runs.every((run) =>
+      run.eventSummary.profile === "scientific_full"
+      && (run.eventSummary.completeness === "COMPLETE") === run.eventSummary.coverageComplete
+      && run.eventSummary.flushErrors === 0),
     predationObserved: hunts.length > 0 && successes.length > 0,
     mortalityObserved: filterEvents(all, { types: ["DEATH"] }).length > 0,
     consumptionObserved: filterEvents(all, { types: ["RESOURCE_CONSUMPTION"] }).length > 0,
+    reproductionLedgerVerified: reproduced === 0 || runs.every((run) => run.energyConservation.ok),
+    noSilentLoss: runs.every((run) =>
+      run.eventSummary.sampled === 0
+      && run.eventSummary.droppedNonCritical === 0
+      && run.eventSummary.criticalDropped === 0
+      && run.eventSummary.flushErrors === 0
+      && Object.values(run.eventSummary.lostByType).every((count) => count === 0)),
+    correlationsVerified: runs.every((run) => run.correlation.status !== "INCONSISTENT"
+      && run.correlation.errors.length === 0),
     snapshotsBuilt: filterEvents(all, { types: ["ECOSYSTEM_SNAPSHOT", "RESOURCE_SNAPSHOT"] }).length > 0,
     eventSequenceReconstructed: reconstructSequence(all).length === all.length,
     validation: runs.every((run) => run.validation.valid),
     export: false,
     integrity: false,
+    hashChain: false,
     reproducibility: false,
   };
 }

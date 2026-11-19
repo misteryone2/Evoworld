@@ -9,7 +9,7 @@ Questa cartella contiene la documentazione scientifica, i protocolli e i dataset
 | E2.0 — Engine Ecology Audit | Completata | [E2_0_ENGINE_ECOLOGY_AUDIT.md](E2_0_ENGINE_ECOLOGY_AUDIT.md) |
 | E2.1 — Population Stability | Completata (review; in attesa di review indipendente) | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
 | E2.2 — Food Web Dynamics | Eseguita (report e dataset in preparazione; in attesa di review indipendente) | [E2_2_FOOD_WEB_REPORT.md](E2_2_FOOD_WEB_REPORT.md) |
-| E2.3 — Ecological Observability | Completata (validazione tecnica; in attesa di review indipendente) | [E2_3_OBSERVABILITY_REPORT.md](E2_3_OBSERVABILITY_REPORT.md) · [schema](E2_3_EVENT_SCHEMA.md) |
+| E2.3 / E2.3.1 — Ecological Observability | Completata (correzioni da review indipendente; validazione tecnica; in attesa di review) | [E2_3_OBSERVABILITY_REPORT.md](E2_3_OBSERVABILITY_REPORT.md) · [schema v2](E2_3_EVENT_SCHEMA.md) |
 | E2.4 — Biodiversity & Complexity | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
 | E2.5 — Resilience & Perturbation | Classificazione appaiata completata in E2.1; estensione pianificata | [E2_1_PILOT_REPORT.md](E2_1_PILOT_REPORT.md) |
 | E2.6 — Evolution & Speciation | Pianificata | [E2_EXPERIMENTAL_MATRIX.md](E2_EXPERIMENTAL_MATRIX.md) |
@@ -28,9 +28,10 @@ Questa cartella contiene la documentazione scientifica, i protocolli e i dataset
 
 ## Dataset E2.3 (osservabilità)
 
-- [e2.3-observability-pilot.json.gz](datasets/e2.3-observability-pilot.json.gz) · [manifest](datasets/e2.3-observability-pilot.manifest.json) · [report](datasets/e2.3-observability-pilot.report.json)
-- 2 corse osservate + 2 repliche, 2 seed, 40 tick; 83.243 eventi reali; 12/12 check tecnici superati; hash e provenance nel manifest.
-- [Report](E2_3_OBSERVABILITY_REPORT.md) · [schema eventi](E2_3_EVENT_SCHEMA.md). Nessuna conclusione ecologica prodotta.
+- [e2.3-observability-pilot.json.gz](datasets/e2.3-observability-pilot.json.gz) · [manifest](datasets/e2.3-observability-pilot.manifest.json) · [report](datasets/e2.3-observability-pilot.report.json) — dataset E2.3 storico.
+- [e2.3.1-observability-pilot.json.gz](datasets/e2.3.1-observability-pilot.json.gz) · [manifest](datasets/e2.3.1-observability-pilot.manifest.json) · [report](datasets/e2.3.1-observability-pilot.report.json) — dataset E2.3.1 corretto.
+- 2 corse osservate + 2 repliche, 2 seed, 40 tick; schema evento v2, ledger con ruoli espliciti, completezza dichiarata, correlazioni verificate, 19/19 check tecnici; hash e provenance nel manifest.
+- [Report E2.3.1 §N](E2_3_OBSERVABILITY_REPORT.md) · [schema eventi v2](E2_3_EVENT_SCHEMA.md). Nessuna conclusione ecologica prodotta.
 
 ## Strumenti
 
