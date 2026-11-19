@@ -1,4 +1,4 @@
-import { computeComplexity, withFingerprint } from "./assemble";
+import { computeComplexity, computeExtents, withFingerprint } from "./assemble";
 import type { AnatomyDescriptor, AppendageKind, DetailTier } from "./types";
 
 /** Appendici che reggono il movimento o il corpo: restano al livello 1. Le altre (sensoriali, difensive, boccali) cadono. */
@@ -26,7 +26,14 @@ export function reduceAnatomyDetail(d: AnatomyDescriptor, tier: DetailTier): Ana
     appendages = [];
     joints = joints.filter((j) => j.kind === "axial");
   }
-  const { fingerprint: _f, ...rest } = d;
-  void _f;
-  return withFingerprint({ ...rest, lod: tier, appendages, joints, complexity: computeComplexity(d.segments, appendages, joints) });
+  const { fingerprint: _f, proportions, locomotion, complexity: _c, ...rest } = d;
+  void _f; void _c;
+  // Le misure devono descrivere la geometria effettivamente presente a questo livello.
+  const ext = computeExtents(d.segments, appendages, proportions.sizeScale);
+  return withFingerprint({
+    ...rest, lod: tier, appendages, joints,
+    proportions: { ...proportions, ...ext },
+    locomotion: { ...locomotion, groundClearance: ext.groundClearance },
+    complexity: computeComplexity(d.segments, appendages, joints),
+  });
 }

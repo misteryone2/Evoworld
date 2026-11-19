@@ -5,4 +5,4 @@ export * from "./validate";
 export * from "./serialize";
 export * from "./lod";
 export * from "./legacyAdapter";
-export { computeFingerprint } from "./assemble";
+export { computeFingerprint, computeComplexity, computeExtents, computeAnatomicalExtents, assessGroundClearance } from "./assemble";
