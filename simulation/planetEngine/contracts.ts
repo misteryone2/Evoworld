@@ -105,6 +105,27 @@ export interface PlanetState {
   };
 }
 
+/** Deterministic elevation tile produced by geophysics, not by legacy fBm. */
+export interface ElevationGrid {
+  width: number;
+  height: number;
+  elevationM: Float32Array;
+  minM: number;
+  maxM: number;
+  /** Approximate uniform cell area from total sphere area / cell count. */
+  cellAreaM2: number;
+}
+
+export interface SurfaceField extends ElevationGrid {
+  seaLevelM: number;
+  /** 1 = ocean, 0 = land. */
+  oceanMask: Uint8Array;
+  /** 1 = land cell adjacent to ocean (wrapped neighbourhood). */
+  coastlineMask: Uint8Array;
+  oceanFraction: number;
+  landFraction: number;
+}
+
 export interface OrbitPosition {
   timeS: number;
   meanAnomalyRad: number;

@@ -6,7 +6,15 @@
  * Three.js, World or any biology/GENOME module.
  */
 
-import type { OrbitPosition, PlanetEngineSnapshot, PlanetPhysicalConfig, PlanetState } from "../contracts";
+import type {
+  ElevationGrid,
+  GasKey,
+  OrbitPosition,
+  PlanetEngineSnapshot,
+  PlanetPhysicalConfig,
+  PlanetState,
+  SurfaceField,
+} from "../contracts";
 import {
   cloneState,
   createEarthLikeConfig,
@@ -18,6 +26,16 @@ import { orbitAt } from "../core/Orbit";
 import { computeEnergyBudget, estimateBondAlbedo } from "../core/EnergyBudget";
 import { PlanetInvariantError, validateConfig, validateState } from "../core/invariants";
 import { gravityMS2 } from "../core/PlanetCore";
+import { stepInterior } from "../geology/Interior";
+import { tectonicElevationDeltaM } from "../geology/Tectonics";
+import { volcanicEventAt } from "../geology/Volcanism";
+import { applyElevationDeltaM, erodeAndDeposit } from "../geology/SurfaceEvolution";
+import { buildElevationGrid, solveSeaLevelM } from "../surface/Hypsometry";
+import { buildSurfaceField } from "../surface/Continents";
+import { buildCoastlineMask } from "../surface/Coastlines";
+import { PLANET_UNITS } from "../units";
+
+const GAS_KEYS: readonly GasKey[] = ["N2", "O2", "CO2", "H2O", "CH4", "Ar", "other"];
 
 function cloneConfig(config: PlanetPhysicalConfig): PlanetPhysicalConfig {
   return createEarthLikeConfig({
@@ -39,12 +57,25 @@ function cloneSnapshot(snapshot: PlanetEngineSnapshot): PlanetEngineSnapshot {
   return { ...snapshot, orbit: cloneOrbit(snapshot.orbit) };
 }
 
+function cloneSurfaceField(field: SurfaceField): SurfaceField {
+  return {
+    ...field,
+    elevationM: new Float32Array(field.elevationM),
+    oceanMask: new Uint8Array(field.oceanMask),
+    coastlineMask: new Uint8Array(field.coastlineMask),
+  };
+}
+
 export class PlanetEngine {
   readonly engineVersion = PLANET_ENGINE_VERSION;
 
   private readonly config: PlanetPhysicalConfig;
   private state: PlanetState;
   private currentSnapshot: PlanetEngineSnapshot;
+  private elevationGrid?: ElevationGrid;
+  private cachedElevationRevision = -1;
+  private elevationRevision = 0;
+  private surfaceCache?: { key: string; field: SurfaceField };
 
   constructor(config: PlanetPhysicalConfig) {
     validateConfig(config);
@@ -86,6 +117,96 @@ export class PlanetEngine {
 
   snapshot(): PlanetEngineSnapshot {
     return cloneSnapshot(this.currentSnapshot);
+  }
+
+  /** Deterministic elevation grid; rebuilt only when geology mutates it. */
+  getElevationGrid(): ElevationGrid {
+    if (!this.elevationGrid || this.cachedElevationRevision !== this.elevationRevision) {
+      this.elevationGrid = buildElevationGrid(this.config);
+      this.cachedElevationRevision = this.elevationRevision;
+    }
+    return {
+      ...this.elevationGrid,
+      elevationM: new Float32Array(this.elevationGrid.elevationM),
+    };
+  }
+
+  /** Surface derived from elevation + ocean mass inventory + solved sea level. */
+  getSurfaceField(): SurfaceField {
+    const key = `${this.state.hydrosphere.oceanMassKg.toFixed(6)}:${this.elevationRevision}`;
+    if (this.surfaceCache?.key === key) return cloneSurfaceField(this.surfaceCache.field);
+
+    const grid = this.getElevationGrid();
+    const waterVolumeM3 = this.state.hydrosphere.oceanMassKg / PLANET_UNITS.waterDensityKgM3;
+    const seaLevelM = solveSeaLevelM(grid, waterVolumeM3);
+    const field = buildSurfaceField(grid, seaLevelM);
+    field.coastlineMask = buildCoastlineMask(field);
+
+    this.surfaceCache = { key, field };
+    return cloneSurfaceField(field);
+  }
+
+  /**
+   * Explicit geology step. It is separate from `step()` so orbital/climate
+   * determinism tests remain valid while surface evolution is opt-in.
+   */
+  stepGeology(deltaS: number): SurfaceField {
+    if (!Number.isFinite(deltaS) || deltaS <= 0) {
+      throw new PlanetInvariantError("stepGeology deltaS must be a finite positive number");
+    }
+
+    const interior = stepInterior(this.config, this.state, deltaS);
+    this.state.interior.heatJ = interior.heatJ;
+    this.state.interior.tectonicStress = interior.tectonicStress;
+    this.state.interior.volcanicActivity = interior.volcanicActivity;
+
+    const grid = this.getElevationGrid();
+    const deltaM = new Float32Array(grid.elevationM.length);
+    let volcanicCo2Kg = 0;
+
+    for (let y = 0; y < grid.height; y += 1) {
+      for (let x = 0; x < grid.width; x += 1) {
+        const index = y * grid.width + x;
+        const event = volcanicEventAt(this.config, this.state, x, y, this.state.timeS, deltaS);
+        deltaM[index] = tectonicElevationDeltaM(this.config, this.state, x, y, deltaS) + event.elevationDeltaM;
+        volcanicCo2Kg += event.co2Kg;
+      }
+    }
+
+    this.injectAtmosphericMassKg(volcanicCo2Kg, "CO2");
+    const uplifted = applyElevationDeltaM(grid, deltaM);
+    const eroded = erodeAndDeposit(this.config, uplifted, deltaS);
+    this.setElevationGrid(eroded.elevationM);
+    validateState(this.config, this.state);
+    return this.getSurfaceField();
+  }
+
+  private injectAtmosphericMassKg(massKg: number, gas: GasKey): void {
+    if (!(massKg > 0)) return;
+    const oldMass = this.state.atmosphere.totalMassKg;
+    const newMass = oldMass + massKg;
+    for (const key of GAS_KEYS) this.state.atmosphere.composition[key] *= oldMass / newMass;
+    this.state.atmosphere.composition[gas] += massKg / newMass;
+    this.state.atmosphere.totalMassKg = newMass;
+  }
+
+  private setElevationGrid(elevationM: Float32Array): void {
+    let minM = Infinity;
+    let maxM = -Infinity;
+    for (let i = 0; i < elevationM.length; i += 1) {
+      if (elevationM[i] < minM) minM = elevationM[i];
+      if (elevationM[i] > maxM) maxM = elevationM[i];
+    }
+    this.elevationGrid = {
+      width: this.config.surface.gridWidth,
+      height: this.config.surface.gridHeight,
+      elevationM: new Float32Array(elevationM),
+      minM,
+      maxM,
+      cellAreaM2: (4 * Math.PI * this.config.radiusM ** 2) / elevationM.length,
+    };
+    this.elevationRevision += 1;
+    this.surfaceCache = undefined;
   }
 
   private refreshDerived(): PlanetEngineSnapshot {

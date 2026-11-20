@@ -15,6 +15,9 @@ export const PLANET_UNITS = {
   stefanBoltzmann: 5.670374419e-8,
   gravitationalConstant: 6.6743e-11,
   standardGravityMS2: 9.80665,
+  waterDensityKgM3: 1000,
+  crustDensityKgM3: 2700,
+  dryAirCpJPerKgK: 1004.5,
 } as const;
 
 export function clamp(value: number, min: number, max: number): number {
