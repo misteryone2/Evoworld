@@ -13,7 +13,7 @@
 | Criticità | Correzione | Sezione |
 |---|---|---|
 | G1 | `MutationEvent` riprogettato come discriminated union per operazione: point mutation, insertion, deletion, duplication, inversion, translocation, chromosome-level event, aneuploidy, variazione strutturale compatibile. Ogni variante rappresenta struttura precedente, operazione, struttura risultante, cromosomi/intervalli/copie coinvolti, materiale genetico inserito/rimosso/duplicato, posizione/orientamento risultanti, provenienza/causalità. `affectedLoci` non richiesto per eventi esclusivamente intergenici o a intero cromosoma. Combinazioni scope/operation/payload impossibili impedite dal tipo. Nessun limite arbitrario a loci/complessità. | §5.1 |
-| G2 | Pipeline corretta: `GeneticGenome → ResolvedGenotype → GeneticExpression → PlasticResponse → DevelopmentalState → FinalPhenotype`. `develop()` restituisce `DevelopmentalState` (non `FinalPhenotype`). Passaggio distinto e verificabile `deriveFinalPhenotype()` produce `FinalPhenotype`. `DevelopmentalState` senza duplicazioni di dati già presenti in `GeneticExpression`/`PlasticResponse`. | §6, §7 |
+| G2 | Pipeline corretta: `GeneticGenome → ResolvedGenotype → GeneticExpression → PlasticResponse → DevelopmentalState → FinalPhenotype`. `develop()` restituisce `DevelopmentalState` (non `FinalPhenotype`). Passaggio distinto e verificabile `derivePhenotype()` produce `FinalPhenotype`. `DevelopmentalState` senza duplicazioni di dati già presenti in `GeneticExpression`/`PlasticResponse`. | §6, §7 |
 | G3 | Regole esplicite di formazione gameti: distinti ploidia organismo, ploidia gamete, numero contributori, modalità riproduttiva, regole di segregazione, anomalie meiotiche. Nessuna assunzione che ogni gamete contenga sempre una sola copia per gruppo omologo. Architettura estendibile a modelli poliploidi senza compromettere correttezza del modello diploide iniziale. | §4.1, §4.2 |
 | G4 | Formalizzate combinazioni ammissibili tra scope, operation, payload, cromosomi, loci, intervalli; invarianti verificabili e comportamenti di errore definiti. | §5.2 |
 | G5 | Registry funzioni custom completo: identificativo stabile, versione, firma input/output, unità/domini, implementazione registrata, determinismo, gestione funzioni mancanti, compatibilità replay/serializzazione. L'identificativo non è sufficiente senza implementazione disponibile e compatibile. | §3.4 |
@@ -27,7 +27,7 @@
 3. **Stato allelico esplicito.** Assenza biologica, dato non disponibile e dato non valutabile sono stati distinti e non intercambiabili; vietato `null` ambiguo.
 4. **Provenienza generalizzata e gametogenesi esplicita.** Ogni copia/contributo è tracciato da `contributionId`/`contributorId`/`gameteId`; identità del contributore separata da ruoli biologici opzionali; ploidia organismo, ploidia gamete, segregazione e anomalie meiotiche sono distinte ed esplicite.
 5. **Genotipo ereditabile immutabile.** `GeneticGenome` nasce da fondazione, ereditarietà o mutazione germinale; ambiente, espressione, plasticità, sviluppo e rendering non lo modificano.
-6. **Flusso unidirezionale e fasi distinte.** Genotipo → risoluzione → espressione → regolazione ambientale → plasticità → sviluppo → derivazione fenotipo finale. `develop()` produce `DevelopmentalState`; `deriveFinalPhenotype()` produce `FinalPhenotype`.
+6. **Flusso unidirezionale e fasi distinte.** Genotipo → risoluzione → espressione → regolazione ambientale → plasticità → sviluppo → derivazione fenotipo finale. `develop()` produce `DevelopmentalState`; `derivePhenotype()` produce `FinalPhenotype`.
 7. **Regole separate dai dati e quantitative.** Canali con unità, domini finiti, normalizzazione e conflitti espliciti; funzioni custom solo se registrate, versionate e deterministiche.
 8. **Tracciabilità e replay verificabile.** Eventi/mutazioni registrano struttura precedente, operazione, struttura risultante, provenienza e traccia RNG; replay incompatibile produce errore esplicito, mai risultato valido apparente.
 9. **Maturità dichiarata.** Ogni componente è `progettato`, `implementato-non-integrato`, `integrato` o `attivo` con criteri verificabili.
@@ -196,7 +196,7 @@ GeneticGenome + GenomeRegistry + GenomeConfig
 | 4 | `EnvironmentalSnapshot` | Contesto ambientale da Planet Engine | no | no |
 | 5 | `PlasticResponse` | Risposta non ereditaria (delta/regolazione rispetto all'espressione) | no | no |
 | 6 | `DevelopmentalState` | Stato ontogenetico (risultato di `develop()`) | no | no |
-| 7 | `FinalPhenotype` | Fenotipo finale derivato (risultato di `deriveFinalPhenotype()`) | no | no |
+| 7 | `FinalPhenotype` | Fenotipo finale derivato (risultato di `derivePhenotype()`) | no | no |
 
 ### 6.1 Pipeline e separazione delle fasi (G2)
 
@@ -206,11 +206,11 @@ GeneticGenome
   → express              → GeneticExpression
   → regulate (env)       → PlasticResponse
   → develop              → DevelopmentalState   (non FinalPhenotype)
-  → deriveFinalPhenotype → FinalPhenotype
+  → derivePhenotype → FinalPhenotype
 ```
 
 - **`develop()`** restituisce esclusivamente `DevelopmentalState`.
-- **`deriveFinalPhenotype()`** è un passaggio distinto e verificabile che produce `FinalPhenotype` a partire da stato di sviluppo e riferimenti/contesto necessari (senza collassare le fasi).
+- **`derivePhenotype()`** è un passaggio distinto e verificabile che produce `FinalPhenotype` a partire da stato di sviluppo e riferimenti/contesto necessari (senza collassare le fasi).
 - Ogni passaggio è deterministico dato input e contesto compatibili/versionati.
 
 ### 6.2 DevelopmentalState (senza duplicazioni)
@@ -279,7 +279,7 @@ flowchart TD
     PR -. riferimenti/condizioni rilevanti .-> DV
     PR --> DVPROC[develop]
     DVPROC --> DV
-    DV --> FPROC[deriveFinalPhenotype]
+    DV --> FPROC[derivePhenotype]
     GE -. input derivazione .-> FPROC
     PR -. input derivazione .-> FPROC
     FPROC --> FP

@@ -60,7 +60,7 @@ GEN-1 non può essere dichiarato operativo per meiosi/gametogenesi/mutazione/ped
 | G1-V6 | Assi riproduttivi e gametogenesi (G3) | Functional | `ReproductionMode`, `GameteFormationMode`, ploidia organismo, `GametePloidy`, `SegregationRule`, anomalie meiotiche e cardinalità contributori indipendenti/espliciti; nessuna assunzione di una copia per gruppo nel gamete |
 | G1-V7 | Mutazioni discriminated union e invarianti (G1/G4) | Functional | operazioni coperte con struttura pre/op/post, materiali/intervalli/copie/posizioni-orientamenti; `affectedLoci` non richiesto per intergenico puro/intero cromosoma; combinazioni impossibili rifiutate |
 | G1-V8 | Replay discriminato | Functional | `ok` ⇒ valore non nullo e mismatch vuoti; `incompatible` ⇒ `value: null` e mismatch espliciti non vuoti (incluso mismatch funzioni custom/versioni) |
-| G1-V9 | Pipeline sviluppo/fenotipo (G2) | Functional | `develop()` ⇒ `DevelopmentalState` (età/tempo, stadio, crescita/maturazione, processi, condizioni rilevanti, riferimenti senza duplicazioni); `deriveFinalPhenotype()` ⇒ `FinalPhenotype` come passo distinto/verificabile |
+| G1-V9 | Pipeline sviluppo/fenotipo (G2) | Functional | `develop()` ⇒ `DevelopmentalState` (età/tempo, stadio, crescita/maturazione, processi, condizioni rilevanti, riferimenti senza duplicazioni); `derivePhenotype()` ⇒ `FinalPhenotype` come passo distinto/verificabile |
 | G1-V10 | Ambiente (contratto) | Functional | snapshot Planet Engine con coerenza temporale, coordinate/campionamento, stati campo uniformati; adattatore read-only; mapping subordinato a contratto (D-14) |
 | G1-V11 | Round-trip/migrazione | Functional | canonico, idempotente, stati speciali/mutazioni strutturali/riferimenti custom preservati, versioni future `unsupported` |
 | G1-V12 | Isolamento | Regression | diff limitato a `simulation/genome/**` e `tests/genomeEngine/**`; nessun wiring live |
@@ -103,7 +103,7 @@ GEN-1 non può essere dichiarato operativo per meiosi/gametogenesi/mutazione/ped
 | ID | Verifica | Tipo | Criterio |
 |---|---|---|---|
 | G5-V1 | Contratti separati e non ereditabili | Functional | 7 contratti distinti; plasticità/sviluppo non ereditabili |
-| G5-V2 | Sviluppo/fenotipo separati (G2) | Functional | `develop()` produce `DevelopmentalState` con età/tempo, stadio, crescita/maturazione, stato processi, condizioni rilevanti e riferimenti (no duplicazioni); `deriveFinalPhenotype()` produce `FinalPhenotype` distinto e verificabile |
+| G5-V2 | Sviluppo/fenotipo separati (G2) | Functional | `develop()` produce `DevelopmentalState` con età/tempo, stadio, crescita/maturazione, stato processi, condizioni rilevanti e riferimenti (no duplicazioni); `derivePhenotype()` produce `FinalPhenotype` distinto e verificabile |
 | G5-V3 | Fonte ambientale Planet Engine | Functional | `EnvironmentalSnapshot` read-only con coerenza temporale, coordinate/campionamento, unità/provenienza/stati campo uniformati |
 | G5-V4 | Mancanze ambientali/sviluppo | Functional | `missing`/`non-evaluable`/`undetermined` propagati senza inventare valori; mapping concreto subordinato a contratto Planet Engine |
 | G5-R1 | Stabilità genotipo | Regression | fingerprint genotipo invariato durante sviluppo/regolazione/derivazione fenotipo |
@@ -147,7 +147,7 @@ Tutti **progettati, non eseguiti**. Esecuzione futura: ≥5 seed, campioni grand
 | T-13 | Determinismo | Stesso seed/config/registry/snapshot ⇒ stessi output; world RNG non consumato | 5 seed × 2 replay; IV1-A | 0 divergenze | `OBSERVED` |
 | T-14 | Compatibilità legacy | Snapshot v1/v2 senza `genetics`; fallback blending | 1.000 snapshot × 5 seed | nessuna eccezione; valori legacy invariati | `OBSERVED` |
 | T-15 | Serializzazione/migrazione | Round-trip, migrazione monotonica/idempotente, versione futura, payload mutazionali e riferimenti custom | 1.000 genomi/eventi × 5 seed | stati speciali/strutture pre-op-post/intergenico/cromosomico preservati; future ⇒ `unsupported`/`NON_EVALUABLE` | `OBSERVED` |
-| T-16 | Ambiente Planet Engine e sviluppo/fenotipo (G2) | Snapshot con coerenza temporale/coordinate/campionamento/stati campo; `develop()` vs `deriveFinalPhenotype()` | suite contrattuale × 5 seed | `DevelopmentalState` senza duplicazioni di `GeneticExpression`/`PlasticResponse`; fenotipo finale derivato in passo distinto; adattamento read-only; nessuna scrittura genotipo | `OBSERVED`, `DERIVED` |
+| T-16 | Ambiente Planet Engine e sviluppo/fenotipo (G2) | Snapshot con coerenza temporale/coordinate/campionamento/stati campo; `develop()` vs `derivePhenotype()` | suite contrattuale × 5 seed | `DevelopmentalState` senza duplicazioni di `GeneticExpression`/`PlasticResponse`; fenotipo finale derivato in passo distinto; adattamento read-only; nessuna scrittura genotipo | `OBSERVED`, `DERIVED` |
 | T-17 | Maturità/integrità wiring | Analisi statica + test di integrazione per livello dichiarato | per PR | nessuna dichiarazione "attivo" senza call-site live, test e abilitazione documentata | `OBSERVED` |
 
 ---

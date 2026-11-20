@@ -23,7 +23,7 @@ Riferimento invariato: `BaseGenome`/`Genome` (`types/index.ts`), `GeneDefinition
 6. **Quantitativo e deterministico.** Valori finiti (no `NaN`/`±Infinity`), unità, domini, normalizzazione e conflitti espliciti; funzioni custom solo da registry versionato con implementazione compatibile.
 7. **Replay verificabile.** `ReplayResult<T>` discriminato: `ok` con valore, `incompatible` con `value: null` e mismatch espliciti non vuoti.
 8. **Mutazioni tipizzate e coerenti.** `MutationEvent` come discriminated union per operazione con struttura precedente/risultante e invarianti verificabili.
-9. **Pipeline sviluppo/fenotipo separata.** `develop()` → `DevelopmentalState`; `deriveFinalPhenotype()` → `FinalPhenotype` (passo distinto e verificabile).
+9. **Pipeline sviluppo/fenotipo separata.** `develop()` → `DevelopmentalState`; `derivePhenotype()` → `FinalPhenotype` (passo distinto e verificabile).
 10. **Ambiente esterno autorevole.** `EnvironmentalSnapshot` deriva da Planet Engine; nessun modello ambientale parallelo.
 11. **Maturità esplicita.** Tutti i contratti sotto sono **progettati**, non implementati/integrati/attivi.
 
@@ -430,7 +430,7 @@ interface FinalPhenotype {
 }
 ```
 
-**Vincoli G2:** `DevelopmentalState` non duplica canali di `GeneticExpression` o delta di `PlasticResponse` (usa riferimenti). `develop()` restituisce `DevelopmentalState`; `deriveFinalPhenotype()` restituisce `FinalPhenotype`. Vietato restituire `GeneticGenome` o `FinalPhenotype` da `develop()`.
+**Vincoli G2:** `DevelopmentalState` non duplica canali di `GeneticExpression` o delta di `PlasticResponse` (usa riferimenti). `develop()` restituisce `DevelopmentalState`; `derivePhenotype()` restituisce `FinalPhenotype`. Vietato restituire `GeneticGenome` o `FinalPhenotype` da `develop()`.
 
 ---
 
@@ -739,7 +739,7 @@ interface GenomeEngineApi {
   express(resolved: ResolvedGenotype, registry: GenomeRegistry, config: GenomeConfig): GeneticExpression;
   regulate(expr: GeneticExpression, env: EnvironmentalSnapshot, config: GenomeConfig): PlasticResponse;
   develop(input: DevelopmentInput): DevelopmentalState;
-  deriveFinalPhenotype(input: FinalPhenotypeInput): FinalPhenotype;
+  derivePhenotype(input: FinalPhenotypeInput): FinalPhenotype;
   serialize(genome: GeneticGenome): unknown;
   deserialize(raw: unknown, registry: GenomeRegistry): MigrationResult<GeneticGenome>;
   migrate(raw: unknown, from: VersionSet, to: VersionSet): MigrationResult<GeneticGenome>;
@@ -754,4 +754,4 @@ Tutte le API sono **progettate**. Nessuna implementata, integrata o attiva in Re
 
 - Nessun impatto applicato a contratti condivisi esistenti.
 - Future modifiche a `types/index.ts`, snapshot, worker o renderer richiedono checkpoint §13.
-- Verifica progettuale richiesta: stati allelici, ploidia per-gruppo e gamete/segregazione, assi riproduttivi separati, mutazioni discriminated union con invarianti G4, replay discriminato incompatibile, registry funzioni custom/versioning/disponibilità, validazione numerica/unità/normalizzazione/conflitti, separazione `develop()`/`deriveFinalPhenotype()` senza duplicazioni, snapshot ambientale Planet Engine con stati uniformati, round-trip/migrazione. Piano operativo in `GENOME_VALIDATION_PLAN.md`.
+- Verifica progettuale richiesta: stati allelici, ploidia per-gruppo e gamete/segregazione, assi riproduttivi separati, mutazioni discriminated union con invarianti G4, replay discriminato incompatibile, registry funzioni custom/versioning/disponibilità, validazione numerica/unità/normalizzazione/conflitti, separazione `develop()`/`derivePhenotype()` senza duplicazioni, snapshot ambientale Planet Engine con stati uniformati, round-trip/migrazione. Piano operativo in `GENOME_VALIDATION_PLAN.md`.

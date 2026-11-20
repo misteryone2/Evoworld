@@ -13,7 +13,7 @@
 | Criticità | Correzione | Documenti |
 |---|---|---|
 | G1 | `MutationEvent` come discriminated union per operazione (point mutation, insertion, deletion, duplication, inversion, translocation, chromosome-level event, aneuploidy, structural variation compatibile) con struttura precedente/operazione/risultante, cromosomi/intervalli/copie, materiale inserito/rimosso/duplicato, posizione/orientamento risultanti, provenienza/causalità. `affectedLoci` non richiesto per eventi esclusivamente intergenici o a intero cromosoma. Nessun limite arbitrario a loci/complessità. | Arch §5.1, API §7, Validation, Risk |
-| G2 | Pipeline `GeneticGenome → ResolvedGenotype → GeneticExpression → PlasticResponse → DevelopmentalState → FinalPhenotype`. `develop()` restituisce `DevelopmentalState`; `deriveFinalPhenotype()` è passo distinto e verificabile; `DevelopmentalState` senza duplicazioni di `GeneticExpression`/`PlasticResponse`. | Arch §6, API §6/§9, Validation, Risk |
+| G2 | Pipeline `GeneticGenome → ResolvedGenotype → GeneticExpression → PlasticResponse → DevelopmentalState → FinalPhenotype`. `develop()` restituisce `DevelopmentalState`; `derivePhenotype()` è passo distinto e verificabile; `DevelopmentalState` senza duplicazioni di `GeneticExpression`/`PlasticResponse`. | Arch §6, API §6/§9, Validation, Risk |
 | G3 | Regole esplicite formazione gameti: ploidia organismo distinta da ploidia gamete, numero contributori, modalità riproduttiva, regole di segregazione, anomalie meiotiche. Nessuna assunzione di una copia per gruppo omologo nel gamete. Estendibile a poliploidia senza compromettere correttezza del diploide iniziale. | Arch §4, API §5, Validation, Risk |
 | G4 | Combinazioni ammissibili formalizzate (scope/operation/payload/cromosomi/loci/intervalli), invarianti verificabili e comportamenti di errore (validazione fallita senza applicazione parziale, replay incompatibile esplicito). | Arch §5.2, API §7/§9, Validation, Risk |
 | G5 | Registry funzioni custom: id stabile, versione, firma input/output, unità/domini, implementazione registrata, determinismo, gestione funzioni mancanti/non compatibili, compatibilità replay/serializzazione. Id non sufficiente senza implementazione disponibile e compatibile. | Arch §2.5/§3.4/§9.4, API §3.1/§9, Validation, Risk |
@@ -88,7 +88,7 @@ Ogni passaggio di maturità richiede PR dedicata, evidenza verificabile e, se to
 | Genotipo e validazione | `genotype.ts`, `validate.ts` (stati allelici, finitezza numerica, invarianti ploidia, invarianti mutazioni G4, validazione uso funzioni custom) | Implementato (non integrato) | nessun campo in `Organism`/`WorldSnapshot` |
 | Riproduzione/gametogenesi isolata | `recombination.ts`, `pedigree.ts` (assi separati, `GametePloidy`, `SegregationRule`, anomalie meiotiche, 0..N contributori, gameti tracciati) | Implementato (non integrato) | nessuna chiamata da `reproduction.ts`, nessun gamete live |
 | Mutazione isolata | `mutation.ts`, `rng.ts` (discriminated union G1, payload pre/op/post, replay discriminato, trace) | Implementato (non integrato) | nessun evento nel tick, nessuna persistenza live |
-| Espressione/sviluppo/ambiente isolati | `resolution.ts`, `expression.ts`, `environment.ts` adapter, `development.ts` (`develop` → `DevelopmentalState`, `deriveFinalPhenotype` → `FinalPhenotype`) | Implementato (non integrato) | nessun wiring a `geneExpression.ts`/renderer/Planet Engine live |
+| Espressione/sviluppo/ambiente isolati | `resolution.ts`, `expression.ts`, `environment.ts` adapter, `development.ts` (`develop` → `DevelopmentalState`, `derivePhenotype` → `FinalPhenotype`) | Implementato (non integrato) | nessun wiring a `geneExpression.ts`/renderer/Planet Engine live |
 | Serializzazione isolata | `serialization.ts`, `migration.ts`, `metrics.ts` (inclusi payload mutazionali strutturati e riferimenti custom functions) | Implementato (non integrato) | nessuna modifica a persistence esistente |
 | Test | `tests/genomeEngine/*` (T-01…T-17 progettuali → eseguiti solo se implementati) | Evidenza di livello | nessun allentamento test esistenti |
 
@@ -125,7 +125,7 @@ Ogni passaggio di maturità richiede PR dedicata, evidenza verificabile e, se to
 ## 8. GEN-4 … GEN-8 (future, vincolate)
 
 - **GEN-4:** integrazione espressione quantitativa e registry funzioni custom (validazione numerica, unità/domini, normalizzazione/pesi, determinismo/disponibilità/compatibilità funzioni, conflitti, stati mancanti), dietro checkpoint per `geneExpression.ts`.
-- **GEN-5:** sviluppo/plasticità/ambiente/fenotipo come contratti separati non ereditabili; `develop()` → `DevelopmentalState`, `deriveFinalPhenotype()` distinto; adattatore read-only da Planet Engine, nessun modello ambientale parallelo.
+- **GEN-5:** sviluppo/plasticità/ambiente/fenotipo come contratti separati non ereditabili; `develop()` → `DevelopmentalState`, `derivePhenotype()` distinto; adattatore read-only da Planet Engine, nessun modello ambientale parallelo.
 - **GEN-6:** adattatori verso G3.1 solo con loci/provenienza reali e checkpoint; riuso anatomia esistente, nessuna riscrittura renderer.
 - **GEN-7/8:** fisiologia/evoluzione tramite hook esistenti e metriche multi-seed; selezione vs deriva `NON_EVALUABLE`.
 
