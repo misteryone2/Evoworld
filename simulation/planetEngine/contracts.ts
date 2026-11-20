@@ -9,7 +9,7 @@
 
 import type { Cell, Season, TerrainType } from "../../types";
 
-export type { Season, TerrainType } from "../../types";
+export type { Cell, Season, TerrainType } from "../../types";
 
 /** Real gases tracked by the atmospheric model. `other` is inert filler. */
 export type GasKey = "N2" | "O2" | "CO2" | "H2O" | "CH4" | "Ar" | "other";
@@ -171,6 +171,7 @@ export interface EnvironmentSample {
   latRad: number;
   lonRad: number;
   elevationM: number;
+  seaLevelM: number;
   slope: number;
   temperatureK: number;
   pressurePa: number;
@@ -181,10 +182,16 @@ export interface EnvironmentSample {
   soilMoisture: number;
   /** 0..1 */
   waterAvailability: number;
+  /** Raw wetness axis expected by legacy `Cell.water`, not waterAvailability. */
+  legacyWaterAxis: number;
   irradianceWm2: number;
   windMS: number;
   iceFraction: number;
+  riverFlow: number;
+  isLake: boolean;
   biome: TerrainType;
+  /** Legacy gameplay offset already included in `temperatureK`. */
+  seasonalOffsetK: number;
   /** 0..1 */
   climateStability: number;
   season: Season;

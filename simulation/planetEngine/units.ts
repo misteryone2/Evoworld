@@ -69,3 +69,14 @@ export function legacyTemperatureFromKelvin(kelvin: number): number {
 export function kelvinFromLegacyTemperature(value: number): number {
   return value - 20 + 273.15;
 }
+
+/** Map physical elevation to the legacy 0..1 structural axis. */
+export function elevation01FromMeters(elevationM: number, seaLevelM: number, roughnessM: number): number {
+  return clamp(0.5 + (elevationM - seaLevelM) / (2 * Math.max(roughnessM, 1)), 0, 1);
+}
+
+/** Raw wetness axis in [0, 1]; deliberately distinct from waterAvailability. */
+export function legacyWaterAxis(humidity: number, elevationM: number, seaLevelM: number, roughnessM: number): number {
+  const elevationWetness = clamp(0.5 + (seaLevelM - elevationM) / (2 * Math.max(roughnessM, 1)), 0, 1);
+  return clamp(0.6 * elevationWetness + 0.4 * clamp(humidity, 0, 1), 0, 1);
+}

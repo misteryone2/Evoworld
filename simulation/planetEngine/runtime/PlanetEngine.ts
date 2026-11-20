@@ -9,6 +9,7 @@
 import type {
   ClimateField,
   ElevationGrid,
+  EnvironmentSnapshot,
   GasKey,
   HydrologyField,
   OrbitPosition,
@@ -45,6 +46,7 @@ import { seasonAt } from "../climate/ClimateZones";
 import { applyWaterFluxes, totalWaterInventoryKg } from "../hydrology/Inventory";
 import { updateSeaLevelFromInventory } from "../hydrology/SeaLevel";
 import { computeWaterCycle } from "../hydrology/WaterCycle";
+import { createEnvironmentSnapshot } from "../snapshot/EnvironmentSnapshot";
 import { PLANET_UNITS } from "../units";
 
 const GAS_KEYS: readonly GasKey[] = ["N2", "O2", "CO2", "H2O", "CH4", "Ar", "other"];
@@ -286,6 +288,14 @@ export class PlanetEngine {
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     validateState(this.config, this.state);
     return result.field;
+  }
+
+  /** Stable headless bridge for ecology/GENOME consumers. */
+  createEnvironmentSnapshot(deltaS = PLANET_UNITS.secondsPerEarthDay): EnvironmentSnapshot {
+    return createEnvironmentSnapshot(this, {
+      engineVersion: this.engineVersion,
+      deltaS,
+    });
   }
 
   totalWaterKg(): number {
