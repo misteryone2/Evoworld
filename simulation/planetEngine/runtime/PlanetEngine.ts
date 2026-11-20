@@ -505,6 +505,16 @@ export class PlanetEngine {
   }
 
   /**
+   * Manual surface refresh for diagnostics and benchmarking. It clears only the
+   * derived surface cache and rebuilds from the current elevation/ocean state;
+   * tick, climate and stored biome history are untouched.
+   */
+  refreshSurfaceField(): SurfaceField {
+    this.surfaceCache = undefined;
+    return this.getSurfaceField();
+  }
+
+  /**
    * Manual geology step. It evolves the surface but does NOT advance tick/time;
    * `step()` is the single coordinated production clock.
    */

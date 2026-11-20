@@ -22,9 +22,11 @@ import type { PlanetPhysicalConfig } from "../simulation/planetEngine/contracts"
 
 const SIZES = [64, 128, 256, 512, 1024] as const;
 type Size = (typeof SIZES)[number];
-type Phase = "init" | "step" | "climate" | "hydrology" | "geology" | "snapshot" | "sample";
+type Phase = "init" | "step" | "climate" | "hydrology" | "geology" | "surface" | "snapshot" | "sample";
 
-const PHASES: readonly Phase[] = ["init", "step", "climate", "hydrology", "geology", "snapshot", "sample"];
+const PHASES: readonly Phase[] = [
+  "init", "step", "climate", "hydrology", "geology", "surface", "snapshot", "sample",
+];
 const SEED = 7;
 const DELTA_S = PLANET_UNITS.secondsPerEarthDay;
 const SAMPLE_CELLS = 64;
@@ -33,11 +35,11 @@ const WARMUP: Record<Size, number> = { 64: 2, 128: 2, 256: 1, 512: 1, 1024: 1 };
 // Reduced at large grids to keep the whole profile within the configured
 // 400 s vitest timeout. The exact counts are included in the JSON report.
 const ITERATIONS: Record<Size, Record<Phase, number>> = {
-  64: { init: 6, step: 6, climate: 20, hydrology: 20, geology: 20, snapshot: 20, sample: 20 },
-  128: { init: 5, step: 5, climate: 14, hydrology: 14, geology: 14, snapshot: 14, sample: 14 },
-  256: { init: 4, step: 4, climate: 10, hydrology: 10, geology: 10, snapshot: 10, sample: 10 },
-  512: { init: 3, step: 3, climate: 6, hydrology: 6, geology: 6, snapshot: 6, sample: 6 },
-  1024: { init: 2, step: 2, climate: 3, hydrology: 3, geology: 3, snapshot: 3, sample: 3 },
+  64: { init: 6, step: 6, climate: 20, hydrology: 20, geology: 20, surface: 20, snapshot: 20, sample: 20 },
+  128: { init: 5, step: 5, climate: 14, hydrology: 14, geology: 14, surface: 14, snapshot: 14, sample: 14 },
+  256: { init: 4, step: 4, climate: 10, hydrology: 10, geology: 10, surface: 10, snapshot: 10, sample: 10 },
+  512: { init: 3, step: 3, climate: 6, hydrology: 6, geology: 6, surface: 6, snapshot: 6, sample: 6 },
+  1024: { init: 2, step: 2, climate: 3, hydrology: 3, geology: 3, surface: 3, snapshot: 3, sample: 3 },
 };
 
 interface MemoryUsage {
@@ -56,6 +58,8 @@ interface Measurement {
   meanMs: number;
   p50Ms: number;
   p95Ms: number;
+  throughputPerS: number;
+  throughputUnit: "cells/s" | "samples/s";
   heapDeltaKB: number | null;
   rssDeltaKB: number | null;
   checksum: number;
@@ -96,6 +100,8 @@ function measure(
 
   const sorted = [...times].sort((a, b) => a - b);
   const meanMs = times.reduce((sum, value) => sum + value, 0) / times.length;
+  const sampled = phase === "sample";
+  const operations = iterations * (sampled ? SAMPLE_CELLS : size * size);
   return {
     size,
     phase,
@@ -103,6 +109,8 @@ function measure(
     meanMs: round(meanMs),
     p50Ms: round(percentile(sorted, 0.5)),
     p95Ms: round(percentile(sorted, 0.95)),
+    throughputPerS: round(operations / (meanMs / 1000)),
+    throughputUnit: sampled ? "samples/s" : "cells/s",
     heapDeltaKB: before && after ? round((after.heapUsed - before.heapUsed) / 1024) : null,
     rssDeltaKB: before && after ? round((after.rss - before.rss) / 1024) : null,
     checksum,
@@ -141,6 +149,7 @@ function profile(size: Size): Measurement[] {
   const climateEngine = new PlanetEngine(config);
   const hydrologyEngine = new PlanetEngine(config);
   const geologyEngine = new PlanetEngine(config);
+  const surfaceEngine = new PlanetEngine(config);
   const snapshotEngine = new PlanetEngine(config);
   snapshotEngine.environmentSnapshot();
 
@@ -167,6 +176,10 @@ function profile(size: Size): Measurement[] {
       case "geology":
         rows.push(measure(size, phase, warmup, iterations.geology, () =>
           geologyEngine.stepGeology(DELTA_S).elevationM[0]));
+        break;
+      case "surface":
+        rows.push(measure(size, phase, warmup, iterations.surface, () =>
+          surfaceEngine.refreshSurfaceField().elevationM[0]));
         break;
       case "snapshot":
         rows.push(measure(size, phase, warmup, iterations.snapshot, () =>
@@ -195,6 +208,7 @@ describe("Planet Engine — P2 headless benchmark", () => {
         mean_ms: row.meanMs.toFixed(3),
         p50_ms: row.p50Ms.toFixed(3),
         p95_ms: row.p95Ms.toFixed(3),
+        throughput: `${row.throughputPerS.toFixed(0)} ${row.throughputUnit}`,
         heap_delta_kb: row.heapDeltaKB,
         rss_delta_kb: row.rssDeltaKB,
       })));
@@ -222,6 +236,8 @@ describe("Planet Engine — P2 headless benchmark", () => {
           "Large grids use fewer samples; P50/P95 are nearest-rank quantiles of few observations.",
           "Construction of dedicated phase engines is excluded except in the init row.",
           "Cell sampling uses 64 deterministic cache-miss cells per measured iteration.",
+          "Throughput is operations/mean time: grid cells/s for every phase except sample, which reports samples/s.",
+          "The surface phase calls refreshSurfaceField() to force a derived-cache miss without mutating state.",
         ],
         rows: rows.map((row) => ({
           ...row,
