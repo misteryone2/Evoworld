@@ -215,7 +215,7 @@ export function replayEvent(event: MutationEvent, context: ReplayCompatibilityIn
   if (mismatches.length > 0) {
     return { status: "incompatible", value: null, mismatches: mismatches as unknown as readonly [typeof mismatches[number], ...typeof mismatches[number][]] };
   }
-  return { status: "ok", value: event, mismatches: [] };
+  return { status: "ok", value: event, mismatches: [] as const };
 }
 
 export function develop(input: {
@@ -297,5 +297,4 @@ export function mutate(_input: MutationInput): { genome: GeneticGenome; events: 
   throw new Error("GEN-1: mutate not implemented (scaffolding only)");
 }
 
-export { validateGenome, validatePloidyModel, validateRegistry, validateGenomeConfig, createRng };
 void isFinite;

@@ -1,4 +1,5 @@
 ﻿import { computeFingerprint, customFunctionKey, withGenomeFingerprint } from "./id";
+import { validateGenome } from "./genotype";
 import type { GeneticGenome, GenomeRegistry, MigrationResult, VersionSet } from "./types";
 
 function sortDeep(value: unknown): unknown {
@@ -23,8 +24,14 @@ export function deserializeGenome(raw: unknown, registry: GenomeRegistry): Migra
     engineVersion: registry.engineVersion,
     rngAlgorithmVersion: "1.0.0",
   };
-  if (!raw || typeof raw !== "object") {
-    return { status: "error", value: null, from: to, to, issues: [{ code: "deserialize.invalid", path: "", detail: "raw must be object" }] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      status: "error",
+      value: null,
+      from: { schemaVersion: 0, registryVersion: "0.0.0", engineVersion: "0.0.0", rngAlgorithmVersion: "1.0.0" },
+      to,
+      issues: [{ code: "deserialize.invalid", path: "", detail: "raw must be a non-array object" }],
+    };
   }
   const obj = raw as Partial<GeneticGenome> & Record<string, unknown>;
   const from: VersionSet = {
@@ -34,11 +41,25 @@ export function deserializeGenome(raw: unknown, registry: GenomeRegistry): Migra
     rngAlgorithmVersion: "1.0.0",
   };
   if (from.schemaVersion !== 1) {
-    return { status: "unsupported", value: null, from, to, issues: [{ code: "deserialize.schema", path: "schemaVersion", detail: `unsupported schemaVersion ${String(from.schemaVersion)}` }] };
+    return {
+      status: "unsupported",
+      value: null,
+      from,
+      to,
+      issues: [{ code: "deserialize.schema", path: "schemaVersion", detail: `unsupported schemaVersion ${String(from.schemaVersion)}` }],
+    };
   }
-  const genome = raw as GeneticGenome;
-  // preserve as-is except fingerprint normalization
-  const normalized = withGenomeFingerprint({ ...genome, fingerprint: undefined as never });
+  const normalized = withGenomeFingerprint({ ...(raw as GeneticGenome), fingerprint: undefined as never });
+  const validation = validateGenome(normalized, registry);
+  if (!validation.ok) {
+    return {
+      status: "error",
+      value: null,
+      from,
+      to,
+      issues: validation.issues.map((i) => ({ code: i.code, path: i.path, detail: i.detail })),
+    };
+  }
   return { status: "ok", value: normalized, from, to, issues: [] };
 }
 
@@ -63,5 +84,3 @@ export function migrateGenome(
 export function canonicalGenomeFingerprint(genome: GeneticGenome): string {
   return computeFingerprint({ ...withGenomeFingerprint({ ...genome, fingerprint: undefined as never }), fingerprint: undefined });
 }
-
-export { customFunctionKey };
