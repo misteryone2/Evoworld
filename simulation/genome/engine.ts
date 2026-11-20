@@ -1,7 +1,5 @@
 ﻿import { issue } from "./id";
-import { createRng } from "./rng";
-import { validateGenome } from "./genotype";
-import { validateCustomFunctionDefinition, validateGenomeConfig, validatePloidyModel, validateRegistry } from "./validate-registry";
+import { validateCustomFunctionDefinition } from "./validate-registry";
 import type {
   AffectedInterval,
   AffectedLocusState,
@@ -33,10 +31,6 @@ import type {
   ValidationResult,
   VersionSet,
 } from "./types";
-
-function isFinite(n: unknown): n is number {
-  return typeof n === "number" && Number.isFinite(n);
-}
 
 export function validateCustomFunctionUse(
   ref: { functionId: CustomFunctionId; version: SemVer },
