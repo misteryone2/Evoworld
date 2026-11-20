@@ -23,6 +23,7 @@ import {
   totalCellAreaM2,
 } from "../simulation/planetEngine/surface/GridGeometry";
 import { buildElevationGrid, elevationHistogram } from "../simulation/planetEngine/surface/Hypsometry";
+import { oceanFractionOf } from "../simulation/planetEngine/surface/Continents";
 import { BIOME_COOLDOWN_TICKS, BIOME_HYSTERESIS, BiomeMemoryStore, updateBiome } from "../simulation/planetEngine/biomes/stability";
 import { BIOME_ORDER, type BiomeScores } from "../simulation/planetEngine/biomes/classifier";
 import { dryLapseRateKPerM, localTemperatureK, type LocalTemperatureInput } from "../simulation/planetEngine/climate/TemperatureField";
@@ -161,6 +162,18 @@ describe("Audit — latitude-dependent cell areas", () => {
     expect(grid.cellAreasM2.length).toBe(grid.elevationM.length);
     const meanArea = total / grid.elevationM.length;
     expect(Math.abs(grid.cellAreaM2 - meanArea) / meanArea).toBeLessThan(1e-12);
+  });
+
+  it("weights the ocean fraction by area instead of cell count", () => {
+    const config = createEarthLikeConfig({ surface: SMALL_SURFACE });
+    const areas = cellAreasForConfig(config);
+    const mask = new Uint8Array(areas.length);
+    for (let y = 0; y < 2; y += 1) {
+      for (let x = 0; x < config.surface.gridWidth; x += 1) mask[y * config.surface.gridWidth + x] = 1;
+    }
+    const countFraction = mask.reduce((sum, value) => sum + value, 0) / mask.length;
+    expect(oceanFractionOf(mask, areas)).toBeLessThan(countFraction);
+    expect(oceanFractionOf(mask)).toBeCloseTo(countFraction, 12);
   });
 });
 

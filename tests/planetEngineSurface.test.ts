@@ -22,8 +22,12 @@ describe("M2 — physical surface and hypsometry", () => {
     expect(field.seaLevelM).toBeCloseTo(solveSeaLevelM(grid, volumeM3), 5);
     expect(field.seaLevelM).toBeGreaterThan(grid.minM);
     expect(field.seaLevelM).toBeLessThan(grid.maxM);
-    expect(field.oceanFraction).toBeGreaterThan(0.05);
-    expect(field.oceanFraction).toBeLessThan(0.95);
+    // Ocean fraction is now area-weighted, so its numeric range differs from
+    // the old cell-count ratio. Assert the mixed surface directly instead.
+    expect(field.oceanFraction).toBeGreaterThan(0.01);
+    expect(field.oceanFraction).toBeLessThan(0.99);
+    expect(field.oceanMask.some((value) => value === 1)).toBe(true);
+    expect(field.oceanMask.some((value) => value === 0)).toBe(true);
     expect(field.oceanMask.length).toBe(SMALL_SURFACE.gridWidth * SMALL_SURFACE.gridHeight);
   });
 

@@ -13,7 +13,7 @@ are unchanged.
 | Gas inventory (`atmosphere/Composition`) | `PHYSICAL_MODEL` | Per-species mole counts; dry-air mass; water mass mirrored from `hydrosphere.vaporMassKg` | `other` is an inert N₂-like filler |
 | Greenhouse (`atmosphere/Greenhouse`) | `APPROXIMATION` | Uses the same gas inventory as the energy budget | No spectral bands or clouds |
 | Atmospheric circulation (`atmosphere/Circulation`) | `SIMULATION_HEURISTIC` | Coriolis f = 2Ωsinφ | Hadley/Ferrel/Polar bands and fixed gradient; **not** a dynamic atmosphere |
-| Hypsometry (`surface/Hypsometry`, `surface/GridGeometry`) | `PHYSICAL_MODEL` | Exact latitude-weighted cell areas; ocean volume by hypsometric integral | Elevation fractal is a seeded terrain generator, not tectonic history |
+| Hypsometry (`surface/Hypsometry`, `surface/GridGeometry`, `surface/Continents`) | `PHYSICAL_MODEL` | Exact latitude-weighted cell areas; ocean volume by hypsometric integral; area-weighted ocean fraction | Elevation fractal is a seeded terrain generator, not tectonic history |
 | Geology (`geology/Interior`, `Tectonics`, `Volcanism`) | `SIMULATION_HEURISTIC` | Interior heat bookkeeping; volcanic CO₂ is injected into the gas inventory | Uplift/volcanic triggers are deterministic proxies |
 | Erosion (`geology/SurfaceEvolution`) | `APPROXIMATION` | Volume removed = volume deposited; `AᵢΔhᵢ + AⱼΔhⱼ = 0` | Diffusive transport coefficient is prescribed |
 | Local climate (`climate/*`) | `APPROXIMATION` | Irradiance from orbit/tilt/latitude; dry lapse rate g/cp is physical | Insolation→temperature anomaly is a bounded log proxy; temperature is **not** a local energy-balance solution |

@@ -24,11 +24,21 @@ export function buildOceanMask(
   return mask;
 }
 
-export function oceanFractionOf(mask: Uint8Array): number {
+/** Area-weighted ocean fraction; cell counts would over-weight polar rows. */
+export function oceanFractionOf(mask: Uint8Array, cellAreasM2?: Float64Array): number {
   if (mask.length === 0) return 0;
-  let ocean = 0;
-  for (let i = 0; i < mask.length; i += 1) ocean += mask[i];
-  return ocean / mask.length;
+  if (!cellAreasM2 || cellAreasM2.length !== mask.length) {
+    let ocean = 0;
+    for (let i = 0; i < mask.length; i += 1) ocean += mask[i];
+    return ocean / mask.length;
+  }
+  let oceanAreaM2 = 0;
+  let totalAreaM2 = 0;
+  for (let i = 0; i < mask.length; i += 1) {
+    totalAreaM2 += cellAreasM2[i];
+    if (mask[i] === 1) oceanAreaM2 += cellAreasM2[i];
+  }
+  return totalAreaM2 > 0 ? oceanAreaM2 / totalAreaM2 : 0;
 }
 
 export function buildSurfaceField(
@@ -36,7 +46,7 @@ export function buildSurfaceField(
   seaLevelM: number,
 ): SurfaceField {
   const oceanMask = buildOceanMask(grid.elevationM, grid.width, grid.height, seaLevelM);
-  const oceanFraction = oceanFractionOf(oceanMask);
+  const oceanFraction = oceanFractionOf(oceanMask, grid.cellAreasM2);
   return {
     ...grid,
     seaLevelM,
