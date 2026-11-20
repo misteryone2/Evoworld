@@ -120,7 +120,13 @@ export class PlanetEngine {
   private elevationRevision = 0;
   private surfaceCache?: { key: string; field: SurfaceField };
   private climateCache?: { revision: number; field: ClimateField };
+  /** Bumped on every state mutation; deliberately NOT used by the climate cache. */
+  private stateRevision = 0;
+  /** Bumped only by the scheduler when a climate refresh is actually due. */
   private climateRevision = 0;
+  /** Instrumentation: number of real climate-field recomputations. */
+  private climateUpdateCount = 0;
+  private lastBiomeCommitTick = -1;
   private lastStepDeltaS: number = PLANET_UNITS.secondsPerEarthDay;
 
   constructor(config: PlanetPhysicalConfig) {
@@ -152,21 +158,40 @@ export class PlanetEngine {
     const nextTimeS = this.state.timeS + deltaS;
     const scheduler = this.state.scheduler;
 
-    // 1. Read one coherent initial state and accumulate deterministic clocks.
-    const initialState = cloneState(this.state);
-    const initialSurface = this.getSurfaceField();
-    const initialClimate = this.getClimateField();
+    // 1. Accumulate deterministic SI clocks and decide which subsystems are due.
     scheduler.pendingClimateS += deltaS;
     scheduler.pendingHydrologyS += deltaS;
     scheduler.pendingGeologyS += deltaS;
-
     const climateDue = nextTick % this.schedulerConfig.climateIntervalTicks === 0;
     const hydrologyDue = nextTick % this.schedulerConfig.hydrologyIntervalTicks === 0;
     const geologyDue = nextTick % this.schedulerConfig.geologyIntervalTicks === 0;
     const hydrologyDeltaS = scheduler.pendingHydrologyS;
     const geologyDeltaS = scheduler.pendingGeologyS;
 
-    // 2. Compute flows from the initial state before applying any transfer.
+    // 2. Advance the single production clock BEFORE any field is computed. A
+    //    scheduled climate refresh therefore refers to the exact tick/time that
+    //    this step publishes, not to the previous tick.
+    this.state.tick = nextTick;
+    this.state.timeS = nextTimeS;
+    this.state.rotationPhaseRad = rotationPhaseAt(this.config, nextTimeS);
+    this.lastStepDeltaS = deltaS;
+    this.stateRevision += 1;
+
+    if (climateDue) {
+      // Only the scheduler may invalidate the climate cache. Water and geology
+      // changes bump `stateRevision`, never `climateRevision`.
+      this.climateRevision += 1;
+      scheduler.lastClimateTick = nextTick;
+      scheduler.pendingClimateS = 0;
+    }
+
+    // 3. `getClimateField()` recomputes only when the revision actually changed;
+    //    between scheduled updates it returns the previous field unchanged.
+    const initialState = cloneState(this.state);
+    const initialSurface = this.getSurfaceField();
+    const initialClimate = this.getClimateField();
+
+    // 4. Compute flows from the coherent initial state before any transfer.
     const waterFluxes: WaterFluxKg | undefined = hydrologyDue
       ? computeWaterCycle({
         config: this.config,
@@ -180,19 +205,13 @@ export class PlanetEngine {
       ? this.computeGeologyFlows(initialState, geologyDeltaS, nextTimeS)
       : undefined;
 
-    // 3. Apply mass and energy transfers to the mutable state.
+    // 5. Apply mass/energy transfers and the volume-conserving geology update.
     if (waterFluxes) {
       applyWaterFluxes(this.state, waterFluxes);
-      this.climateRevision += 1;
+      this.stateRevision += 1;
       scheduler.lastHydrologyTick = nextTick;
       scheduler.pendingHydrologyS = 0;
     }
-    if (climateDue) {
-      scheduler.lastClimateTick = nextTick;
-      scheduler.pendingClimateS = 0;
-    }
-
-    // 4. Evolve geology and surface with the same volume/M conserving rules.
     if (geologyFlow) {
       this.applyGeologyFlow(geologyFlow, geologyDeltaS);
       scheduler.lastGeologyTick = nextTick;
@@ -202,17 +221,8 @@ export class PlanetEngine {
       updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     }
 
-    // 5. Climate and hydrology diagnostics are recomputed from post-transfer
-    //    state in `currentEnvironmentSnapshot()` below.
-    // 6. Advance tick and time exactly once, before derived values are built.
-    this.state.tick = nextTick;
-    this.state.timeS = nextTimeS;
-    this.state.rotationPhaseRad = rotationPhaseAt(this.config, nextTimeS);
-    this.lastStepDeltaS = deltaS;
-    this.climateRevision += 1;
-
-    // 7/8. Publish a coherent core snapshot. The environment view is created
-    // lazily from the same end-of-tick state on first access.
+    // 6. Publish a coherent core snapshot. The environment view is created
+    //    lazily from the same end-of-tick state on first access.
     const snapshot = this.refreshDerived();
     this.currentSnapshot = snapshot;
     this.currentEnvironmentSnapshot = undefined;
@@ -241,8 +251,24 @@ export class PlanetEngine {
       pendingGeologyS: 0,
     };
     this.biomeMemory.clear();
+    this.lastBiomeCommitTick = -1;
+    this.stateRevision += 1;
+    // seek changes time/orbit, so the climate field must be rebuilt once.
     this.climateRevision += 1;
     return this.refreshDerivedAndSnapshot();
+  }
+
+  /** Instrumentation for scheduler/cache verification; no state is mutated. */
+  getRuntimeDiagnostics(): Readonly<{
+    stateRevision: number;
+    climateRevision: number;
+    climateUpdateCount: number;
+  }> {
+    return {
+      stateRevision: this.stateRevision,
+      climateRevision: this.climateRevision,
+      climateUpdateCount: this.climateUpdateCount,
+    };
   }
 
   snapshot(): PlanetEngineSnapshot {
@@ -353,6 +379,7 @@ export class PlanetEngine {
       season,
     };
     this.climateCache = { revision: this.climateRevision, field };
+    this.climateUpdateCount += 1;
     return cloneClimateField(field);
   }
 
@@ -383,6 +410,9 @@ export class PlanetEngine {
     });
     applyWaterFluxes(this.state, result.fluxesKg);
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
+    this.stateRevision += 1;
+    // Explicit out-of-band mutation: invalidate once so the next read is fresh.
+    this.climateRevision += 1;
     this.refreshDerivedAndSnapshot();
     return result.field;
   }
@@ -398,6 +428,9 @@ export class PlanetEngine {
     const flow = this.computeGeologyFlows(this.state, deltaS, this.state.timeS);
     this.applyGeologyFlow(flow, deltaS);
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
+    this.stateRevision += 1;
+    // Explicit out-of-band mutation: invalidate once so the next read is fresh.
+    this.climateRevision += 1;
     this.refreshDerivedAndSnapshot();
     return this.getSurfaceField();
   }
@@ -470,7 +503,9 @@ export class PlanetEngine {
     };
     this.elevationRevision += 1;
     this.surfaceCache = undefined;
-    this.climateRevision += 1;
+    // Surface geometry changes are tracked by `stateRevision`. They must NOT
+    // invalidate the climate cache: only the scheduler controls that clock.
+    this.stateRevision += 1;
   }
 
   private refreshDerived(): PlanetEngineSnapshot {
