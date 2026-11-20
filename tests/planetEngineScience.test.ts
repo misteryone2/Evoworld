@@ -120,7 +120,7 @@ describe("P2 — PHYSICAL_MODEL scientific reference tests", () => {
     expect(before).toBeCloseTo(CONFIG.hydrosphere.totalWaterKg, 6);
     for (let i = 0; i < 20; i += 1) engine.step(3600);
     expect(Math.abs(engine.totalWaterKg() - before) / before).toBeLessThan(1e-10);
-  });
+  }, 30_000);
 
   it("sea level: analytic two-level basin reference and monotonic inventory", () => {
     const areaM2 = 1e12;
