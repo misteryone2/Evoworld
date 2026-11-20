@@ -131,8 +131,8 @@ For every substep and every full step:
 
 ## 7. Synthetic validation suite
 
-Before integration, add `planetEngineSpatialHydrology.test.ts` with independent
-analytic references:
+**Phase A status: implemented.** `tests/planetEngineSpatialHydrology.test.ts`
+contains the following independent analytic checks (8 passing tests):
 
 | Test | Independent reference | Acceptance |
 | --- | --- | --- |
@@ -143,9 +143,11 @@ analytic references:
 | Extreme storm | donor cap 25% | no negative storage or flux blow-up |
 | Order independence | forward vs reverse iteration | bit-identical arrays |
 | Serialization round-trip | restored arrays | bit-identical after one step |
-| Engine coupling | total water before/after 20 steps | relative drift < 1e-10 |
+| Inventory coupling (engine-free) | total water before/after 20 steps | relative drift < 1e-10 |
 
-No Earth discharge dataset is claimed for this milestone.
+No Earth discharge dataset is claimed for this milestone. The "engine coupling"
+row is deliberately implemented as inventory bookkeeping only: Phase A does not
+call `PlanetEngine.step()` or change any consumer contract.
 
 ## 8. Cost estimate and benchmark gate
 
@@ -178,3 +180,38 @@ the isolated prototype; do not silently slow the production engine.
 
 This proposal is intentionally additive. Acceptance of the current P1/P2
 patch does not authorize Phase C.
+
+## 10. Phase A implementation and measured gate result
+
+Implemented additively under `simulation/planetEngine/hydrology/spatial/`:
+
+- `SpatialWaterState.ts` — frozen options, `Float64Array` stores, authoritative
+  cell areas, deterministic forward/reverse visitor, frozen `view()` and JSON
+  serialization.
+- `Infiltration.ts` — precipitation partitioning and surface-first evaporation.
+- `D8Routing.ts` — simultaneous D8 terrain-downhill flux with donor cap.
+- `Depressions.ts` — local-minimum lake storage and head-threshold spill.
+- `SpatialWaterCycle.ts` — substep orchestration and explicit
+  vapor/ocean inventory coupling.
+
+Nothing here is imported by `PlanetEngine`, `contracts.ts`, persistence,
+GENOME, renderer or the main loop. The benchmark calls the prototype directly.
+
+Measured with `vitest.bench.config.ts`, Node `v22.14.0`, win32, seed `7`,
+`deltaS = 86400 s`, prototype `targetSubstepS = 3600 s` (24 substeps),
+1 mm rain and 0.5 mm evaporation per cell, warmup 2 at 64²/128² and 1 at
+256²/512²/1024². Iterations: spatialHydrology 6/4/3/2/1.
+
+| Grid | spatialHydrology mean [ms] | step mean [ms] | ratio |
+| --- | --- | --- | --- |
+| 64² | 3.229 | 5.503 | 59% |
+| 128² | 11.275 | 24.866 | 45% |
+| 256² | 129.534 | 242.107 | **53%** |
+| 512² | 670.882 | 1262.577 | 53% |
+| 1024² | 4543.486 | 5949.535 | 76% |
+
+The proposed ≤30% gate at 256² **fails**. The 1024² row has only one measured
+iteration, so its ratio is especially noisy. Therefore Phase A remains
+isolated; no adapter or default-step integration is authorized by these
+measurements. The next optimization hypothesis is an active-cell list plus a
+larger target substep for dry cells, which must be benchmarked independently.

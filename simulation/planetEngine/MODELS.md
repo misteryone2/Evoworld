@@ -149,6 +149,16 @@ claims.
 - **Validation method**: tick-10 vs tick-20 isolation, reverse access order, serialization/restore, store monotonicity.
 - **Reliability**: **High** for isolation contract; parent-model reliability applies to values.
 
+### 1.14 Spatial hydrology prototype (isolated, not in default step) — `SIMULATION_HEURISTIC`
+
+- **Source**: `hydrology/spatial/*`.
+- **Description**: optional per-cell soil/lake/channel storage with infiltration, simultaneous D8 terrain-downhill routing and lake spill.
+- **Assumptions**: kinematic conductance; terrain (not stored water depth) defines downhill direction; ocean cells are sinks; 8-neighbour torus; no clouds, groundwater or morphology.
+- **Variables and units**: soil/surface/lake volumes `S_i, C_i, L_i` [m³]; cell area `A_i` [m²]; hydraulic conductivity and route conductance [m/s]; slope [m/m]; flux `Q_ij` [m³/substep]; 24 substeps per daily step by default.
+- **Limits**: `PlanetEngine` does not import this module. Benchmark cost exceeds the proposed integration gate (53% of `step` at 256²); no Earth discharge validation.
+- **Validation method**: inclined plane, closed-basin sill, flat-torus symmetry, forcing audit, donor cap, order independence, serialization round-trip and 20-step inventory closure.
+- **Reliability**: **Low** as geographic hydrology; **High** for the isolated deterministic state-machine and conservation identities.
+
 ## 2. Water and memory contracts
 
 `hydrosphere.vaporMassKg` is the only atmospheric water mass. `applyWaterFluxes`
@@ -289,9 +299,13 @@ These numbers are headless engine costs, not frame-time predictions.
 
 ## 8. Spatial hydrology status
 
-The current engine does **not** claim spatial hydrology. The per-cell water
-fields are diagnostics aggregated into global reservoirs; no local water
-storage or basin routing exists. A detailed, independently testable first
-milestone is specified in `SPATIAL_HYDROLOGY_PHASE1.md`. It is a proposal only:
-no implementation, no interface change to consumers and no main-loop
-integration is part of this patch.
+The default engine still does **not** claim spatial hydrology. The per-cell
+water fields remain diagnostics aggregated into global reservoirs; no local
+water storage or basin routing exists in `PlanetEngine.step()`.
+
+Phase A of `SPATIAL_HYDROLOGY_PHASE1.md` is now implemented as an **isolated
+prototype** under `hydrology/spatial/` (+ 8 passing synthetic tests) and has its
+own benchmark phase. Measured cost at 256² is `129.534 ms` versus `242.107 ms`
+for `step` (53%), so the proposed ≤30% integration gate **fails**. The prototype
+is therefore not wired into the engine, contracts, persistence or main loop.
+Phase B/C require a new authorization decision.
