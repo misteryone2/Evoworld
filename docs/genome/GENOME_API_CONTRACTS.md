@@ -1,32 +1,33 @@
-# GENOME — Contratti API completi (Rev 2)
+# GENOME — Contratti API completi (Rev 3)
 
 **Data:** 2026-11-20  
 **Branch:** `milestone/genome/gen0-audit` — PR #4  
-**Revisione:** Rev 2 (correzioni: stati allelici espliciti, provenienza generalizzata, contratti quantitativi, replay compatibile, ambiente Planet Engine).  
+**Revisione:** Rev 3 (hardening: replay discriminato, mutazioni strutturali, assi riproduzione/ploidia separati, espressione quantitativa vincolata, ploidia per gruppo, sviluppo/ambiente formalizzati).  
 **Stato:** contratti **osservati** invariati + contratti **proposti** non implementati e non approvati. Richiedono nuova review e checkpoint `GENOME_ARCHITECTURE.md` §13. Nessuna modifica al codice di produzione.
 
 ---
 
 ## 1. Contratti esistenti (OBSERVED — invariati)
 
-Riferimento invariato alla Rev 1/Rev 0: `BaseGenome`/`Genome` (`types/index.ts`), `GeneDefinition`/`GENE_REGISTRY` (`simulation/biology/geneRegistry.ts`), `Phenotype`, `Organism`, `WorldSnapshot`, `RenderFrame`, `PhenotypeProfile`, funzioni `randomGenome`/`inheritGenome`/`cloneWithMutation`, `getGene`/`inheritExt`/`cloneExt`/`deriveGeneRandom`, `migrateGenome`/`migrateSnapshot`. Nessun contratto esistente è modificato in questa revisione.
+Riferimento invariato: `BaseGenome`/`Genome` (`types/index.ts`), `GeneDefinition`/`GENE_REGISTRY` (`simulation/biology/geneRegistry.ts`), `Phenotype`, `Organism`, `WorldSnapshot`, `RenderFrame`, `PhenotypeProfile`, funzioni `randomGenome`/`inheritGenome`/`cloneWithMutation`, `getGene`/`inheritExt`/`cloneExt`/`deriveGeneRandom`, `migrateGenome`/`migrateSnapshot`. Nessun contratto esistente è modificato.
 
 ---
 
-## 2. Regole fondamentali (Rev 2)
+## 2. Regole fondamentali (Rev 3)
 
 1. **Catalogo ≠ genotipo.** Registry = definizioni; genotipo = occorrenze/stati individuali.
-2. **Copia singola.** `Chromosome` è una copia fisica; ploidia parametrica.
-3. **Stati allelici non ambigui.** Vietato usare `null` o un unico token per rappresentare sia assenza biologica sia dato sconosciuto/non valutabile.
-4. **Provenienza tracciabile e generale.** Contributi via `contributionId`/`contributorId`/`gameteId`; nessun vincolo fisso `maternal|paternal` né limite a 2 contributori.
-5. **Quantitativo e deterministico.** Canali con unità/intervalli/normalizzazione; conflitti risolti deterministicamente o marcati `non-evaluable`.
-6. **Replay verificabile.** Incompatibilità di versioni/parametri/algoritmo ⇒ errore esplicito.
-7. **Ambiente esterno autorevole.** `EnvironmentalSnapshot` deriva da Planet Engine; nessun modello ambientale parallelo in GENOME.
-8. **Maturità esplicita.** Tutti i contratti sotto sono **progettati**, non implementati/integrati/attivi.
+2. **Copia singola, ploidia per gruppo.** `Chromosome` è una copia fisica; `PloidyModel` determina le copie per `HomologousGroupId`.
+3. **Stati allelici non ambigui.** Vietato `null` o token unico per assenza biologica/sconosciuto/non valutabile.
+4. **Assi riproduttivi separati.** `ReproductionMode`, `PloidyModel`, `GameteFormationMode` e cardinalità contributori sono proprietà distinte.
+5. **Provenienza tracciabile.** `contributionId`/`contributorId`/`gameteId`; identità ≠ ruolo biologico; 0..N contributori.
+6. **Quantitativo e deterministico.** Valori finiti (no `NaN`/`±Infinity`), unità, domini, normalizzazione e conflitti espliciti.
+7. **Replay verificabile.** `ReplayResult<T>` discriminato: `ok` con valore, `incompatible` con `value: null` e mismatch espliciti non vuoti.
+8. **Ambiente esterno autorevole.** `EnvironmentalSnapshot` deriva da Planet Engine; nessun modello ambientale parallelo.
+9. **Maturità esplicita.** Tutti i contratti sotto sono **progettati**, non implementati/integrati/attivi.
 
 ---
 
-## 3. Registry e definizioni quantitative
+## 3. Registry, canali, regole ed espressione quantitativa
 
 ```ts
 type SemVer = string;
@@ -38,22 +39,28 @@ type TraitChannelId = string;
 type ExpressionRuleId = string;
 type MutationRuleId = string;
 type RegistryId = string;
+type UnitId = string;
+
+type FiniteNumber = number; // vincolo: Number.isFinite(value) === true; NaN e Infinity vietati
 
 interface TraitChannelDefinition {
   readonly id: TraitChannelId;
   readonly description: string;
-  readonly unit: string; // es. "ratio", "1", "index", unità dichiarata
-  readonly domain: { readonly min: number; readonly max: number };
+  readonly unit: UnitId; // unità dichiarata e versionata nel registry (es. "ratio", "index", "1")
+  readonly semantics: string; // significato del canale/scala
+  readonly domain: { readonly min: FiniteNumber; readonly max: FiniteNumber };
   readonly normalization: {
     readonly method: "linear" | "saturating" | "none" | "custom";
-    readonly parameters: Readonly<Record<string, number | string>>;
+    readonly parameters: Readonly<Record<string, FiniteNumber | string | boolean>>;
+    readonly customFunctionId?: string; // richiesto se method === "custom"
+    readonly customFunctionVersion?: SemVer; // richiesto se method === "custom"
   };
   readonly clampPolicy: "clamp" | "error" | "mark-non-evaluable";
   readonly missingInputPolicy:
     | "propagate-non-evaluable"
     | "propagate-undetermined"
     | "explicit-fallback";
-  readonly fallbackValue?: number; // usato solo se policy esplicita
+  readonly fallbackValue?: FiniteNumber; // usato solo se policy esplicita e valido nel dominio
 }
 
 interface ChromosomeDefinition {
@@ -61,7 +68,7 @@ interface ChromosomeDefinition {
   readonly homologousGroup: HomologousGroupId;
   readonly lengthBp: number;
   readonly centromereBp: number;
-  readonly recombinationRateCmPerMb: number;
+  readonly recombinationRateCmPerMb: FiniteNumber;
   readonly locusOrder: readonly LocusId[];
 }
 
@@ -69,14 +76,14 @@ interface LocusDefinition {
   readonly id: LocusId;
   readonly chromosomeId: ChromosomeDefinitionId;
   readonly positionBp: number;
-  readonly positionCm: number;
+  readonly positionCm: FiniteNumber;
   readonly strand: "+" | "-";
   readonly alleleCatalog: readonly AlleleId[];
   readonly traitChannels: readonly TraitChannelId[];
   readonly expressionRuleIds: readonly ExpressionRuleId[];
   readonly recombination: {
     readonly crossoverAllowed: boolean;
-    readonly interference: number;
+    readonly interference: FiniteNumber;
     readonly hotspot: boolean;
   };
 }
@@ -85,40 +92,46 @@ interface AlleleDefinition {
   readonly id: AlleleId;
   readonly locusId: LocusId;
   readonly symbol: string;
-  readonly effectProfile: Readonly<Record<TraitChannelId, number>>; // scala coerente al canale
-  readonly baselineActivity: number; // normalizzato [0,1] salvo diversa unità dichiarata
+  readonly effectProfile: Readonly<Record<TraitChannelId, FiniteNumber>>; // scala coerente al canale
+  readonly baselineActivity: FiniteNumber; // scala dichiarata dal registry/canale
   readonly regulatoryTargets: readonly LocusId[];
   readonly interactionTags: readonly string[];
   readonly catalogOrigin: "founder" | "engine" | "migration";
 }
 ```
 
-### 3.1 Regole di espressione e conflitti
+### 3.1 Regole di espressione, pesi e conflitti (D-01 circoscritto)
 
 ```ts
+interface WeightedRef {
+  readonly id: string;
+  readonly weight: FiniteNumber; // finito; semantica esplicita (normalizzato/non normalizzato dichiarato)
+}
+
 type ConflictResolution =
   | { readonly strategy: "priority-order"; readonly priorities: readonly ExpressionRuleId[] }
-  | { readonly strategy: "weighted-merge"; readonly weights: Readonly<Record<ExpressionRuleId, number>> }
-  | { readonly strategy: "mark-non-evaluable" };
+  | { readonly strategy: "weighted-merge"; readonly weights: Readonly<Record<ExpressionRuleId, FiniteNumber>> }
+  | { readonly strategy: "mark-non-evaluable"; readonly reason: string };
 
 interface ExpressionRuleBase {
   readonly id: ExpressionRuleId;
   readonly targetChannels: readonly TraitChannelId[];
-  readonly priority: number;
+  readonly priority: number; // ordinamento deterministico; ambiguità non risolta => mark-non-evaluable
   readonly conflictResolution: ConflictResolution;
 }
 
 interface DominanceRule extends ExpressionRuleBase {
   readonly kind: "complete-dominance" | "incomplete-dominance" | "codominance" | "allelic-dosage";
   readonly alleleOrder?: readonly AlleleId[];
-  readonly weights?: Readonly<Record<AlleleId, number>>;
+  readonly weights?: Readonly<Record<AlleleId, FiniteNumber>>;
 }
 
 interface PolygenicRule extends ExpressionRuleBase {
   readonly kind: "polygenic-aggregate";
   readonly locusIds: readonly LocusId[];
   readonly reducer: "sum" | "weighted-sum" | "product";
-  readonly weights?: Readonly<Record<LocusId, number>>;
+  readonly weights?: Readonly<Record<LocusId, FiniteNumber>>;
+  readonly weightSemantics?: "normalized" | "unnormalized";
 }
 
 interface EpistasisRule extends ExpressionRuleBase {
@@ -126,14 +139,14 @@ interface EpistasisRule extends ExpressionRuleBase {
   readonly targetLocusIds: readonly LocusId[];
   readonly modifierLocusIds: readonly LocusId[];
   readonly operation: "suppress" | "enhance" | "mask" | "additive-modifier";
-  readonly strength: number;
+  readonly strength: FiniteNumber;
 }
 
 interface RegulatoryOrInteractionRule extends ExpressionRuleBase {
   readonly kind: "pleiotropic-projection" | "regulatory-modulation" | "gene-gene-interaction";
   readonly sourceLocusIds: readonly LocusId[];
   readonly targetLocusIds?: readonly LocusId[];
-  readonly parameters: Readonly<Record<string, number | string>>;
+  readonly parameters: Readonly<Record<string, FiniteNumber | string | boolean>>;
 }
 
 type ExpressionRule = DominanceRule | PolygenicRule | EpistasisRule | RegulatoryOrInteractionRule;
@@ -153,28 +166,38 @@ interface GenomeRegistry {
 }
 ```
 
-Il motore non dipende da un numero prefissato di geni: loci/canali/regole sono definiti dal registry.
+**Vincoli:** `domain.min <= domain.max`; tutti i numeri finiti; `custom` normalization richiede id/versione registrati e deterministici (altrimenti `non-evaluable`); pesi invalidi/mancanti dove richiesti ⇒ `non-evaluable`; conflitto non risolvibile o priorità ambigue ⇒ `mark-non-evaluable` (no tie-break implicito). Catalogo concreto canali/unità specifiche: registry/deployment-specifico (D-07 circoscritto).
 
 ---
 
-## 4. Genotipo, stati allelici e provenienza
+## 4. Genotipo, ploidia per gruppo, stati allelici e provenienza
 
 ```ts
-type AlleleStateKind = "identified" | "biologically-absent" | "undetermined" | "non-evaluable";
-
 type AlleleState =
   | { readonly kind: "identified"; readonly alleleId: AlleleId }
   | { readonly kind: "biologically-absent"; readonly reason: "deletion" | "structural-absence" | "null-allele" }
   | { readonly kind: "undetermined"; readonly reason: "data-unavailable" | "not-yet-determined" | "legacy-missing" }
   | { readonly kind: "non-evaluable"; readonly reason: string; readonly context?: string };
 
+type PloidyModel =
+  | {
+      readonly kind: "uniform";
+      readonly byGroup: Readonly<Record<HomologousGroupId, number>>; // tutti uguali, >= 1
+      readonly globalPloidy: number; // valido solo se uniforme
+    }
+  | {
+      readonly kind: "aneuploid";
+      readonly byGroup: Readonly<Record<HomologousGroupId, number>>; // per-gruppo, >= 0 o >= 1 per policy
+      readonly globalPloidy: null; // riepilogo globale non valido
+    };
+
 interface GeneticContribution {
   readonly contributionId: string;
-  readonly contributorId: string | null; // identità contributore, se nota
+  readonly contributorId: string | null;
   readonly organismId: number | null;
   readonly gameteId: string | null;
   readonly confidence: "known" | "partial" | "unknown" | "non-evaluable";
-  readonly role: string | null; // ruolo biologico opzionale, non identità
+  readonly role: string | null; // metadato opzionale, non identità
 }
 
 interface LocusCall {
@@ -189,7 +212,7 @@ interface Chromosome {
   readonly copyId: string;
   readonly definitionId: ChromosomeDefinitionId;
   readonly homologousGroup: HomologousGroupId;
-  readonly contributionId: string; // collega a GeneticContribution
+  readonly contributionId: string;
   readonly loci: readonly LocusCall[];
 }
 
@@ -199,14 +222,14 @@ interface GeneticGenome {
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
   readonly organismId: number;
-  readonly ploidy: number;
-  readonly chromosomes: readonly Chromosome[]; // ploidy copie per gruppo omologo
+  readonly ploidyModel: PloidyModel;
+  readonly chromosomes: readonly Chromosome[]; // copie coerenti con ploidyModel per gruppo
   readonly contributions: Readonly<Record<string, GeneticContribution>>;
   readonly fingerprint: string;
 }
 ```
 
-Invarianti: un `LocusCall` per locus per copia; `identified` ⇒ `alleleId` valido nel registry/versione; `biologically-absent`/`undetermined`/`non-evaluable` ⇒ nessun `alleleId`; numero di copie coerente con ploidia/gruppi.
+**Invarianti:** per ogni gruppo, numero di `Chromosome` = `ploidyModel.byGroup[group]`; un `LocusCall` per locus per copia; `identified` ⇒ `alleleId` valido; altri stati ⇒ nessun `alleleId`; `uniform` ⇒ tutti i valori uguali e `globalPloidy` coerente; `aneuploid` ⇒ `globalPloidy: null`.
 
 ```ts
 interface RecombinationInterval {
@@ -227,8 +250,9 @@ interface Gamete {
   readonly id: string;
   readonly sourceOrganismId: number;
   readonly contributionId: string;
-  readonly chromosomes: readonly Chromosome[]; // una copia per gruppo omologo
+  readonly chromosomes: readonly Chromosome[]; // una copia per gruppo omologo secondo modello di formazione
   readonly recombinationTraces: readonly RecombinationTrace[];
+  readonly formationMode: GameteFormationMode;
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
 }
@@ -245,7 +269,7 @@ interface ResolvedLocusCall {
   readonly chromosomeCopyId: string;
   readonly contributionId: string;
   readonly alleleState: AlleleState;
-  readonly dosageContribution: number | null; // null se non valutabile
+  readonly dosageContribution: FiniteNumber | null;
 }
 
 interface ResolvedLocus {
@@ -262,9 +286,9 @@ interface ResolvedGenotype {
 
 interface ChannelValue {
   readonly channelId: TraitChannelId;
-  readonly unit: string;
+  readonly unit: UnitId;
   readonly state: ChannelState;
-  readonly value: number | null;
+  readonly value: FiniteNumber | null; // null se stato non valorizzabile; finito se presente
   readonly reason?: string;
   readonly appliedRuleIds: readonly ExpressionRuleId[];
 }
@@ -282,12 +306,22 @@ interface PlasticResponse {
   readonly heritable: false;
 }
 
+interface DevelopmentMetric {
+  readonly value: FiniteNumber | null;
+  readonly unit: UnitId;
+  readonly status: "value" | "undetermined" | "non-evaluable";
+  readonly reason?: string;
+}
+
 interface DevelopmentalState {
   readonly organismId: number;
   readonly tick: number;
-  readonly age: number;
-  readonly stage: string;
-  readonly growth: Readonly<Record<string, number>>;
+  readonly tickReference: string;
+  readonly age: FiniteNumber;
+  readonly ageUnit: UnitId;
+  readonly stage: string; // dichiarato/versionato dal modello di sviluppo
+  readonly stageStatus: "value" | "undetermined" | "non-evaluable";
+  readonly growth: Readonly<Record<string, DevelopmentMetric>>;
   readonly heritable: false;
 }
 
@@ -300,19 +334,24 @@ interface FinalPhenotype {
 }
 ```
 
-Firme vietate: qualunque funzione che restituisca `GeneticGenome` da ambiente, plasticità, sviluppo o fenotipo.
+Vietato restituire `GeneticGenome` da ambiente, plasticità, sviluppo o fenotipo.
 
 ---
 
-## 6. Pedigree
+## 6. Pedigree e assi riproduttivi separati
 
 ```ts
-type ReproductionMode = "sexual" | "asexual" | "polyploid" | "multi-contributor" | "unknown";
+type ReproductionMode = "sexual" | "asexual" | "unknown";
+type GameteFormationMode = "meiotic" | "amitotic" | "apomictic" | "none" | "unknown";
+type ContributorSelectionMode = "pair" | "single" | "multi" | "none" | "unknown";
 
 interface PedigreeRecord {
   readonly organismId: number;
   readonly birthTick: number;
-  readonly mode: ReproductionMode;
+  readonly reproductionMode: ReproductionMode;
+  readonly gameteFormationMode: GameteFormationMode;
+  readonly contributorSelectionMode: ContributorSelectionMode;
+  readonly ploidyModel: PloidyModel;
   readonly founder: boolean;
   readonly contributors: readonly GeneticContribution[]; // 0..N
   readonly contributionsUsed: readonly string[]; // contributionId delle copie ereditate
@@ -324,15 +363,40 @@ interface PedigreeGraph {
 }
 ```
 
-Regole: fondatore ⇒ `contributors=[]`, `founder=true`; asessuato ⇒ almeno un contributo sorgente tracciabile; parziale ⇒ contributor con `confidence`/id nulli; nessun ciclo; metriche su rami ignoti/non valutabili ⇒ `NON_EVALUABLE`.
+**Regole:** proprietà indipendenti non compresse in un enum unico; sessuata/asessuata compatibili con poliploidia uniforme o aneuploidia se supportate da `ploidyModel` e `gameteFormationMode`; fondatore ⇒ `contributors=[]`, `founder=true`; genealogia parziale ammessa; nessun ciclo; metriche su rami ignoti/non valutabili ⇒ `NON_EVALUABLE`.
 
 ---
 
 ## 7. Mutazioni, RNG, replay e ambiente
 
 ```ts
-type MutationType = "point" | "insertion" | "deletion" | "duplication" | "structural" | "regulatory";
+type MutationScope = "point" | "local" | "interval" | "chromosomal";
+type MutationKind =
+  | "substitution"
+  | "insertion"
+  | "deletion"
+  | "duplication"
+  | "inversion"
+  | "translocation"
+  | "regulatory"
+  | "complex";
 type MutationOrigin = "germline-de-novo" | "germline-inherited" | "somatic" | "engine-configured" | "legacy-migration";
+
+interface AffectedLocusState {
+  readonly locusId: LocusId;
+  readonly chromosomeCopyId: string;
+  readonly positionBp: number | null;
+  readonly intervalBp: { readonly from: number; readonly to: number } | null; // richiesto per interval/chromosomal se applicabile
+  readonly previousState: AlleleState;
+  readonly resultingState: AlleleState;
+}
+
+interface AffectedInterval {
+  readonly chromosomeDefinitionId: ChromosomeDefinitionId;
+  readonly chromosomeCopyId: string | null;
+  readonly fromBp: number;
+  readonly toBp: number;
+}
 
 interface RngTrace {
   readonly algorithm: string;
@@ -357,25 +421,24 @@ interface ReplayCompatibilityInput {
   readonly parametersHash: string;
 }
 
-interface ReplayResult<T> {
-  readonly status: "ok" | "incompatible";
-  readonly value: T | null;
-  readonly mismatches: readonly { readonly field: string; readonly expected: string; readonly actual: string }[];
-}
+type ReplayMismatch = { readonly field: string; readonly expected: string; readonly actual: string };
+
+type ReplayResult<T> =
+  | { readonly status: "ok"; readonly value: T; readonly mismatches: readonly [] }
+  | { readonly status: "incompatible"; readonly value: null; readonly mismatches: readonly [ReplayMismatch, ...ReplayMismatch[]] };
 
 interface MutationEvent {
   readonly id: string;
   readonly tick: number;
-  readonly type: MutationType;
+  readonly scope: MutationScope;
+  readonly kind: MutationKind;
   readonly origin: MutationOrigin;
   readonly organismId: number;
   readonly generation: number | null;
-  readonly chromosomeCopyId: string;
   readonly contributionId: string;
-  readonly locusId: LocusId;
-  readonly positionBp: number;
-  readonly previousState: AlleleState;
-  readonly resultingState: AlleleState;
+  readonly affectedLoci: readonly [AffectedLocusState, ...AffectedLocusState[]]; // mai vuoto; >1 o intervallo per mutazioni non puntiformi
+  readonly affectedIntervals: readonly AffectedInterval[];
+  readonly affectedCopyIds: readonly string[];
   readonly registryId: RegistryId;
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
@@ -398,17 +461,32 @@ interface FitnessAssessment {
 }
 ```
 
-`MutationEvent` non contiene fitness né effetti fenotipici. `replayEvent` deve restituire `incompatible` (non un valore) se cambia registry, engine, schema, parametri o algoritmo/versione RNG.
+**Vincoli mutazioni:** `point` ⇒ singolo elemento puntuale coerente; `local|interval|chromosomal` ⇒ rappresentare intervalli/insiemi/copie coinvolte senza riduzione a singolo locus. `MutationEvent` non contiene fitness né effetti fenotipici. Replay incompatibile ⇒ `incompatible` con mismatch espliciti, mai valore.
 
 ```ts
-type DataAvailability = "OBSERVED" | "DERIVED" | "MISSING" | "NON_EVALUABLE";
+interface SamplingDefinition {
+  readonly coordinateSystem: string;
+  readonly spatialReference: string;
+  readonly granularity: string;
+  readonly method: "point" | "cell" | "radius" | "area" | "volume" | "custom";
+  readonly parameters: Readonly<Record<string, FiniteNumber | string>>;
+}
 
-interface EnvironmentalField<T> {
-  readonly value: T | null;
-  readonly unit: string;
-  readonly availability: DataAvailability;
-  readonly source: string;
+interface TemporalCoherence {
+  readonly tick: number;
+  readonly mode: "instant" | "interval";
+  readonly startTick?: number;
+  readonly endTick?: number;
+  readonly timeReference: string;
+}
+
+interface EnvironmentalField {
+  readonly status: "value" | "missing" | "non-evaluable";
+  readonly provenance: "OBSERVED" | "DERIVED" | "UNKNOWN";
+  readonly unit: UnitId | null;
+  readonly value: FiniteNumber | string | null; // finito se numerico e status=value
   readonly reason?: string;
+  readonly source: string;
 }
 
 interface EnvironmentalSnapshot {
@@ -416,15 +494,13 @@ interface EnvironmentalSnapshot {
   readonly contractVersion: SemVer;
   readonly snapshotVersion: string;
   readonly producerId: string;
-  readonly tick: number;
-  readonly timeReference: string;
-  readonly coordinateSystem: string;
-  readonly spatialGranularity: string; // es. cell, chunk, region
-  readonly fields: Readonly<Record<string, EnvironmentalField<number | string>>>;
+  readonly temporal: TemporalCoherence;
+  readonly sampling: SamplingDefinition;
+  readonly fields: Readonly<Record<string, EnvironmentalField>>;
 }
 ```
 
-GENOME consuma questo snapshot in sola lettura tramite adattatore; non mantiene una copia autorevole indipendente.
+GENOME consuma lo snapshot in sola lettura tramite adattatore; mapping concreto subordinato al contratto Planet Engine (D-14). Stati uniformati: `missing` ≠ `non-evaluable`.
 
 ---
 
@@ -437,15 +513,16 @@ interface GenomeConfig {
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
   readonly planetEnvironmentContractVersion: SemVer;
-  readonly ploidy: number;
   readonly homologousGroups: readonly HomologousGroupId[];
+  readonly defaultPloidyModel: PloidyModel;
   readonly founderStrategy: "registry-default" | "seeded-draw" | "provided";
-  readonly mutationRates: Readonly<Record<MutationType, number>>;
+  readonly mutationRates: Readonly<Record<MutationKind, FiniteNumber>>;
   readonly recombination: {
     readonly crossoversPerChromosome: { readonly min: number; readonly max: number };
-    readonly interference: number;
+    readonly interference: FiniteNumber;
     readonly hotspotsEnabled: boolean;
   };
+  readonly gameteFormationModes: readonly GameteFormationMode[];
   readonly expressionPipeline: readonly ExpressionRuleId[];
   readonly missingStatePolicy: "error" | "propagate" | "explicit-fallback";
   readonly rng: {
@@ -471,7 +548,7 @@ interface MigrationResult<T> {
 }
 ```
 
-Serializzazione: round-trip canonico; preservare `AlleleState` e stati non valutabili senza collasso. Migrazione: monotonica, idempotente, nessun default silenzioso in validazione.
+Serializzazione: round-trip canonico; preservare `AlleleState`, stati sviluppo/campo ambientale e mutazioni strutturali senza collasso. Migrazione: monotonica, idempotente, nessun default silenzioso in validazione.
 
 ---
 
@@ -497,12 +574,12 @@ interface GenomeEngineApi {
 }
 ```
 
-Tutte le API sopra sono **progettate**. Nessuna è implementata, integrata o attiva in Rev 2.
+Tutte le API sono **progettate**. Nessuna implementata, integrata o attiva in Rev 3.
 
 ---
 
 ## 10. Compatibilità e verifiche
 
-- Nessun impatto applicato a contratti condivisi esistenti in Rev 2.
+- Nessun impatto applicato a contratti condivisi esistenti.
 - Future modifiche a `types/index.ts`, snapshot, worker o renderer richiedono checkpoint §13.
-- Verifica progettuale richiesta: distinzione stati allelici, provenienza N-contributori, replay incompatibile esplicito, propagazione stati in espressione/fenotipo, round-trip e migrazione, non-consumo world RNG, fallback legacy. Piano operativo in `GENOME_VALIDATION_PLAN.md` §6.
+- Verifica progettuale richiesta: stati allelici, ploidia per-gruppo, assi riproduttivi separati, mutazioni strutturali complete, replay discriminato incompatibile, validazione numerica/unità/normalizzazione/conflitti, sviluppo non ereditabile con unità, snapshot ambientale Planet Engine con stati uniformati, round-trip/migrazione. Piano operativo in `GENOME_VALIDATION_PLAN.md`.
