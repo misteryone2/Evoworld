@@ -37,6 +37,7 @@ export function buildElevationGrid(config: PlanetPhysicalConfig): ElevationGrid 
   const width = config.surface.gridWidth;
   const height = config.surface.gridHeight;
   const elevationM = new Float32Array(width * height);
+  const transportElevationM = new Float64Array(width * height);
   let minM = Infinity;
   let maxM = -Infinity;
 
@@ -44,6 +45,8 @@ export function buildElevationGrid(config: PlanetPhysicalConfig): ElevationGrid 
     for (let x = 0; x < width; x += 1) {
       const value = elevationAtM(config, x, y);
       elevationM[y * width + x] = value;
+      // Preserve the unquantized generator output for mass-conserving transport.
+      transportElevationM[y * width + x] = value;
       if (value < minM) minM = value;
       if (value > maxM) maxM = value;
     }
@@ -58,6 +61,7 @@ export function buildElevationGrid(config: PlanetPhysicalConfig): ElevationGrid 
     maxM,
     cellAreasM2,
     cellAreaM2: meanCellAreaM2(cellAreasM2),
+    transportElevationM,
   };
 }
 

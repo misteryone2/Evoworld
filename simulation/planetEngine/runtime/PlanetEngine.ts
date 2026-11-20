@@ -90,6 +90,9 @@ function cloneSurfaceField(field: SurfaceField): SurfaceField {
     cellAreasM2: new Float64Array(field.cellAreasM2),
     oceanMask: new Uint8Array(field.oceanMask),
     coastlineMask: new Uint8Array(field.coastlineMask),
+    ...(field.transportElevationM
+      ? { transportElevationM: new Float64Array(field.transportElevationM) }
+      : {}),
   };
 }
 
@@ -299,10 +302,14 @@ export class PlanetEngine {
       this.elevationGrid = buildElevationGrid(this.config);
       this.cachedElevationRevision = this.elevationRevision;
     }
+    const grid = this.elevationGrid;
     return {
-      ...this.elevationGrid,
-      elevationM: new Float32Array(this.elevationGrid.elevationM),
-      cellAreasM2: new Float64Array(this.elevationGrid.cellAreasM2),
+      ...grid,
+      elevationM: new Float32Array(grid.elevationM),
+      cellAreasM2: new Float64Array(grid.cellAreasM2),
+      ...(grid.transportElevationM
+        ? { transportElevationM: new Float64Array(grid.transportElevationM) }
+        : {}),
     };
   }
 
@@ -532,10 +539,10 @@ export class PlanetEngine {
 
     const uplifted = applyElevationDeltaM(this.getElevationGrid(), flow.elevationDeltaM);
     const eroded = erodeAndDeposit(this.config, uplifted, deltaS);
-    this.setElevationGrid(eroded.elevationM);
+    this.setElevationGrid(eroded.elevationM, eroded.transportElevationM);
   }
 
-  private setElevationGrid(elevationM: Float32Array): void {
+  private setElevationGrid(elevationM: Float32Array, transportElevationM?: Float64Array): void {
     let minM = Infinity;
     let maxM = -Infinity;
     for (let i = 0; i < elevationM.length; i += 1) {
@@ -551,6 +558,7 @@ export class PlanetEngine {
       maxM,
       cellAreasM2,
       cellAreaM2: meanCellAreaM2(cellAreasM2),
+      transportElevationM: transportElevationM ? new Float64Array(transportElevationM) : undefined,
     };
     this.elevationRevision += 1;
     this.surfaceCache = undefined;

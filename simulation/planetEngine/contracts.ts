@@ -178,6 +178,12 @@ export interface ElevationGrid {
   cellAreasM2: Float64Array;
   /** Arithmetic mean only. Retained for display; never use for local fluxes. */
   cellAreaM2: number;
+  /**
+   * Optional double-precision transport state. When present it is authoritative
+   * for volume conservation; `elevationM` remains the Float32 public view.
+   * It carries the Float32 quantization residual forward instead of losing it.
+   */
+  transportElevationM?: Float64Array;
 }
 
 export interface SurfaceField extends ElevationGrid {

@@ -86,6 +86,9 @@ function cloneSurfaceField(field: SurfaceField): SurfaceField {
     cellAreasM2: new Float64Array(field.cellAreasM2),
     oceanMask: new Uint8Array(field.oceanMask),
     coastlineMask: new Uint8Array(field.coastlineMask),
+    ...(field.transportElevationM
+      ? { transportElevationM: new Float64Array(field.transportElevationM) }
+      : {}),
   };
 }
 

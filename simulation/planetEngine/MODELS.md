@@ -15,7 +15,7 @@ are unchanged.
 | Atmospheric circulation (`atmosphere/Circulation`) | `SIMULATION_HEURISTIC` | Coriolis f = 2Ωsinφ | Hadley/Ferrel/Polar bands and fixed gradient; **not** a dynamic atmosphere |
 | Hypsometry (`surface/Hypsometry`, `surface/GridGeometry`, `surface/Continents`) | `PHYSICAL_MODEL` | Exact latitude-weighted cell areas; ocean volume by hypsometric integral; area-weighted ocean fraction | Elevation fractal is a seeded terrain generator, not tectonic history |
 | Geology (`geology/Interior`, `Tectonics`, `Volcanism`) | `SIMULATION_HEURISTIC` | Interior heat bookkeeping; volcanic CO₂ is injected into the gas inventory | Uplift/volcanic triggers are deterministic proxies |
-| Erosion (`geology/SurfaceEvolution`) | `APPROXIMATION` | Volume removed = volume deposited; `AᵢΔhᵢ + AⱼΔhⱼ = 0` | Diffusive transport coefficient is prescribed |
+| Erosion (`geology/SurfaceEvolution`) | `APPROXIMATION` | Volume removed = volume deposited; `AᵢΔhᵢ + AⱼΔhⱼ = 0`; Float64 transport state carries the quantization residual | Diffusive transport coefficient is prescribed |
 | Local climate (`climate/*`) | `APPROXIMATION` | Irradiance from orbit/tilt/latitude; dry lapse rate g/cp is physical | Insolation→temperature anomaly is a bounded log proxy; temperature is **not** a local energy-balance solution |
 | Water cycle (`hydrology/WaterCycle`, `Inventory`) | `SIMULATION_HEURISTIC` | Ocean + ice + soil + atmospheric vapor mass is conserved exactly per transfer | Global reservoirs only; no spatial soil moisture transport or cloud reservoir |
 | Drainage (`hydrology/Drainage`) | `SIMULATION_HEURISTIC` | Deterministic D8 accumulation from elevation and precipitation | `riverFlow` is a topographic **proxy**, not transported water or a solved river |
@@ -47,7 +47,11 @@ tick/time once and runs a deterministic scheduler: a subsystem runs when
 `nextTick % intervalTicks === 0`, receiving its accumulated pending SI
 duration. `stepGeology()` and `stepClimateHydrology()` are manual subsystem
 helpers and never advance tick/time. `seek()` is derived-only orbital
-inspection and does not replay stateful subsystems.
+inspection and does not replay stateful subsystems. Water, geology and general
+state changes bump `stateRevision`; only the scheduler bumps `climateRevision`,
+so the climate field is recomputed exactly at its configured tick. Snapshots
+hold frozen read-only biome-memory views; the engine is the sole writer and
+commits once per tick in row-major order with monotonic tick guards.
 
 ## Grid-area contract
 
@@ -59,3 +63,17 @@ The areas telescope to exactly `4πR²`. Hypsometry, sea-level solve, erosion,
 sediment mass and global water fluxes all use these per-cell areas. The scalar
 `cellAreaM2` is only the arithmetic mean and must not be used for local mass
 balances.
+
+## Volume-conservation contract
+
+Transport uses `transportElevationM` (`Float64Array`), which is authoritative
+for crustal volume. The public `elevationM` (`Float32Array`) is exactly its
+`Math.fround` view; no spatial correction is applied. Each erosion step reports
+`transportVolumeBalanceM3`, `transportVolumeToleranceM3` and
+`quantizationResidualM3`. The tolerance is
+`1e-12 × max(transportedVolume, |integratedBaselineVolume|)`, which covers
+double-precision integration roundoff of a ~10¹⁸ m³ baseline without excusing
+transport error. Measured over 200–300 cycles at 16×16, 64×64 and 128×128,
+cumulative transport drift stays below `1e-8` of cumulative transported volume,
+while the Float32 diagnostic drift remains inside one step's quantization
+envelope because the residual is carried forward in double precision.
