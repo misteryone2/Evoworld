@@ -22,6 +22,11 @@ are unchanged.
 | Biome classifier (`biomes/*`) | `SIMULATION_HEURISTIC` | Hysteresis memory is explicit and serializable | Continuous suitability scores are heuristic; no latitude threshold |
 | Environment Snapshot (`snapshot/*`) | `APPROXIMATION` | Immutable view of one tick; legacy `Cell` units preserved | Derived sample fields are approximations of their parent subsystems |
 
+`VISUAL_EFFECT` is part of the shared `ModelTag` taxonomy but is deliberately
+NOT assigned to any Planet Engine subsystem. Visual-only effects stay in the
+untouched renderer G3.1 layer and are outside this headless engine's validation
+claims.
+
 ## Water contract
 
 `hydrosphere.vaporMassKg` is the only atmospheric water mass. `applyWaterFluxes`

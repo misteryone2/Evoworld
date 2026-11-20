@@ -174,6 +174,9 @@ describe("P2 — APPROXIMATION and SIMULATION_HEURISTIC status", () => {
     expect(MODEL_CLASSIFICATION.waterCycle).toBe("SIMULATION_HEURISTIC");
     expect(MODEL_CLASSIFICATION.drainageProxy).toBe("SIMULATION_HEURISTIC");
     expect(MODEL_CLASSIFICATION.biomeClassifier).toBe("SIMULATION_HEURISTIC");
+    // VISUAL_EFFECT belongs to the shared taxonomy, but no headless Planet
+    // Engine subsystem claims it; renderer-only effects are out of scope.
+    expect(Object.values(MODEL_CLASSIFICATION)).not.toContain("VISUAL_EFFECT");
   });
 
   it("treats local temperature and wind as bounded proxies, not solved fields", () => {
