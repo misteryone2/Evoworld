@@ -7,8 +7,9 @@
  */
 
 import type { TerrainType } from "../contracts";
+import { PlanetInvariantError } from "../core/invariants";
 import { clamp } from "../units";
-import { type BiomeScores, highestBiome } from "./classifier";
+import { type BiomeInput, biomeScores, type BiomeScores, highestBiome } from "./classifier";
 
 export interface BiomeMemory {
   biome: TerrainType;
@@ -50,8 +51,25 @@ export function updateBiome(
 }
 
 /**
- * Explicit, serializable per-cell biome memory. Snapshots receive a shared
- * instance from the engine and never create their own empty memory.
+ * Single source of truth for a per-cell biome decision. Both the runtime
+ * (which owns memory commits) and snapshots (which are pure readers) call it,
+ * so a read can never diverge from the committed history.
+ */
+export function decideBiome(
+  input: Omit<BiomeInput, "climateStability">,
+  tick: number,
+  memory?: BiomeMemory,
+): BiomeDecision {
+  return updateBiome(
+    biomeScores({ ...input, climateStability: memory?.stability ?? 1 }),
+    tick,
+    memory,
+  );
+}
+
+/**
+ * Explicit, serializable per-cell biome memory. The engine owns all writes;
+ * snapshots receive only a frozen read-only view.
  */
 export class BiomeMemoryStore {
   private readonly records = new Map<number, BiomeMemory>();
@@ -64,14 +82,30 @@ export class BiomeMemoryStore {
     this.records.set(index, { ...record });
   }
 
+  /** Frozen defensive view: safe for historical snapshots to retain. */
+  view(): ReadonlyMap<number, Readonly<BiomeMemory>> {
+    const frozen = new Map<number, Readonly<BiomeMemory>>();
+    for (const [index, record] of this.records) frozen.set(index, Object.freeze({ ...record }));
+    return frozen;
+  }
+
+  /**
+   * Monotonic write. A decision computed for an older tick can never overwrite
+   * a newer record, even if a stale caller attempts it.
+   */
   commit(index: number, decision: BiomeDecision, tick: number): BiomeMemory {
+    if (!Number.isInteger(tick) || tick < 0) {
+      throw new PlanetInvariantError("biome memory commit requires a non-negative integer tick");
+    }
+    const existing = this.records.get(index);
+    if (existing && existing.tick > tick) return { ...existing };
     const next: BiomeMemory = {
       biome: decision.biome,
       tick,
-      stability: decision.stability,
+      stability: clamp(decision.stability, 0, 1),
     };
     this.records.set(index, next);
-    return next;
+    return { ...next };
   }
 
   clear(): void {

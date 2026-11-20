@@ -52,7 +52,12 @@ import { seasonAt } from "../climate/ClimateZones";
 import { applyWaterFluxes, totalWaterInventoryKg, type WaterFluxKg } from "../hydrology/Inventory";
 import { updateSeaLevelFromInventory } from "../hydrology/SeaLevel";
 import { computeWaterCycle } from "../hydrology/WaterCycle";
-import { BiomeMemoryStore } from "../biomes/stability";
+import { slopeAt } from "../hydrology/Drainage";
+import {
+  BiomeMemoryStore,
+  decideBiome,
+  type SerializedBiomeMemory,
+} from "../biomes/stability";
 import { createEnvironmentSnapshot } from "../snapshot/EnvironmentSnapshot";
 import { PLANET_UNITS } from "../units";
 
@@ -138,6 +143,7 @@ export class PlanetEngine {
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     validateState(this.config, this.state);
     this.currentSnapshot = this.refreshDerived();
+    this.commitBiomeMemory();
   }
 
   getConfig(): PlanetPhysicalConfig {
@@ -221,7 +227,11 @@ export class PlanetEngine {
       updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     }
 
-    // 6. Publish a coherent core snapshot. The environment view is created
+    // 6. Commit biome history once, in deterministic row-major order. Snapshots
+    //    are pure readers of this engine-owned, monotonic memory store.
+    this.commitBiomeMemory();
+
+    // 7. Publish a coherent core snapshot. The environment view is created
     //    lazily from the same end-of-tick state on first access.
     const snapshot = this.refreshDerived();
     this.currentSnapshot = snapshot;
@@ -450,8 +460,49 @@ export class PlanetEngine {
     return this.biomeMemory;
   }
 
+  /** Restore a previously serialized memory store without temporal regression. */
+  restoreBiomeMemory(records: readonly SerializedBiomeMemory[]): void {
+    this.biomeMemory.clear();
+    for (const record of records) this.biomeMemory.set(record.index, record);
+    let maxTick = -1;
+    for (const record of records) maxTick = Math.max(maxTick, record.tick);
+    this.lastBiomeCommitTick = maxTick;
+    this.currentEnvironmentSnapshot = undefined;
+  }
+
   totalWaterKg(): number {
     return totalWaterInventoryKg(this.state);
+  }
+
+  /**
+   * Controlled biome-memory phase. This is the ONLY writer of the store; it
+   * runs once per tick in row-major order so access order can never influence
+   * results and stale snapshots cannot rewrite history.
+   */
+  private commitBiomeMemory(): void {
+    if (this.lastBiomeCommitTick === this.state.tick) return;
+    const surface = this.getSurfaceField();
+    const climate = this.getClimateField();
+    const hydrology = this.getHydrologyField(this.lastStepDeltaS);
+    const view = this.biomeMemory.view();
+
+    for (let y = 0; y < surface.height; y += 1) {
+      for (let x = 0; x < surface.width; x += 1) {
+        const index = y * surface.width + x;
+        const decision = decideBiome({
+          temperatureK: climate.temperatureK[index],
+          precipitationMPerYear: hydrology.precipitationMPerYear[index],
+          humidity: climate.humidity[index],
+          elevationM: surface.elevationM[index],
+          seaLevelM: surface.seaLevelM,
+          slope: slopeAt(surface, x, y),
+          soilMoisture: hydrology.soilMoisture[index],
+          iceFraction: this.config.hydrosphere.iceFraction,
+        }, this.state.tick, view.get(index));
+        this.biomeMemory.commit(index, decision, this.state.tick);
+      }
+    }
+    this.lastBiomeCommitTick = this.state.tick;
   }
 
   private computeGeologyFlows(baseState: PlanetState, deltaS: number, timeS: number): GeologyFlow {
@@ -537,6 +588,7 @@ export class PlanetEngine {
   }
 
   private refreshDerivedAndSnapshot(): PlanetEngineSnapshot {
+    this.commitBiomeMemory();
     const snapshot = this.refreshDerived();
     validateState(this.config, this.state);
     this.currentSnapshot = snapshot;

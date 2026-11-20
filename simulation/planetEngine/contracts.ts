@@ -283,7 +283,7 @@ export interface EnvironmentSnapshot {
   sample(x: number, y: number): ReadonlyEnvironmentSample;
   /** Exact legacy `Cell` shape; no GENOME/biology module is imported or edited. */
   toLegacyCell(x: number, y: number): ReadonlyLegacyCell;
-  /** Eagerly materialize samples; biome memory is committed in scan order. */
+  /** Eagerly materialize read-only samples; memory writes stay in the runtime. */
   materialize(): void;
 }
 

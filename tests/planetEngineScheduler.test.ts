@@ -22,9 +22,11 @@ function signature(field: ClimateField): number[] {
 describe("P1 — climate scheduler cache isolation", () => {
   it("climateIntervalTicks = 1 recomputes exactly once per tick", () => {
     const engine = makeEngine(1);
-    expect(engine.getRuntimeDiagnostics().climateUpdateCount).toBe(0);
+    // Construction already committed tick-0 biome memory, which built the
+    // initial climate field once. All assertions below are relative to it.
+    const initialCount = engine.getRuntimeDiagnostics().climateUpdateCount;
+    expect(initialCount).toBeGreaterThan(0);
 
-    const initialCount = engine.getRuntimeDiagnostics().climateUpdateCount + 1;
     engine.getClimateField();
     expect(engine.getRuntimeDiagnostics().climateUpdateCount).toBe(initialCount);
 

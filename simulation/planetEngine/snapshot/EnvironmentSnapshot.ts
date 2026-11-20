@@ -1,9 +1,11 @@
 /**
  * APPROXIMATION / CONTRACT / SNAPSHOT
  *
- * Immutable per-tick view of the physical environment. Biome memory is
- * engine-owned and shared between snapshots; returned samples and legacy cells
- * are frozen defensive copies. Coordinates are validated explicitly.
+ * Immutable per-tick view of the physical environment. Each snapshot holds a
+ * frozen READ-ONLY view of biome memory; sampling never mutates engine state.
+ * The engine commits biome decisions once per tick in a controlled phase.
+ * Returned samples and legacy cells are frozen defensive copies and coordinates
+ * are validated explicitly.
  */
 
 import type {
@@ -19,8 +21,7 @@ import type { EnvironmentSample, EnvironmentSnapshot } from "../contracts";
 import { orbitAt } from "../core/Orbit";
 import { surfacePressureFromState } from "../core/EnergyBudget";
 import { PlanetInvariantError } from "../core/invariants";
-import { biomeScores } from "../biomes/classifier";
-import { BiomeMemoryStore, updateBiome } from "../biomes/stability";
+import { type BiomeMemory, BiomeMemoryStore, decideBiome } from "../biomes/stability";
 import { seasonalShapeK } from "../climate/TemperatureField";
 import { slopeAt } from "../hydrology/Drainage";
 import { legacyWaterAxis } from "../units";
@@ -103,7 +104,8 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
   private readonly climate: ClimateField;
   private readonly hydrology: HydrologyField;
   private readonly declinationRad: number;
-  private readonly memory: BiomeMemoryStore;
+  /** Frozen engine-owned view; never written to by this snapshot. */
+  private readonly memory: ReadonlyMap<number, Readonly<BiomeMemory>>;
   private readonly samples = new Map<number, EnvironmentSample>();
 
   constructor(provider: EnvironmentProvider, options: EnvironmentSnapshotOptions) {
@@ -115,7 +117,7 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
     this.surface = cloneSurfaceField(provider.getSurfaceField());
     this.climate = cloneClimateField(provider.getClimateField());
     this.hydrology = cloneHydrologyField(provider.getHydrologyField(options.deltaS));
-    this.memory = provider.getBiomeMemory();
+    this.memory = provider.getBiomeMemory().view();
     this.gridWidth = this.surface.width;
     this.gridHeight = this.surface.height;
     this.season = this.climate.season;
@@ -135,19 +137,20 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
     const seaLevelM = this.surface.seaLevelM;
     const humidity = this.climate.humidity[index];
     const memory = this.memory.get(index);
-    const scores = biomeScores({
-      temperatureK: this.climate.temperatureK[index],
-      precipitationMPerYear: this.hydrology.precipitationMPerYear[index],
-      humidity,
-      elevationM,
-      seaLevelM,
-      slope: slopeAt(this.surface, gridX, gridY),
-      soilMoisture: this.hydrology.soilMoisture[index],
-      climateStability: memory?.stability ?? 1,
-      iceFraction: this.config.hydrosphere.iceFraction,
-    });
-    const decision = updateBiome(scores, this.tick, memory);
-    const persisted = this.memory.commit(index, decision, this.tick);
+    // Pure read: use the committed decision for this tick when present, and a
+    // non-mutating fallback otherwise. No commit, no temporal regression.
+    const decision = (memory?.tick === this.tick)
+      ? { biome: memory.biome, stability: memory.stability }
+      : decideBiome({
+        temperatureK: this.climate.temperatureK[index],
+        precipitationMPerYear: this.hydrology.precipitationMPerYear[index],
+        humidity,
+        elevationM,
+        seaLevelM,
+        slope: slopeAt(this.surface, gridX, gridY),
+        soilMoisture: this.hydrology.soilMoisture[index],
+        iceFraction: this.config.hydrosphere.iceFraction,
+      }, this.tick, memory);
 
     const waterAxis = legacyWaterAxis(humidity, elevationM, seaLevelM, this.config.surface.roughnessM);
     const sampled: EnvironmentSample = {
@@ -170,8 +173,8 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
       iceFraction: this.config.hydrosphere.iceFraction,
       riverFlow: this.hydrology.riverFlow[index],
       isLake: waterAxis > 0.85 && this.surface.oceanMask[index] === 0,
-      biome: persisted.biome,
-      climateStability: persisted.stability,
+      biome: decision.biome,
+      climateStability: decision.stability,
       season: this.season,
       seasonalOffsetK: seasonalShapeK(
         latitudeRad,
@@ -188,7 +191,7 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
     return Object.freeze(environmentSampleToLegacyCell(this.sample(x, y), this.config));
   }
 
-  /** Eagerly materialize samples in deterministic row-major scan order. */
+  /** Eagerly materialize read-only samples in deterministic row-major order. */
   materialize(): void {
     for (let y = 0; y < this.gridHeight; y += 1) {
       for (let x = 0; x < this.gridWidth; x += 1) this.sample(x, y);
