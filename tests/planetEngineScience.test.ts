@@ -5,15 +5,31 @@ import {
   createEarthLikeConfig,
   gravityMS2,
   orbitalPeriodS,
+  rotationPhaseAt,
   surfaceAreaM2,
 } from "../simulation/planetEngine/core/PlanetCore";
-import { orbitAtMeanAnomaly } from "../simulation/planetEngine/core/Orbit";
+import {
+  meanAnomalyAt,
+  orbitAtMeanAnomaly,
+  solveEccentricAnomaly,
+} from "../simulation/planetEngine/core/Orbit";
 import { stellarFluxWm2, spectralClassFromTemperatureK } from "../simulation/planetEngine/core/Stellar";
 import {
   computeEnergyBudget,
   estimateBondAlbedo,
+  greenhouseDeltaK,
   surfacePressureFromState,
 } from "../simulation/planetEngine/core/EnergyBudget";
+import {
+  GAS_KEYS,
+  MOLAR_MASS_KG_PER_MOL,
+  dryAirMassKgFromState,
+  injectGasMassKg,
+  meanMolarMassKgPerMol,
+  normalizeGasFractions,
+  waterMassKgFromState,
+} from "../simulation/planetEngine/atmosphere/Composition";
+import { relativeHumidityFromPressure, saturationVaporPressurePa } from "../simulation/planetEngine/climate/Humidity";
 import { dailyMeanCosineZenith } from "../simulation/planetEngine/climate/Insolation";
 import {
   dryLapseRateKPerM,
@@ -24,6 +40,14 @@ import {
 import { coriolisParameter, zonalWindMS } from "../simulation/planetEngine/atmosphere/Circulation";
 import { solveSeaLevelM } from "../simulation/planetEngine/surface/Hypsometry";
 import { erodeAndDeposit } from "../simulation/planetEngine/geology/SurfaceEvolution";
+import { COOLING_TIME_S, coolingPowerW, heatFlowW, stepInterior } from "../simulation/planetEngine/geology/Interior";
+import { applyWaterFluxes, totalWaterInventoryKg } from "../simulation/planetEngine/hydrology/Inventory";
+import {
+  BIOME_COOLDOWN_TICKS,
+  BIOME_HYSTERESIS,
+  updateBiome,
+} from "../simulation/planetEngine/biomes/stability";
+import { BIOME_ORDER, type BiomeScores } from "../simulation/planetEngine/biomes/classifier";
 import { PlanetEngine } from "../simulation/planetEngine/runtime/PlanetEngine";
 import { PLANET_UNITS } from "../simulation/planetEngine/units";
 
@@ -157,6 +181,129 @@ describe("P2 — PHYSICAL_MODEL scientific reference tests", () => {
     expect(result.depositedMassKg).toBeCloseTo(result.erodedMassKg, 6);
     expect(result.erodedVolumeM3).toBeGreaterThan(0);
   });
+
+  it("Kepler equation: eccentric anomaly closes and perihelion/aphelion match a(1±e)", () => {
+    const eccentricity = 0.2;
+    const config = createEarthLikeConfig({ orbit: { eccentricity } });
+    for (const meanAnomalyRad of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]) {
+      const eccentricAnomalyRad = solveEccentricAnomaly(meanAnomalyRad, eccentricity);
+      expect(eccentricAnomalyRad - eccentricity * Math.sin(eccentricAnomalyRad))
+        .toBeCloseTo(meanAnomalyRad, 9);
+    }
+
+    const semiMajorAxisM = config.orbit.semiMajorAxisM;
+    const periapsis = orbitAtMeanAnomaly(config, 0);
+    expect(periapsis.distanceM).toBeCloseTo(semiMajorAxisM * (1 - eccentricity), 6);
+    expect(Math.abs(periapsis.trueAnomalyRad)).toBeCloseTo(0, 9);
+    const apoapsis = orbitAtMeanAnomaly(config, Math.PI);
+    expect(apoapsis.distanceM).toBeCloseTo(semiMajorAxisM * (1 + eccentricity), 6);
+    expect(Math.abs(Math.abs(apoapsis.trueAnomalyRad) - Math.PI)).toBeCloseTo(0, 9);
+
+    const onePeriod = orbitalPeriodS(config);
+    expect(meanAnomalyAt(config, onePeriod)).toBeCloseTo(
+      meanAnomalyAt(config, 0),
+      9,
+    );
+    const quarterPhase = rotationPhaseAt(CONFIG, CONFIG.rotationPeriodS / 4);
+    expect(quarterPhase).toBeCloseTo(Math.PI / 2, 9);
+  });
+
+  it("gas inventory: mean molar mass, H2O mirror and CO₂ injection conserve moles", () => {
+    const composition = normalizeGasFractions(CONFIG.atmosphere.composition);
+    const sum = GAS_KEYS.reduce((total, key) => total + composition[key], 0);
+    expect(sum).toBeCloseTo(1, 12);
+    // Dry air near 28.97 g/mol is an independent composition reference.
+    expect(meanMolarMassKgPerMol(composition)).toBeGreaterThan(0.0285);
+    expect(meanMolarMassKgPerMol(composition)).toBeLessThan(0.0295);
+
+    const state = new PlanetEngine(CONFIG).getState();
+    const meanBefore = meanMolarMassKgPerMol(state.atmosphere.composition);
+    const molesBefore = new Map(GAS_KEYS.map((key) => [
+      key,
+      (state.atmosphere.composition[key] * state.atmosphere.totalMassKg) / meanBefore,
+    ]));
+    const totalBeforeKg = state.atmosphere.totalMassKg;
+    const vaporBeforeKg = state.hydrosphere.vaporMassKg;
+    const addedKg = 1e12;
+    injectGasMassKg(state, "CO2", addedKg);
+
+    expect(state.atmosphere.totalMassKg).toBeCloseTo(totalBeforeKg + addedKg, 3);
+    const meanAfter = meanMolarMassKgPerMol(state.atmosphere.composition);
+    for (const key of GAS_KEYS) {
+      const molesAfter = (state.atmosphere.composition[key] * state.atmosphere.totalMassKg) / meanAfter;
+      if (key === "CO2") {
+        expect(molesAfter).toBeGreaterThan(molesBefore.get(key)!);
+      } else {
+        expect(Math.abs(molesAfter - molesBefore.get(key)!) / molesBefore.get(key)!).toBeLessThan(1e-10);
+      }
+    }
+    expect(Math.abs(waterMassKgFromState(state) - vaporBeforeKg) / vaporBeforeKg).toBeLessThan(1e-10);
+  });
+
+  it("greenhouse: CO₂ doubling gives the calibrated logarithmic increment", () => {
+    const composition = normalizeGasFractions(CONFIG.atmosphere.composition);
+    const pressurePa = 101325;
+    const base = greenhouseDeltaK(composition, pressurePa);
+    expect(base).toBeCloseTo(33, 6);
+    const doubled = greenhouseDeltaK({ ...composition, CO2: composition.CO2 * 2 }, pressurePa);
+    const quadrupled = greenhouseDeltaK({ ...composition, CO2: composition.CO2 * 4 }, pressurePa);
+    expect(doubled - base).toBeCloseTo(6 * Math.LN2, 6);
+    expect(quadrupled - doubled).toBeCloseTo(doubled - base, 6);
+  });
+
+  it("humidity: Magnus saturation pressure and bounded relative humidity", () => {
+    expect(saturationVaporPressurePa(273.15)).toBeCloseTo(611, 0);
+    expect(saturationVaporPressurePa(293.15)).toBeGreaterThan(2300);
+    expect(saturationVaporPressurePa(293.15)).toBeLessThan(2400);
+    expect(saturationVaporPressurePa(303.15)).toBeGreaterThan(saturationVaporPressurePa(293.15));
+    const saturationPa = saturationVaporPressurePa(293.15);
+    expect(relativeHumidityFromPressure(293.15, saturationPa)).toBeCloseTo(1, 5);
+    expect(relativeHumidityFromPressure(293.15, saturationPa * 2)).toBe(1);
+  });
+
+  it("hydrology: explicit fluxes conserve water and dry-air mass", () => {
+    const state = new PlanetEngine(CONFIG).getState();
+    // Give the soil reservoir enough water to exercise the runoff branch while
+    // keeping the total inventory unchanged.
+    const soilSeedKg = 2e11;
+    state.hydrosphere.soilWaterKg += soilSeedKg;
+    state.hydrosphere.oceanMassKg -= soilSeedKg;
+    const beforeKg = totalWaterInventoryKg(state);
+    const dryBeforeKg = dryAirMassKgFromState(state);
+    const vaporBeforeKg = state.hydrosphere.vaporMassKg;
+
+    const applied = applyWaterFluxes(state, {
+      evaporationKg: 1e12,
+      precipitationKg: 5e11,
+      runoffKg: 1e11,
+    });
+    expect(applied.evaporationKg).toBe(1e12);
+    expect(applied.precipitationKg).toBe(5e11);
+    expect(applied.runoffKg).toBe(1e11);
+    expect(applied.totalBeforeKg).toBe(beforeKg);
+    expect(Math.abs(applied.totalAfterKg - beforeKg) / beforeKg).toBeLessThan(1e-12);
+    expect(Math.abs(dryAirMassKgFromState(state) - dryBeforeKg) / dryBeforeKg).toBeLessThan(1e-12);
+    expect(state.hydrosphere.vaporMassKg - vaporBeforeKg).toBeCloseTo(5e11, 3);
+    expect(Math.abs(waterMassKgFromState(state) - state.hydrosphere.vaporMassKg) / vaporBeforeKg)
+      .toBeLessThan(1e-10);
+  });
+
+  it("geology: interior heat decays with an exponential reference time", () => {
+    const state = new PlanetEngine(CONFIG).getState();
+    const coolingW = coolingPowerW(CONFIG, state);
+    expect(state.interior.heatJ / coolingW).toBeCloseTo(COOLING_TIME_S, 6);
+    const flowW = heatFlowW(CONFIG, state);
+    expect(flowW).toBeCloseTo(CONFIG.interior.radiogenicHeatW + coolingW, 6);
+
+    const deltaS = PLANET_UNITS.secondsPerEarthDay;
+    const updated = stepInterior(CONFIG, state, deltaS);
+    const expectedHeatJ = Math.max(0, state.interior.heatJ - coolingW * deltaS);
+    expect(Math.abs(updated.heatJ - expectedHeatJ) / expectedHeatJ).toBeLessThan(1e-12);
+    expect(updated.tectonicStress).toBeGreaterThanOrEqual(0);
+    expect(updated.tectonicStress).toBeLessThanOrEqual(1);
+    expect(updated.volcanicActivity).toBeGreaterThanOrEqual(0);
+    expect(updated.volcanicActivity).toBeLessThanOrEqual(1);
+  });
 });
 
 describe("P2 — APPROXIMATION and SIMULATION_HEURISTIC status", () => {
@@ -185,5 +332,20 @@ describe("P2 — APPROXIMATION and SIMULATION_HEURISTIC status", () => {
     expect(coriolisParameter(Math.PI / 4, omega)).toBeGreaterThan(0);
     expect(zonalWindMS(Math.PI / 4, omega, 1e-5)).toBe(zonalWindMS(Math.PI / 4, omega, 1e-5));
     expect(zonalWindMS(Math.PI / 4, omega, 1e-5)).toBeLessThanOrEqual(60);
+  });
+
+  it("biome memory: hysteresis holds ties and cooldown delays switches", () => {
+    const zeroScores = Object.fromEntries(BIOME_ORDER.map((key) => [key, 0])) as BiomeScores;
+    const memory = { biome: "forest" as const, tick: 0, stability: 1 };
+    const narrowMargin = { ...zeroScores, forest: 1, desert: 1 + BIOME_HYSTERESIS / 2 };
+    expect(updateBiome(narrowMargin, BIOME_COOLDOWN_TICKS * 2, memory).biome).toBe("forest");
+
+    const decisive = { ...zeroScores, forest: 1, desert: 1 + BIOME_HYSTERESIS * 2 };
+    expect(updateBiome(decisive, BIOME_COOLDOWN_TICKS - 1, memory).biome).toBe("forest");
+    const switched = updateBiome(decisive, BIOME_COOLDOWN_TICKS, memory);
+    expect(switched.biome).toBe("desert");
+    expect(switched.changed).toBe(true);
+    expect(switched.stability).toBeGreaterThanOrEqual(0);
+    expect(switched.stability).toBeLessThanOrEqual(1);
   });
 });
