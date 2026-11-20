@@ -1,90 +1,60 @@
-# GENOME — Contratti API completi
+# GENOME — Contratti API completi (Rev 2)
 
 **Data:** 2026-11-20  
 **Branch:** `milestone/genome/gen0-audit` — PR #4  
-**Revisione:** Rev 1 (correzione del modello genetico dopo review tecnica).  
-**Stato:** contratti **osservati** nel codice attuale + contratti **proposti** per il Genome Engine. I proposti non sono implementati e non sono approvati: richiedono la nuova review e il checkpoint di `GENOME_ARCHITECTURE.md` §13.
+**Revisione:** Rev 2 (correzioni: stati allelici espliciti, provenienza generalizzata, contratti quantitativi, replay compatibile, ambiente Planet Engine).  
+**Stato:** contratti **osservati** invariati + contratti **proposti** non implementati e non approvati. Richiedono nuova review e checkpoint `GENOME_ARCHITECTURE.md` §13. Nessuna modifica al codice di produzione.
 
 ---
 
 ## 1. Contratti esistenti (OBSERVED — invariati)
 
-### 1.1 `BaseGenome` / `Genome` — `types/index.ts:14-67`
-
-```ts
-interface BaseGenome {
-  size: number; speed: number; metabolism: number; vision: number;
-  fertility: number; lifespan: number; carnivory: number;
-  preferredTemperature: number; temperatureTolerance: number;
-  preferredWater: number; waterTolerance: number;
-  evasion: number; huntingSkill: number;
-}
-type GeneMap = Record<string, number>;
-interface Genome extends BaseGenome { ext?: GeneMap }
-```
-
-13 tratti base + 20 geni estesi = 33 geni registrati (`geneRegistry.ts:150-158`). `ext` è opzionale e il suo campo assente è uno stato legittimo.
-
-### 1.2 `GeneDefinition` — `geneRegistry.ts:22-38`
-
-```ts
-interface GeneDefinition {
-  id: string; key: string; category: string; description: string;
-  min: number; max: number; defaultValue: number;
-  mutationStdFraction: number; distanceWeight: number;
-  hook?: (...) => ...;
-}
-```
-
-ID stabili, non rinumerare. `GENOME_VERSION_CURRENT = 2` (`geneRegistry.ts:40`).
-
-### 1.3 Contratti di contesto
-
-| Contratto | File | Contenuto |
-|---|---|---|
-| `Phenotype` | `geneExpression.ts:57-84` | 26 campi derivati; cache `WeakMap`; nessuna scrittura nel genoma |
-| `Organism` | `types/index.ts:99-125` | `genome`, `brain: Float32Array` (119 pesi), energia, età, memoria |
-| `WorldSnapshot` | `types/index.ts:300-333` | `randomState`, `speciesRegistry`, `genomeVersion?`, `advancedGenome?`, `geneEffects?` |
-| `RenderFrame` | `types/index.ts:405-433` | array per organismo + 3 canali MOR opzionali e maschera bit |
-| `PhenotypeProfile` | `lib/phenotype/types.ts:10-63` | `gene-direct`/`gene-derived`/`undetermined`/`aesthetic`, `certainty` |
-
-### 1.4 Funzioni geniche esistenti
-
-| Funzione | File | Contratto |
-|---|---|---|
-| `randomGenome`, `inheritGenome`, `cloneWithMutation` | `genome.ts:37,65,83` | media + mutazione gaussiana |
-| `geneticDistance`, `geneticDistanceV2` | `genome.ts:168,195` | v1.10 se nessun `ext`, altrimenti V2 pesata |
-| `areGeneticallyCompatible` | `genome.ts:214` | soglia legacy 0,16 |
-| `getGene`, `inheritExt`, `cloneExt` | `genomeExt.ts:19,103,114` | vista `ext` con default del registry |
-| `deriveGeneRandom` | `genomeExt.ts:84` | RNG derivato, non consuma il mondo |
-| `migrateGenome`, `migrateSnapshot` | `genomeMigration.ts:18,47` | v1→v2 idempotente |
+Riferimento invariato alla Rev 1/Rev 0: `BaseGenome`/`Genome` (`types/index.ts`), `GeneDefinition`/`GENE_REGISTRY` (`simulation/biology/geneRegistry.ts`), `Phenotype`, `Organism`, `WorldSnapshot`, `RenderFrame`, `PhenotypeProfile`, funzioni `randomGenome`/`inheritGenome`/`cloneWithMutation`, `getGene`/`inheritExt`/`cloneExt`/`deriveGeneRandom`, `migrateGenome`/`migrateSnapshot`. Nessun contratto esistente è modificato in questa revisione.
 
 ---
 
-## 2. Regole fondamentali del nuovo modello
+## 2. Regole fondamentali (Rev 2)
 
-1. **Catalogo ≠ genotipo.** `GenomeRegistry.alleles` e `LocusDefinition.alleleCatalog` sono definizioni. Il genotipo è solo l'insieme di `AlleleInstance` dentro `GeneticGenome.chromosomes`.
-2. **Una copia per oggetto.** `Chromosome` è una singola copia cromosomica; un diploide ha due istanze per `homologousGroup`.
-3. **Un allele per locus per copia.** `LocusCall.allele` è unico; `AllelePresence = "known" | "unknown" | "absent"`.
-4. **Genotipo readonly.** Nessuna funzione di ambiente, espressione, sviluppo o rendering accetta o restituisce un `GeneticGenome` modificabile.
-5. **Definizioni separate dalle regole.** `AlleleDefinition` descrive proprietà; `ExpressionRule` descrive come combinarle.
-6. **Pedigree flessibile.** 0, 1 o 2 genitori; link con `organismId: null` sono legittimi.
-7. **Mutazione ≠ effetto.** `MutationEvent` non contiene fitness né effetti fenotipici.
+1. **Catalogo ≠ genotipo.** Registry = definizioni; genotipo = occorrenze/stati individuali.
+2. **Copia singola.** `Chromosome` è una copia fisica; ploidia parametrica.
+3. **Stati allelici non ambigui.** Vietato usare `null` o un unico token per rappresentare sia assenza biologica sia dato sconosciuto/non valutabile.
+4. **Provenienza tracciabile e generale.** Contributi via `contributionId`/`contributorId`/`gameteId`; nessun vincolo fisso `maternal|paternal` né limite a 2 contributori.
+5. **Quantitativo e deterministico.** Canali con unità/intervalli/normalizzazione; conflitti risolti deterministicamente o marcati `non-evaluable`.
+6. **Replay verificabile.** Incompatibilità di versioni/parametri/algoritmo ⇒ errore esplicito.
+7. **Ambiente esterno autorevole.** `EnvironmentalSnapshot` deriva da Planet Engine; nessun modello ambientale parallelo in GENOME.
+8. **Maturità esplicita.** Tutti i contratti sotto sono **progettati**, non implementati/integrati/attivi.
 
 ---
 
-## 3. Registry — definizioni condivise
+## 3. Registry e definizioni quantitative
 
 ```ts
+type SemVer = string;
 type LocusId = string;
 type AlleleId = string;
 type ChromosomeDefinitionId = string;
 type HomologousGroupId = string;
+type TraitChannelId = string;
 type ExpressionRuleId = string;
 type MutationRuleId = string;
-type TraitChannelId = string; // chiave legacy o nuovo canale fenotipico
 type RegistryId = string;
-type SemVer = string;         // "1.0.0"
+
+interface TraitChannelDefinition {
+  readonly id: TraitChannelId;
+  readonly description: string;
+  readonly unit: string; // es. "ratio", "1", "index", unità dichiarata
+  readonly domain: { readonly min: number; readonly max: number };
+  readonly normalization: {
+    readonly method: "linear" | "saturating" | "none" | "custom";
+    readonly parameters: Readonly<Record<string, number | string>>;
+  };
+  readonly clampPolicy: "clamp" | "error" | "mark-non-evaluable";
+  readonly missingInputPolicy:
+    | "propagate-non-evaluable"
+    | "propagate-undetermined"
+    | "explicit-fallback";
+  readonly fallbackValue?: number; // usato solo se policy esplicita
+}
 
 interface ChromosomeDefinition {
   readonly id: ChromosomeDefinitionId;
@@ -92,66 +62,66 @@ interface ChromosomeDefinition {
   readonly lengthBp: number;
   readonly centromereBp: number;
   readonly recombinationRateCmPerMb: number;
-  readonly locusOrder: readonly LocusId[]; // ordinato per positionBp
+  readonly locusOrder: readonly LocusId[];
 }
 
 interface LocusDefinition {
   readonly id: LocusId;
   readonly chromosomeId: ChromosomeDefinitionId;
-  readonly positionBp: number;              // posizione fisica esplicita
-  readonly positionCm: number;              // posizione genetica esplicita
+  readonly positionBp: number;
+  readonly positionCm: number;
   readonly strand: "+" | "-";
-  readonly alleleCatalog: readonly AlleleId[]; // CATALOGO, non genotipo
-  readonly traitChannels: readonly TraitChannelId[]; // pleiotropia
+  readonly alleleCatalog: readonly AlleleId[];
+  readonly traitChannels: readonly TraitChannelId[];
   readonly expressionRuleIds: readonly ExpressionRuleId[];
   readonly recombination: {
     readonly crossoverAllowed: boolean;
     readonly interference: number;
     readonly hotspot: boolean;
   };
-  readonly ploidyConstraint?: { readonly min: number; readonly max: number };
 }
 
 interface AlleleDefinition {
   readonly id: AlleleId;
   readonly locusId: LocusId;
   readonly symbol: string;
-  readonly effectProfile: Readonly<Record<TraitChannelId, number>>;
-  readonly baselineActivity: number;        // 0..1
+  readonly effectProfile: Readonly<Record<TraitChannelId, number>>; // scala coerente al canale
+  readonly baselineActivity: number; // normalizzato [0,1] salvo diversa unità dichiarata
   readonly regulatoryTargets: readonly LocusId[];
   readonly interactionTags: readonly string[];
-  readonly catalogOrigin: "founder" | "engine" | "migration"; // provenienza del catalogo
+  readonly catalogOrigin: "founder" | "engine" | "migration";
 }
 ```
 
-### 3.1 Regole di espressione
+### 3.1 Regole di espressione e conflitti
 
 ```ts
-interface DominanceRule {
+type ConflictResolution =
+  | { readonly strategy: "priority-order"; readonly priorities: readonly ExpressionRuleId[] }
+  | { readonly strategy: "weighted-merge"; readonly weights: Readonly<Record<ExpressionRuleId, number>> }
+  | { readonly strategy: "mark-non-evaluable" };
+
+interface ExpressionRuleBase {
   readonly id: ExpressionRuleId;
-  readonly kind: "complete-dominance" | "incomplete-dominance" | "codominance" | "allelic-dosage";
-  readonly alleleHierarchy?: readonly AlleleId[]; // per complete/incomplete
-  readonly weights?: Readonly<Record<AlleleId, number>>; // per incomplete/dosage
+  readonly targetChannels: readonly TraitChannelId[];
+  readonly priority: number;
+  readonly conflictResolution: ConflictResolution;
 }
 
-interface PolygenicRule {
-  readonly id: ExpressionRuleId;
+interface DominanceRule extends ExpressionRuleBase {
+  readonly kind: "complete-dominance" | "incomplete-dominance" | "codominance" | "allelic-dosage";
+  readonly alleleOrder?: readonly AlleleId[];
+  readonly weights?: Readonly<Record<AlleleId, number>>;
+}
+
+interface PolygenicRule extends ExpressionRuleBase {
   readonly kind: "polygenic-aggregate";
   readonly locusIds: readonly LocusId[];
-  readonly targetChannel: TraitChannelId;
-  readonly weights: Readonly<Record<LocusId, number>>;
   readonly reducer: "sum" | "weighted-sum" | "product";
+  readonly weights?: Readonly<Record<LocusId, number>>;
 }
 
-interface PleiotropyRule {
-  readonly id: ExpressionRuleId;
-  readonly kind: "pleiotropic-projection";
-  readonly sourceLocusIds: readonly LocusId[];
-  readonly channels: readonly TraitChannelId[];
-}
-
-interface EpistasisRule {
-  readonly id: ExpressionRuleId;
+interface EpistasisRule extends ExpressionRuleBase {
   readonly kind: "epistatic-interaction";
   readonly targetLocusIds: readonly LocusId[];
   readonly modifierLocusIds: readonly LocusId[];
@@ -159,66 +129,68 @@ interface EpistasisRule {
   readonly strength: number;
 }
 
-interface RegulatoryRule {
-  readonly id: ExpressionRuleId;
-  readonly kind: "regulatory-modulation" | "gene-gene-interaction";
-  readonly regulatorLocusIds: readonly LocusId[];
-  readonly targetLocusIds: readonly LocusId[];
-  readonly response: "linear" | "saturating" | "threshold";
-  readonly parameters: Readonly<Record<string, number>>;
+interface RegulatoryOrInteractionRule extends ExpressionRuleBase {
+  readonly kind: "pleiotropic-projection" | "regulatory-modulation" | "gene-gene-interaction";
+  readonly sourceLocusIds: readonly LocusId[];
+  readonly targetLocusIds?: readonly LocusId[];
+  readonly parameters: Readonly<Record<string, number | string>>;
 }
 
-type ExpressionRule =
-  | DominanceRule | PolygenicRule | PleiotropyRule | EpistasisRule | RegulatoryRule;
-```
+type ExpressionRule = DominanceRule | PolygenicRule | EpistasisRule | RegulatoryOrInteractionRule;
 
-Le regole sono indipendenti da `AlleleDefinition`: cambiare una regola non richiede di riscrivere gli alleli.
-
-### 3.2 Registry
-
-```ts
 interface GenomeRegistry {
   readonly id: RegistryId;
-  readonly version: SemVer;          // versione delle definizioni
-  readonly engineVersion: SemVer;    // versione delle regole
+  readonly version: SemVer;
+  readonly engineVersion: SemVer;
+  readonly schemaVersion: number;
+  readonly traitChannels: Readonly<Record<TraitChannelId, TraitChannelDefinition>>;
   readonly chromosomes: Readonly<Record<ChromosomeDefinitionId, ChromosomeDefinition>>;
   readonly loci: Readonly<Record<LocusId, LocusDefinition>>;
   readonly alleles: Readonly<Record<AlleleId, AlleleDefinition>>;
   readonly expressionRules: Readonly<Record<ExpressionRuleId, ExpressionRule>>;
   readonly mutationRules: Readonly<Record<MutationRuleId, unknown>>;
-  readonly configDefaults: GenomeConfig;
   readonly fingerprint: string;
 }
 ```
 
+Il motore non dipende da un numero prefissato di geni: loci/canali/regole sono definiti dal registry.
+
 ---
 
-## 4. Genotipo individuale
+## 4. Genotipo, stati allelici e provenienza
 
 ```ts
-type AllelePresence = "known" | "unknown" | "absent";
-type ChromosomeCopyId = string; // es. "org-42:G1:mat"
-type MutationEventId = string;
+type AlleleStateKind = "identified" | "biologically-absent" | "undetermined" | "non-evaluable";
 
-interface AlleleInstance {
-  readonly alleleId: AlleleId | null; // null se unknown/absent
-  readonly presence: AllelePresence;
-  readonly source: "founder" | "inherited" | "mutation";
-  readonly mutationEventIds: readonly MutationEventId[];
+type AlleleState =
+  | { readonly kind: "identified"; readonly alleleId: AlleleId }
+  | { readonly kind: "biologically-absent"; readonly reason: "deletion" | "structural-absence" | "null-allele" }
+  | { readonly kind: "undetermined"; readonly reason: "data-unavailable" | "not-yet-determined" | "legacy-missing" }
+  | { readonly kind: "non-evaluable"; readonly reason: string; readonly context?: string };
+
+interface GeneticContribution {
+  readonly contributionId: string;
+  readonly contributorId: string | null; // identità contributore, se nota
+  readonly organismId: number | null;
+  readonly gameteId: string | null;
+  readonly confidence: "known" | "partial" | "unknown" | "non-evaluable";
+  readonly role: string | null; // ruolo biologico opzionale, non identità
 }
 
 interface LocusCall {
   readonly locusId: LocusId;
   readonly positionBp: number;
-  readonly allele: AlleleInstance;
+  readonly alleleState: AlleleState;
+  readonly source: "founder" | "inherited" | "mutation" | "migration";
+  readonly mutationEventIds: readonly string[];
 }
 
-interface Chromosome {           // SINGOLA copia fisica
-  readonly copyId: ChromosomeCopyId;
+interface Chromosome {
+  readonly copyId: string;
   readonly definitionId: ChromosomeDefinitionId;
   readonly homologousGroup: HomologousGroupId;
-  readonly parentOrigin: "maternal" | "paternal" | "asexual" | "unknown";
-  readonly loci: readonly LocusCall[]; // ordinato per positionBp
+  readonly contributionId: string; // collega a GeneticContribution
+  readonly loci: readonly LocusCall[];
 }
 
 interface GeneticGenome {
@@ -228,84 +200,85 @@ interface GeneticGenome {
   readonly engineVersion: SemVer;
   readonly organismId: number;
   readonly ploidy: number;
-  readonly chromosomes: readonly Chromosome[];
+  readonly chromosomes: readonly Chromosome[]; // ploidy copie per gruppo omologo
+  readonly contributions: Readonly<Record<string, GeneticContribution>>;
   readonly fingerprint: string;
 }
 ```
 
-Invarianti verificabili:
-
-- per ogni `homologousGroup` esistono esattamente `ploidy` copie;
-- ogni copia contiene un solo `LocusCall` per locus;
-- se `presence = "known"` allora `alleleId` esiste nel registry e appartiene al locus;
-- due copie omologhe possono avere alleli diversi allo stesso locus.
+Invarianti: un `LocusCall` per locus per copia; `identified` ⇒ `alleleId` valido nel registry/versione; `biologically-absent`/`undetermined`/`non-evaluable` ⇒ nessun `alleleId`; numero di copie coerente con ploidia/gruppi.
 
 ```ts
+interface RecombinationInterval {
+  readonly fromBp: number;
+  readonly toBp: number;
+  readonly donorCopyId: string;
+  readonly donorContributionId: string;
+}
+
 interface RecombinationTrace {
-  readonly chromosomeCopyId: ChromosomeCopyId;
+  readonly homologousGroup: HomologousGroupId;
   readonly crossoverPositionsBp: readonly number[];
-  readonly donorByInterval: readonly ChromosomeCopyId[];
-  readonly interference: number;
+  readonly intervals: readonly RecombinationInterval[];
   readonly rng: RngTrace;
 }
 
 interface Gamete {
   readonly id: string;
   readonly sourceOrganismId: number;
-  readonly registryId: RegistryId;
-  readonly registryVersion: SemVer;
+  readonly contributionId: string;
   readonly chromosomes: readonly Chromosome[]; // una copia per gruppo omologo
   readonly recombinationTraces: readonly RecombinationTrace[];
+  readonly registryVersion: SemVer;
+  readonly engineVersion: SemVer;
 }
 ```
 
 ---
 
-## 5. Risoluzione, espressione, ambiente, sviluppo, fenotipo
+## 5. Risoluzione, espressione, sviluppo, fenotipo
 
 ```ts
+type ChannelState = "value" | "biologically-absent" | "undetermined" | "non-evaluable";
+
 interface ResolvedLocusCall {
-  readonly chromosomeCopyId: ChromosomeCopyId;
-  readonly alleleId: AlleleId | null;
-  readonly presence: AllelePresence;
-  readonly dosage: number;
+  readonly chromosomeCopyId: string;
+  readonly contributionId: string;
+  readonly alleleState: AlleleState;
+  readonly dosageContribution: number | null; // null se non valutabile
 }
 
 interface ResolvedLocus {
   readonly locusId: LocusId;
   readonly calls: readonly ResolvedLocusCall[];
-  readonly ruleIds: readonly ExpressionRuleId[];
+  readonly state: "resolved" | "partial" | "non-evaluable";
 }
 
 interface ResolvedGenotype {
   readonly organismId: number;
   readonly registryVersion: SemVer;
-  readonly ploidy: number;
   readonly loci: Readonly<Record<LocusId, ResolvedLocus>>;
+}
+
+interface ChannelValue {
+  readonly channelId: TraitChannelId;
+  readonly unit: string;
+  readonly state: ChannelState;
+  readonly value: number | null;
+  readonly reason?: string;
+  readonly appliedRuleIds: readonly ExpressionRuleId[];
 }
 
 interface GeneticExpression {
   readonly organismId: number;
-  readonly channels: Readonly<Record<TraitChannelId, number>>; // potenziale, senza ambiente
-  readonly appliedRules: readonly ExpressionRuleId[];
+  readonly channels: Readonly<Record<TraitChannelId, ChannelValue>>;
   readonly derivation: "DERIVED";
-}
-
-interface EnvironmentalContext {
-  readonly tick: number;
-  readonly biome: string;
-  readonly temperature: number;
-  readonly water: number;
-  readonly foodAvailability: number;
-  readonly predationPressure: number;
-  readonly crowding: number;
-  readonly source: "OBSERVED" | "DERIVED";
 }
 
 interface PlasticResponse {
   readonly organismId: number;
   readonly tick: number;
-  readonly channelDeltas: Readonly<Record<TraitChannelId, number>>;
+  readonly channelDeltas: Readonly<Record<TraitChannelId, ChannelValue>>;
   readonly heritable: false;
 }
 
@@ -313,62 +286,36 @@ interface DevelopmentalState {
   readonly organismId: number;
   readonly tick: number;
   readonly age: number;
-  readonly stage: string;                  // id configurabile, non hardcodato
-  readonly growth: Readonly<Record<string, number>>; // struttura → fattore
+  readonly stage: string;
+  readonly growth: Readonly<Record<string, number>>;
   readonly heritable: false;
 }
-
-type TraitProvenance =
-  | "gene-direct" | "gene-derived" | "environmental"
-  | "plastic" | "developmental" | "undetermined";
 
 interface FinalPhenotype {
   readonly organismId: number;
   readonly tick: number;
-  readonly channels: Readonly<Record<TraitChannelId, number>>;
-  readonly provenance: Readonly<Record<TraitChannelId, TraitProvenance>>;
-  readonly genotypeFingerprint: string; // riferimento, mai modificato
+  readonly genotypeFingerprint: string;
+  readonly channels: Readonly<Record<TraitChannelId, ChannelValue>>;
+  readonly provenance: Readonly<Record<TraitChannelId, string>>;
 }
 ```
 
-**Firme vietate:**
-
-```ts
-// NON esistono:
-applyEnvironment(genome: GeneticGenome, env: EnvironmentalContext): GeneticGenome;
-develop(genome: GeneticGenome, ...): GeneticGenome;
-```
-
-Le firme corrette sono:
-
-```ts
-regulate(expr: GeneticExpression, env: EnvironmentalContext): PlasticResponse;
-develop(genomeFingerprint: string, expr: GeneticExpression, plastic: PlasticResponse, state: DevelopmentalState): FinalPhenotype;
-```
+Firme vietate: qualunque funzione che restituisca `GeneticGenome` da ambiente, plasticità, sviluppo o fenotipo.
 
 ---
 
 ## 6. Pedigree
 
 ```ts
-type ReproductionMode = "sexual" | "asexual" | "unknown";
-type ParentConfidence = "known" | "partial" | "unknown";
-type ParentRole = "parent-a" | "parent-b" | "mother" | "father" | "sole-parent";
-
-interface ParentLink {
-  readonly organismId: number | null; // null = genitore non conosciuto
-  readonly role: ParentRole;
-  readonly confidence: ParentConfidence;
-  readonly gameteId?: string;
-  readonly unknownReason?: "founder" | "not-observed" | "legacy-snapshot" | "migration";
-}
+type ReproductionMode = "sexual" | "asexual" | "polyploid" | "multi-contributor" | "unknown";
 
 interface PedigreeRecord {
   readonly organismId: number;
   readonly birthTick: number;
   readonly mode: ReproductionMode;
   readonly founder: boolean;
-  readonly parents: readonly ParentLink[]; // 0, 1 o 2 elementi
+  readonly contributors: readonly GeneticContribution[]; // 0..N
+  readonly contributionsUsed: readonly string[]; // contributionId delle copie ereditate
   readonly genomeFingerprint: string;
 }
 
@@ -377,90 +324,119 @@ interface PedigreeGraph {
 }
 ```
 
-Regole:
-
-- fondatore ⇒ `parents = []`, `founder = true`;
-- asessuata ⇒ esattamente 1 link con `role = "sole-parent"`;
-- sessuata completa ⇒ 2 link noti; sessuata parziale ⇒ 1 noto + 1 con `organismId: null`;
-- nessun ciclo genealogico;
-- metriche dipendenti da entrambi i genitori sono `NON_EVALUABLE` se un link è sconosciuto.
+Regole: fondatore ⇒ `contributors=[]`, `founder=true`; asessuato ⇒ almeno un contributo sorgente tracciabile; parziale ⇒ contributor con `confidence`/id nulli; nessun ciclo; metriche su rami ignoti/non valutabili ⇒ `NON_EVALUABLE`.
 
 ---
 
-## 7. Mutazioni, RNG ed effetti separati
+## 7. Mutazioni, RNG, replay e ambiente
 
 ```ts
-type MutationType =
-  | "point" | "insertion" | "deletion"
-  | "duplication" | "structural" | "regulatory";
-type MutationOrigin =
-  | "germline-de-novo" | "germline-inherited"
-  | "somatic" | "engine-configured" | "legacy-migration";
+type MutationType = "point" | "insertion" | "deletion" | "duplication" | "structural" | "regulatory";
+type MutationOrigin = "germline-de-novo" | "germline-inherited" | "somatic" | "engine-configured" | "legacy-migration";
 
 interface RngTrace {
-  readonly algorithm: "mulberry32";
-  readonly seed: number;
-  readonly namespace: string;   // es. "genome.mutation.point"
+  readonly algorithm: string;
+  readonly algorithmVersion: SemVer;
+  readonly rootSeed: number | string;
+  readonly namespace: string;
   readonly salt: string;
-  readonly stateBefore: number;
-  readonly stateAfter: number;
+  readonly stateBefore: string;
+  readonly stateAfter: string;
   readonly drawCount: number;
   readonly engineVersion: SemVer;
 }
 
+interface ReplayCompatibilityInput {
+  readonly registryId: RegistryId;
+  readonly registryVersion: SemVer;
+  readonly registryFingerprint: string;
+  readonly engineVersion: SemVer;
+  readonly schemaVersion: number;
+  readonly rngAlgorithm: string;
+  readonly rngAlgorithmVersion: SemVer;
+  readonly parametersHash: string;
+}
+
+interface ReplayResult<T> {
+  readonly status: "ok" | "incompatible";
+  readonly value: T | null;
+  readonly mismatches: readonly { readonly field: string; readonly expected: string; readonly actual: string }[];
+}
+
 interface MutationEvent {
-  readonly id: MutationEventId;
+  readonly id: string;
   readonly tick: number;
   readonly type: MutationType;
   readonly origin: MutationOrigin;
   readonly organismId: number;
   readonly generation: number | null;
-  readonly chromosomeCopyId: ChromosomeCopyId;
+  readonly chromosomeCopyId: string;
+  readonly contributionId: string;
   readonly locusId: LocusId;
   readonly positionBp: number;
-  readonly previousAlleleId: AlleleId | null;
-  readonly previousPresence: AllelePresence;
-  readonly resultingAlleleId: AlleleId | null;
-  readonly resultingPresence: AllelePresence;
+  readonly previousState: AlleleState;
+  readonly resultingState: AlleleState;
+  readonly registryId: RegistryId;
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
-  readonly causedBy: readonly MutationEventId[];
+  readonly schemaVersion: number;
+  readonly causedBy: readonly string[];
   readonly rng: RngTrace;
-  readonly replay: { readonly operation: string; readonly parametersHash: string };
+  readonly replay: ReplayCompatibilityInput & { readonly operation: string };
 }
 
 interface ExpressionDelta {
-  readonly eventId: MutationEventId;
-  readonly channelDeltas: Readonly<Record<TraitChannelId, number>>;
+  readonly eventId: string;
+  readonly channelDeltas: Readonly<Record<TraitChannelId, ChannelValue>>;
   readonly derivation: "DERIVED";
 }
 
 interface FitnessAssessment {
-  readonly eventId: MutationEventId;
+  readonly eventId: string;
   readonly status: "NON_EVALUABLE";
   readonly reason: "external-controls-required";
 }
 ```
 
-`MutationEvent` non ha campi `fitness`, `adaptive`, `beneficial` o equivalenti. `ExpressionDelta` e `FitnessAssessment` sono prodotti da funzioni separate e mai memorizzati dentro l'evento.
+`MutationEvent` non contiene fitness né effetti fenotipici. `replayEvent` deve restituire `incompatible` (non un valore) se cambia registry, engine, schema, parametri o algoritmo/versione RNG.
+
+```ts
+type DataAvailability = "OBSERVED" | "DERIVED" | "MISSING" | "NON_EVALUABLE";
+
+interface EnvironmentalField<T> {
+  readonly value: T | null;
+  readonly unit: string;
+  readonly availability: DataAvailability;
+  readonly source: string;
+  readonly reason?: string;
+}
+
+interface EnvironmentalSnapshot {
+  readonly source: "planet-engine";
+  readonly contractVersion: SemVer;
+  readonly snapshotVersion: string;
+  readonly producerId: string;
+  readonly tick: number;
+  readonly timeReference: string;
+  readonly coordinateSystem: string;
+  readonly spatialGranularity: string; // es. cell, chunk, region
+  readonly fields: Readonly<Record<string, EnvironmentalField<number | string>>>;
+}
+```
+
+GENOME consuma questo snapshot in sola lettura tramite adattatore; non mantiene una copia autorevole indipendente.
 
 ---
 
-## 8. Config, RNG, serializzazione, migrazione, versionamento
+## 8. Config, serializzazione, migrazione
 
 ```ts
-interface RngConfig {
-  readonly algorithm: "mulberry32";
-  readonly worldStream: "world";
-  readonly derivedNamespaces: readonly string[]; // founder/meiosis/mutation/...
-  readonly saltVersion: SemVer;
-}
-
 interface GenomeConfig {
   readonly schemaVersion: 1;
   readonly registryId: RegistryId;
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
+  readonly planetEnvironmentContractVersion: SemVer;
   readonly ploidy: number;
   readonly homologousGroups: readonly HomologousGroupId[];
   readonly founderStrategy: "registry-default" | "seeded-draw" | "provided";
@@ -468,164 +444,65 @@ interface GenomeConfig {
   readonly recombination: {
     readonly crossoversPerChromosome: { readonly min: number; readonly max: number };
     readonly interference: number;
-    readonly hotspots: readonly {
-      readonly chromosomeId: ChromosomeDefinitionId;
-      readonly positionBp: number;
-      readonly weight: number;
-    }[];
-  };
-  readonly compatibility: {
-    readonly metric: "locus-distance" | "legacy-vector";
-    readonly mateThreshold: number;
-    readonly speciationThreshold: number;
+    readonly hotspotsEnabled: boolean;
   };
   readonly expressionPipeline: readonly ExpressionRuleId[];
-  readonly missingAllelePolicy: "error" | "unknown" | "registry-default";
-  readonly rng: RngConfig;
+  readonly missingStatePolicy: "error" | "propagate" | "explicit-fallback";
+  readonly rng: {
+    readonly algorithm: string;
+    readonly algorithmVersion: SemVer;
+    readonly derivedNamespaces: readonly string[];
+  };
 }
-```
 
-### 8.1 Serializzazione
-
-```ts
-interface SerializedGeneticGenome {
-  readonly schemaVersion: 1;
-  readonly registryId: RegistryId;
-  readonly registryVersion: SemVer;
-  readonly engineVersion: SemVer;
-  readonly organismId: number;
-  readonly ploidy: number;
-  readonly chromosomes: readonly {
-    readonly copyId: ChromosomeCopyId;
-    readonly definitionId: ChromosomeDefinitionId;
-    readonly homologousGroup: HomologousGroupId;
-    readonly parentOrigin: Chromosome["parentOrigin"];
-    readonly loci: readonly {
-      readonly locusId: LocusId;
-      readonly positionBp: number;
-      readonly alleleId: AlleleId | null;
-      readonly presence: AllelePresence;
-      readonly source: AlleleInstance["source"];
-      readonly mutationEventIds: readonly MutationEventId[];
-    }[];
-  }[];
-  readonly fingerprint: string;
-}
-```
-
-Il registry **non** viene serializzato per organismo: vengono salvati solo `registryId`, versioni e riferimenti. Round-trip richiesto: `serialize(deserialize(s)) === s` in forma canonica.
-
-### 8.2 Migrazione e versioni
-
-```ts
 interface VersionSet {
   readonly schemaVersion: number;
   readonly registryVersion: SemVer;
   readonly engineVersion: SemVer;
-}
-
-interface MigrationIssue {
-  readonly code: "missing-allele" | "unknown-locus" | "version-mismatch" | "policy-violation";
-  readonly path: string;
-  readonly detail: string;
+  readonly rngAlgorithmVersion: SemVer;
 }
 
 interface MigrationResult<T> {
+  readonly status: "ok" | "migrated" | "unsupported" | "error";
   readonly value: T | null;
   readonly from: VersionSet;
   readonly to: VersionSet;
-  readonly issues: readonly MigrationIssue[];
-  readonly status: "ok" | "migrated" | "unsupported" | "error";
+  readonly issues: readonly { readonly code: string; readonly path: string; readonly detail: string }[];
 }
 ```
 
-- migrazione monotonica (`v1 → v2 → v3`), mai inversa implicita;
-- idempotente: migrare due volte non produce modifiche aggiuntive;
-- campi mancanti seguono `missingAllelePolicy`, mai default silenzioso in modalità validazione;
-- `registryVersion` futura ⇒ `status = "unsupported"`, valore `NON_EVALUABLE`, errore esplicito;
-- snapshot legacy senza `genetics` ⇒ percorso legacy invariato.
-
-### 8.3 Matrice registry / organismo / sessione
-
-| Struttura | Registry | Organismo | Sessione |
-|---|---|---|---|
-| `LocusDefinition`, `ChromosomeDefinition`, `AlleleDefinition` | ✔ | — | — |
-| `ExpressionRule`, `MutationRule`, `GenomeConfig` default | ✔ | — | — |
-| `Chromosome`, `AlleleInstance`, `LocusCall`, `GeneticGenome` | — | ✔ | — |
-| `PedigreeRecord`, `MutationEvent`, `ResolvedGenotype`, `FinalPhenotype` | — | ✔ | — |
-| `EnvironmentalContext`, `WorldSnapshot`, RNG state | — | — | ✔ |
+Serializzazione: round-trip canonico; preservare `AlleleState` e stati non valutabili senza collasso. Migrazione: monotonica, idempotente, nessun default silenzioso in validazione.
 
 ---
 
-## 9. API proposta
+## 9. API proposta (progettata)
 
 ```ts
 interface GenomeEngineApi {
-  validateConfig(config: GenomeConfig, registry: GenomeRegistry): ValidationResult;
   validateGenome(genome: GeneticGenome, registry: GenomeRegistry): ValidationResult;
-
-  createFounderGenome(rng: RngStream, config: GenomeConfig, registry: GenomeRegistry): GeneticGenome;
-  planRecombination(genome: GeneticGenome, config: GenomeConfig, rng: RngStream): RecombinationTrace[];
-  meiosis(genome: GeneticGenome, plan: readonly RecombinationTrace[], rng: RngStream): Gamete;
-  fuse(a: Gamete, b: Gamete, config: GenomeConfig): GeneticGenome;
-  cloneAsexual(genome: GeneticGenome, rng: RngStream, config: GenomeConfig): GeneticGenome;
-
-  mutate(genome: GeneticGenome, rng: RngStream, config: GenomeConfig): {
-    genome: GeneticGenome;
-    events: readonly MutationEvent[];
-  };
-  assessEffects(before: GeneticGenome, after: GeneticGenome, event: MutationEvent, registry: GenomeRegistry): {
-    expression: ExpressionDelta;
-    fitness: FitnessAssessment;
-  };
-
+  createFounderGenome(input: FounderInput): GeneticGenome;
+  planRecombination(input: RecombinationInput): RecombinationTrace[];
+  formGamete(input: GameteInput): Gamete;
+  fuseContributions(input: FusionInput): GeneticGenome;
+  reproduceAsexual(input: AsexualInput): GeneticGenome;
+  mutate(input: MutationInput): { genome: GeneticGenome; events: readonly MutationEvent[] };
+  replayEvent(event: MutationEvent, context: ReplayCompatibilityInput): ReplayResult<MutationEvent>;
   resolveAlleles(genome: GeneticGenome, registry: GenomeRegistry): ResolvedGenotype;
   express(resolved: ResolvedGenotype, registry: GenomeRegistry, config: GenomeConfig): GeneticExpression;
-  regulate(expr: GeneticExpression, env: EnvironmentalContext): PlasticResponse;
-  develop(fingerprint: string, expr: GeneticExpression, plastic: PlasticResponse, state: DevelopmentalState): FinalPhenotype;
-
-  recordBirth(record: PedigreeRecord, graph: PedigreeGraph): PedigreeGraph;
-  inbreedingCoefficient(id: number, graph: PedigreeGraph): number | "NON_EVALUABLE";
-
-  serialize(genome: GeneticGenome): SerializedGeneticGenome;
+  regulate(expr: GeneticExpression, env: EnvironmentalSnapshot, config: GenomeConfig): PlasticResponse;
+  develop(input: DevelopmentInput): FinalPhenotype;
+  serialize(genome: GeneticGenome): unknown;
   deserialize(raw: unknown, registry: GenomeRegistry): MigrationResult<GeneticGenome>;
-  migrate(raw: unknown, from: VersionSet, registry: GenomeRegistry): MigrationResult<GeneticGenome>;
+  migrate(raw: unknown, from: VersionSet, to: VersionSet): MigrationResult<GeneticGenome>;
 }
 ```
 
-`RngStream` è un handle derivato da `deriveRng(worldState, namespace, salt, config.rng)`; non è il RNG del mondo.
+Tutte le API sopra sono **progettate**. Nessuna è implementata, integrata o attiva in Rev 2.
 
 ---
 
-## 10. Compatibilità con i contratti condivisi
+## 10. Compatibilità e verifiche
 
-| Contratto | Impatto | Azione |
-|---|---|---|
-| `Genome` (`types/index.ts`) | eventuale campo opzionale `genetics` | checkpoint §13 |
-| `Phenotype` | nessun nuovo campo obbligatorio nel primo rilascio | nessuna |
-| `Organism` | nessun campo obbligatorio aggiunto | nessuna |
-| `WorldSnapshot` | solo versioni/field opzionali | checkpoint §13 |
-| `RenderFrame` | solo canali opzionali + maschera | checkpoint §13 |
-| `GENE_REGISTRY` | aggiunta di metadati, nessuna rinumerazione | PR dedicata |
-| `Random` | nessuna modifica, solo stream derivati | nessuna |
-| G3.1 / persistence / simulazione core | nessuna modifica in questa revisione | nessuna |
-
----
-
-## 11. Verifica dei contratti (progettuale, non eseguita)
-
-Ogni contratto proposto dovrà avere test che verifichino:
-
-- presenza/assenza del campo opzionale `genetics`;
-- due copie omologhe e un allele per copia per locus;
-- catalogo alleli mai usato come genotipo;
-- posizione loci e piano di ricombinazione riproducibili;
-- pedigree con 0/1/2 genitori e link parziali;
-- completezza dei campi `MutationEvent` e replay da `RngTrace`;
-- assenza di campi fitness nell'evento di mutazione;
-- firme che impediscono la scrittura del genotipo da ambiente/sviluppo;
-- round-trip canonico e migrazione idempotente;
-- non consumo del RNG del mondo;
-- fallback legacy quando `genetics` è assente.
-
-Il piano operativo con campioni e seed è in `GENOME_VALIDATION_PLAN.md` §6. Nessuno di questi test è stato eseguito in questa revisione.
+- Nessun impatto applicato a contratti condivisi esistenti in Rev 2.
+- Future modifiche a `types/index.ts`, snapshot, worker o renderer richiedono checkpoint §13.
+- Verifica progettuale richiesta: distinzione stati allelici, provenienza N-contributori, replay incompatibile esplicito, propagazione stati in espressione/fenotipo, round-trip e migrazione, non-consumo world RNG, fallback legacy. Piano operativo in `GENOME_VALIDATION_PLAN.md` §6.
