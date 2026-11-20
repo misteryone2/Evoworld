@@ -2,7 +2,8 @@
  * SIMULATION_HEURISTIC
  *
  * Hysteresis and cooldown prevent rapid oscillation between adjacent biomes
- * when suitability scores are nearly tied.
+ * when suitability scores are nearly tied. Memory is engine-owned and
+ * serializable, so consecutive snapshots see the same classification history.
  */
 
 import type { TerrainType } from "../contracts";
@@ -13,6 +14,10 @@ export interface BiomeMemory {
   biome: TerrainType;
   tick: number;
   stability: number;
+}
+
+export interface SerializedBiomeMemory extends BiomeMemory {
+  index: number;
 }
 
 export interface BiomeDecision {
@@ -42,4 +47,48 @@ export function updateBiome(
   const stability = clamp(memory.stability * 0.8 + targetStability * 0.2, 0, 1);
 
   return { biome, stability, changed: biome !== memory.biome };
+}
+
+/**
+ * Explicit, serializable per-cell biome memory. Snapshots receive a shared
+ * instance from the engine and never create their own empty memory.
+ */
+export class BiomeMemoryStore {
+  private readonly records = new Map<number, BiomeMemory>();
+
+  get(index: number): BiomeMemory | undefined {
+    return this.records.get(index);
+  }
+
+  set(index: number, record: BiomeMemory): void {
+    this.records.set(index, { ...record });
+  }
+
+  commit(index: number, decision: BiomeDecision, tick: number): BiomeMemory {
+    const next: BiomeMemory = {
+      biome: decision.biome,
+      tick,
+      stability: decision.stability,
+    };
+    this.records.set(index, next);
+    return next;
+  }
+
+  clear(): void {
+    this.records.clear();
+  }
+
+  toJSON(): SerializedBiomeMemory[] {
+    return [...this.entries()].map(([index, record]) => ({ index, ...record }));
+  }
+
+  static fromJSON(records: readonly SerializedBiomeMemory[]): BiomeMemoryStore {
+    const store = new BiomeMemoryStore();
+    for (const record of records) store.set(record.index, record);
+    return store;
+  }
+
+  entries(): ReadonlyMap<number, BiomeMemory> {
+    return this.records;
+  }
 }

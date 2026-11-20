@@ -1,8 +1,12 @@
 /**
- * PHYSICAL_MODEL + SIMULATION_HEURISTIC
+ * SIMULATION_HEURISTIC + APPROXIMATION
  *
- * Local evaporation/precipitation/runoff derived from climate and surface.
- * Totals are converted to masses for the conservative inventory update.
+ * Local evaporation/precipitation/runoff diagnostics derived from climate and
+ * surface, aggregated into global reservoir transfers. This is NOT spatial
+ * hydrology: soil and atmospheric water are global reservoirs, `riverFlow` is
+ * a D8 topographic accumulation proxy, and no local basin transfer is solved.
+ * The only physical claim is aggregate mass conservation, enforced by
+ * `applyWaterFluxes` with latitude-weighted cell areas.
  */
 
 import type {
@@ -47,8 +51,7 @@ export function computeWaterCycle(input: WaterCycleInput): WaterCycleResult {
   let evaporationKg = 0;
   let precipitationKg = 0;
   let runoffKg = 0;
-  const kgPerMeterPerStep =
-    (surface.cellAreaM2 * PLANET_UNITS.waterDensityKgM3 * deltaS) / PLANET_UNITS.secondsPerEarthYear;
+  const secondsToYears = deltaS / PLANET_UNITS.secondsPerEarthYear;
 
   for (let i = 0; i < size; i += 1) {
     const ocean = surface.oceanMask[i] === 1;
@@ -88,9 +91,11 @@ export function computeWaterCycle(input: WaterCycleInput): WaterCycleResult {
     precipitationMPerYearField[i] = precipitation;
     runoffMPerYearField[i] = runoff;
 
-    evaporationKg += evaporation * kgPerMeterPerStep;
-    precipitationKg += precipitation * kgPerMeterPerStep;
-    runoffKg += runoff * kgPerMeterPerStep;
+    const cellAreaM2 = surface.cellAreasM2[i] ?? surface.cellAreaM2;
+    const kgForThisCell = cellAreaM2 * PLANET_UNITS.waterDensityKgM3 * secondsToYears;
+    evaporationKg += evaporation * kgForThisCell;
+    precipitationKg += precipitation * kgForThisCell;
+    runoffKg += runoff * kgForThisCell;
   }
 
   return {

@@ -1,23 +1,26 @@
 /**
- * CONTRACT / SNAPSHOT
+ * APPROXIMATION / CONTRACT / SNAPSHOT
  *
- * Immutable per-tick view of the physical environment. Biome memory is kept
- * per cell so results do not depend on the order in which cells are sampled.
+ * Immutable per-tick view of the physical environment. Biome memory is
+ * engine-owned and shared between snapshots; returned samples and legacy cells
+ * are frozen defensive copies. Coordinates are validated explicitly.
  */
 
 import type {
   ClimateField,
-  EnvironmentSample,
-  EnvironmentSnapshot,
   HydrologyField,
   PlanetPhysicalConfig,
   PlanetState,
+  ReadonlyEnvironmentSample,
+  ReadonlyLegacyCell,
   SurfaceField,
 } from "../contracts";
+import type { EnvironmentSample, EnvironmentSnapshot } from "../contracts";
 import { orbitAt } from "../core/Orbit";
 import { surfacePressureFromState } from "../core/EnergyBudget";
+import { PlanetInvariantError } from "../core/invariants";
 import { biomeScores } from "../biomes/classifier";
-import { updateBiome, type BiomeMemory } from "../biomes/stability";
+import { BiomeMemoryStore, updateBiome } from "../biomes/stability";
 import { seasonalShapeK } from "../climate/TemperatureField";
 import { slopeAt } from "../hydrology/Drainage";
 import { legacyWaterAxis } from "../units";
@@ -31,6 +34,7 @@ export interface EnvironmentProvider {
   getSurfaceField(): SurfaceField;
   getClimateField(): ClimateField;
   getHydrologyField(deltaS: number): HydrologyField;
+  getBiomeMemory(): BiomeMemoryStore;
 }
 
 export interface EnvironmentSnapshotOptions {
@@ -40,6 +44,48 @@ export interface EnvironmentSnapshotOptions {
 
 function wrapped(value: number, size: number): number {
   return ((value % size) + size) % size;
+}
+
+/** Explicit contract: finite integers wrap on the torus; anything else fails. */
+export function requireFiniteGridCoordinate(value: unknown, size: number, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new PlanetInvariantError(`${label} must be a finite integer`);
+  }
+  return wrapped(value, size);
+}
+
+function cloneClimateField(field: ClimateField): ClimateField {
+  return {
+    ...field,
+    latitudeRad: new Float32Array(field.latitudeRad),
+    longitudeRad: new Float32Array(field.longitudeRad),
+    temperatureK: new Float32Array(field.temperatureK),
+    irradianceWm2: new Float32Array(field.irradianceWm2),
+    humidity: new Float32Array(field.humidity),
+    windMS: new Float32Array(field.windMS),
+  };
+}
+
+function cloneHydrologyField(field: HydrologyField): HydrologyField {
+  return {
+    ...field,
+    soilMoisture: new Float32Array(field.soilMoisture),
+    waterAvailability: new Float32Array(field.waterAvailability),
+    precipitationMPerYear: new Float32Array(field.precipitationMPerYear),
+    evaporationMPerYear: new Float32Array(field.evaporationMPerYear),
+    runoffMPerYear: new Float32Array(field.runoffMPerYear),
+    riverFlow: new Float32Array(field.riverFlow),
+  };
+}
+
+function cloneSurfaceField(field: SurfaceField): SurfaceField {
+  return {
+    ...field,
+    elevationM: new Float32Array(field.elevationM),
+    cellAreasM2: new Float64Array(field.cellAreasM2),
+    oceanMask: new Uint8Array(field.oceanMask),
+    coastlineMask: new Uint8Array(field.coastlineMask),
+  };
 }
 
 export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
@@ -57,41 +103,38 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
   private readonly climate: ClimateField;
   private readonly hydrology: HydrologyField;
   private readonly declinationRad: number;
-  private readonly memories = new Map<number, BiomeMemory>();
+  private readonly memory: BiomeMemoryStore;
   private readonly samples = new Map<number, EnvironmentSample>();
 
-  constructor(
-    provider: EnvironmentProvider,
-    options: EnvironmentSnapshotOptions,
-  ) {
+  constructor(provider: EnvironmentProvider, options: EnvironmentSnapshotOptions) {
     this.config = provider.getConfig();
-    const state = provider.getState();
-    this.state = state;
+    this.state = provider.getState();
     this.engineVersion = options.engineVersion;
-    this.tick = state.tick;
-    this.timeS = state.timeS;
-    this.surface = provider.getSurfaceField();
-    this.climate = provider.getClimateField();
-    this.hydrology = provider.getHydrologyField(options.deltaS);
+    this.tick = this.state.tick;
+    this.timeS = this.state.timeS;
+    this.surface = cloneSurfaceField(provider.getSurfaceField());
+    this.climate = cloneClimateField(provider.getClimateField());
+    this.hydrology = cloneHydrologyField(provider.getHydrologyField(options.deltaS));
+    this.memory = provider.getBiomeMemory();
     this.gridWidth = this.surface.width;
     this.gridHeight = this.surface.height;
     this.season = this.climate.season;
     this.declinationRad = orbitAt(this.config, this.timeS).declinationRad;
   }
 
-  sample(x: number, y: number): EnvironmentSample {
-    const gridX = wrapped(Math.trunc(x), this.gridWidth);
-    const gridY = wrapped(Math.trunc(y), this.gridHeight);
+  sample(x: number, y: number): ReadonlyEnvironmentSample {
+    const gridX = requireFiniteGridCoordinate(x, this.gridWidth, "x");
+    const gridY = requireFiniteGridCoordinate(y, this.gridHeight, "y");
     const index = gridY * this.gridWidth + gridX;
     const cached = this.samples.get(index);
-    if (cached) return cached;
+    if (cached) return Object.freeze({ ...cached });
 
     const latitudeRad = this.climate.latitudeRad[index];
     const longitudeRad = this.climate.longitudeRad[index];
     const elevationM = this.surface.elevationM[index];
     const seaLevelM = this.surface.seaLevelM;
     const humidity = this.climate.humidity[index];
-    const memory = this.memories.get(index);
+    const memory = this.memory.get(index);
     const scores = biomeScores({
       temperatureK: this.climate.temperatureK[index],
       precipitationMPerYear: this.hydrology.precipitationMPerYear[index],
@@ -104,7 +147,7 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
       iceFraction: this.config.hydrosphere.iceFraction,
     });
     const decision = updateBiome(scores, this.tick, memory);
-    this.memories.set(index, { biome: decision.biome, tick: this.tick, stability: decision.stability });
+    const persisted = this.memory.commit(index, decision, this.tick);
 
     const waterAxis = legacyWaterAxis(humidity, elevationM, seaLevelM, this.config.surface.roughnessM);
     const sampled: EnvironmentSample = {
@@ -127,8 +170,8 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
       iceFraction: this.config.hydrosphere.iceFraction,
       riverFlow: this.hydrology.riverFlow[index],
       isLake: waterAxis > 0.85 && this.surface.oceanMask[index] === 0,
-      biome: decision.biome,
-      climateStability: decision.stability,
+      biome: persisted.biome,
+      climateStability: persisted.stability,
       season: this.season,
       seasonalOffsetK: seasonalShapeK(
         latitudeRad,
@@ -137,12 +180,19 @@ export class PlanetEnvironmentSnapshot implements EnvironmentSnapshot {
       ),
     };
 
-    this.samples.set(index, sampled);
-    return sampled;
+    this.samples.set(index, Object.freeze(sampled));
+    return Object.freeze({ ...sampled });
   }
 
-  toLegacyCell(x: number, y: number): ReturnType<typeof environmentSampleToLegacyCell> {
-    return environmentSampleToLegacyCell(this.sample(x, y), this.config);
+  toLegacyCell(x: number, y: number): ReadonlyLegacyCell {
+    return Object.freeze(environmentSampleToLegacyCell(this.sample(x, y), this.config));
+  }
+
+  /** Eagerly materialize samples in deterministic row-major scan order. */
+  materialize(): void {
+    for (let y = 0; y < this.gridHeight; y += 1) {
+      for (let x = 0; x < this.gridWidth; x += 1) this.sample(x, y);
+    }
   }
 }
 

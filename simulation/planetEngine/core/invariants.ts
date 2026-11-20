@@ -87,6 +87,16 @@ export function validateConfig(config: PlanetPhysicalConfig): void {
   nonNegative(config.hydrosphere.totalWaterKg, "hydrosphere.totalWaterKg");
   inRange(config.hydrosphere.iceFraction, 0, 1, "hydrosphere.iceFraction");
 
+  if (config.scheduler !== undefined) {
+    const scheduler = config.scheduler;
+    assert(Number.isInteger(scheduler.climateIntervalTicks) && scheduler.climateIntervalTicks > 0,
+      "scheduler.climateIntervalTicks must be a positive integer");
+    assert(Number.isInteger(scheduler.hydrologyIntervalTicks) && scheduler.hydrologyIntervalTicks > 0,
+      "scheduler.hydrologyIntervalTicks must be a positive integer");
+    assert(Number.isInteger(scheduler.geologyIntervalTicks) && scheduler.geologyIntervalTicks > 0,
+      "scheduler.geologyIntervalTicks must be a positive integer");
+  }
+
   assert(Number.isInteger(config.surface.gridWidth) && config.surface.gridWidth > 0, "surface.gridWidth must be a positive integer");
   assert(Number.isInteger(config.surface.gridHeight) && config.surface.gridHeight > 0, "surface.gridHeight must be a positive integer");
   nonNegative(config.surface.oceanFloorDepthM, "surface.oceanFloorDepthM");
@@ -140,4 +150,15 @@ export function validateState(config: PlanetPhysicalConfig, state: PlanetState):
   );
   nonNegative(state.climate.co2Ppm, "state.climate.co2Ppm");
   inRange(state.climate.albedo, 0, 1, "state.climate.albedo");
+
+  const scheduler = state.scheduler;
+  assert(Number.isInteger(scheduler.lastClimateTick) && scheduler.lastClimateTick >= 0,
+    "state.scheduler.lastClimateTick must be a non-negative integer");
+  assert(Number.isInteger(scheduler.lastHydrologyTick) && scheduler.lastHydrologyTick >= 0,
+    "state.scheduler.lastHydrologyTick must be a non-negative integer");
+  assert(Number.isInteger(scheduler.lastGeologyTick) && scheduler.lastGeologyTick >= 0,
+    "state.scheduler.lastGeologyTick must be a non-negative integer");
+  nonNegative(scheduler.pendingClimateS, "state.scheduler.pendingClimateS");
+  nonNegative(scheduler.pendingHydrologyS, "state.scheduler.pendingHydrologyS");
+  nonNegative(scheduler.pendingGeologyS, "state.scheduler.pendingGeologyS");
 }

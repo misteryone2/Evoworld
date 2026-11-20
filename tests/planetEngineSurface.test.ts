@@ -63,10 +63,20 @@ describe("M2 — physical surface and hypsometry", () => {
     const grid = buildElevationGrid(config);
     const result = erodeAndDeposit(config, grid, PLANET_UNITS.secondsPerEarthDay);
 
-    const sumDelta = result.deltaM.reduce((sum, value) => sum + value, 0);
+    const weightedDeltaM = result.deltaM.reduce(
+      (sum, value, index) => sum + grid.cellAreasM2[index] * value,
+      0,
+    );
+    const totalAbsoluteVolumeM3 = result.deltaM.reduce(
+      (sum, value, index) => sum + grid.cellAreasM2[index] * Math.abs(value),
+      0,
+    );
     expect(result.erodedMassKg).toBeGreaterThan(0);
+    expect(Math.abs(result.volumeBalanceM3)).toBeLessThan(1e-12 * result.erodedVolumeM3);
     expect(Math.abs(result.erodedMassKg - result.depositedMassKg) / result.erodedMassKg).toBeLessThan(1e-12);
-    expect(Math.abs(sumDelta)).toBeLessThan(1e-2);
+    // Float32 elevation serialization leaves a tiny residual; the exact
+    // double-precision transport balance is asserted above.
+    expect(Math.abs(weightedDeltaM)).toBeLessThan(totalAbsoluteVolumeM3 * 1e-4);
     expect(result.elevationM).not.toBe(grid.elevationM);
   });
 

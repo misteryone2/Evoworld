@@ -5,13 +5,13 @@
  * by `environmentalFitness()`. No file under simulation/biology is modified.
  */
 
-import type { Cell, EnvironmentSample, PlanetPhysicalConfig } from "../contracts";
+import type { PlanetPhysicalConfig, ReadonlyEnvironmentSample, ReadonlyLegacyCell } from "../contracts";
 import { clamp, elevation01FromMeters, legacyTemperatureFromKelvin, legacyWaterAxis } from "../units";
 
 export function environmentSampleToLegacyCell(
-  sample: EnvironmentSample,
+  sample: ReadonlyEnvironmentSample,
   config: PlanetPhysicalConfig,
-): Cell {
+): ReadonlyLegacyCell {
   const roughnessM = Math.max(config.surface.roughnessM, 1);
   return {
     elevation: elevation01FromMeters(sample.elevationM, sample.seaLevelM, roughnessM),

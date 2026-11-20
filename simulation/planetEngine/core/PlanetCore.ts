@@ -13,16 +13,29 @@ import type {
   PlanetInteriorConfig,
   PlanetOrbitConfig,
   PlanetPhysicalConfig,
+  PlanetSchedulerConfig,
   PlanetStarConfig,
   PlanetState,
   PlanetSurfaceConfig,
 } from "../contracts";
+import { setAtmosphericWaterMassKg, waterMassKgFromState } from "../atmosphere/Composition";
 import { normalizeAngleRad, PLANET_UNITS, celsiusToKelvin } from "../units";
 
 /** Bumped whenever persisted state or snapshot semantics change. */
-export const PLANET_ENGINE_VERSION = "0.1.0-m1";
+export const PLANET_ENGINE_VERSION = "0.1.1-audit";
 
 const GAS_KEYS: readonly GasKey[] = ["N2", "O2", "CO2", "H2O", "CH4", "Ar", "other"];
+
+/** Climate and hydrology run every tick; geology runs every 30 ticks by default. */
+export const DEFAULT_PLANET_SCHEDULER: Readonly<PlanetSchedulerConfig> = {
+  climateIntervalTicks: 1,
+  hydrologyIntervalTicks: 1,
+  geologyIntervalTicks: 30,
+};
+
+export function resolveSchedulerConfig(config: PlanetPhysicalConfig): PlanetSchedulerConfig {
+  return { ...DEFAULT_PLANET_SCHEDULER, ...(config.scheduler ?? {}) };
+}
 
 export type PhysicalConfigOverrides = Partial<Omit<PlanetPhysicalConfig, "orbit" | "star" | "interior" | "atmosphere" | "hydrosphere" | "surface">> & {
   orbit?: Partial<PlanetOrbitConfig>;
@@ -85,6 +98,7 @@ export function createEarthLikeConfig(overrides: PhysicalConfigOverrides = {}): 
       meanElevationM: 840,
       roughnessM: 2000,
     },
+    scheduler: { ...DEFAULT_PLANET_SCHEDULER },
   };
 
   return {
@@ -100,6 +114,7 @@ export function createEarthLikeConfig(overrides: PhysicalConfigOverrides = {}): 
     },
     hydrosphere: { ...base.hydrosphere, ...overrides.hydrosphere },
     surface: { ...base.surface, ...overrides.surface },
+    scheduler: { ...DEFAULT_PLANET_SCHEDULER, ...(overrides.scheduler ?? {}) },
   };
 }
 
@@ -159,8 +174,9 @@ export function createInitialState(config: PlanetPhysicalConfig): PlanetState {
   const oceanFraction = 1 - config.hydrosphere.iceFraction;
   // Initial guess only; PlanetEngine overwrites it from the energy budget.
   const initialTemperatureK = celsiusToKelvin(15);
+  const atmosphereTotalMassKg = atmosphereMassFromPressureKg(config);
 
-  return {
+  const state: PlanetState = {
     tick: 0,
     timeS: 0,
     orbitalMeanAnomalyRad: normalizeAngleRad(config.orbit.meanAnomalyAtEpochRad),
@@ -172,13 +188,13 @@ export function createInitialState(config: PlanetPhysicalConfig): PlanetState {
       tectonicStress: 0,
     },
     atmosphere: {
-      totalMassKg: atmosphereMassFromPressureKg(config),
+      totalMassKg: atmosphereTotalMassKg,
       composition,
       opticalDepth: 0,
     },
     hydrosphere: {
-      oceanMassKg: config.hydrosphere.totalWaterKg * oceanFraction,
-      iceMassKg: config.hydrosphere.totalWaterKg * config.hydrosphere.iceFraction,
+      oceanMassKg: 0,
+      iceMassKg: 0,
       vaporMassKg: 0,
       soilWaterKg: 0,
       seaLevelM: 0,
@@ -192,7 +208,26 @@ export function createInitialState(config: PlanetPhysicalConfig): PlanetState {
       co2Ppm: composition.CO2 * 1e6,
       albedo: 0.3,
     },
+    scheduler: {
+      lastClimateTick: 0,
+      lastHydrologyTick: 0,
+      lastGeologyTick: 0,
+      pendingClimateS: 0,
+      pendingHydrologyS: 0,
+      pendingGeologyS: 0,
+    },
   };
+
+  // The configured H2O molar fraction defines the initial atmospheric water
+  // mass. From this point on vaporMassKg is authoritative and composition is
+  // always resynchronized from it.
+  state.hydrosphere.vaporMassKg = waterMassKgFromState(state);
+  const surfaceWaterKg = Math.max(0, config.hydrosphere.totalWaterKg - state.hydrosphere.vaporMassKg);
+  state.hydrosphere.oceanMassKg = surfaceWaterKg * oceanFraction;
+  state.hydrosphere.iceMassKg = surfaceWaterKg * config.hydrosphere.iceFraction;
+  setAtmosphericWaterMassKg(state, state.hydrosphere.vaporMassKg);
+  state.climate.co2Ppm = state.atmosphere.composition.CO2 * 1e6;
+  return state;
 }
 
 export function cloneState(state: PlanetState): PlanetState {
@@ -203,5 +238,6 @@ export function cloneState(state: PlanetState): PlanetState {
     hydrosphere: { ...state.hydrosphere },
     surface: { ...state.surface },
     climate: { ...state.climate },
+    scheduler: { ...state.scheduler },
   };
 }

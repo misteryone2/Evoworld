@@ -1,9 +1,10 @@
 /**
- * PHYSICAL_MODEL + SIMULATION_HEURISTIC
+ * APPROXIMATION
  *
- * Pairwise diffusive erosion. Every exchange removes exactly the same volume
- * from the donor cell that it deposits in the receiver, so mass conservation
- * is structural rather than a post-hoc correction.
+ * Pairwise diffusive erosion on a latitude-weighted grid. The transport
+ * variable is VOLUME: the same volume is removed from the donor and deposited
+ * in the receiver, so `A_i * Δh_i + A_j * Δh_j = 0` for every exchange. Crustal
+ * mass is therefore conserved even though cell areas differ.
  */
 
 import type { ElevationGrid, PlanetPhysicalConfig } from "../contracts";
@@ -15,6 +16,10 @@ const MAX_EXCHANGE_FRACTION = 0.25;
 export interface ErosionResult {
   elevationM: Float32Array;
   deltaM: Float32Array;
+  erodedVolumeM3: number;
+  depositedVolumeM3: number;
+  /** Exact double-precision transport balance; zero by construction. */
+  volumeBalanceM3: number;
   erodedMassKg: number;
   depositedMassKg: number;
 }
@@ -25,7 +30,7 @@ function wrapped(index: number, size: number): number {
 
 /**
  * One explicit diffusion step on a wrapped grid. `waterFactor` scales transport
- * by runoff; uniform ones means "no runoff weighting" for isolated tests.
+ * by a local runoff proxy; uniform ones means "no runoff weighting".
  */
 export function erodeAndDeposit(
   config: PlanetPhysicalConfig,
@@ -33,27 +38,38 @@ export function erodeAndDeposit(
   deltaS: number,
   waterFactor?: Float32Array,
 ): ErosionResult {
-  const { width, height, elevationM } = grid;
+  const { width, height, elevationM, cellAreasM2 } = grid;
   const delta = new Float64Array(elevationM.length);
   const rate = EROSION_RATE_PER_S * Math.max(0, deltaS);
+  let erodedVolumeM3 = 0;
+  let depositedVolumeM3 = 0;
 
   const exchange = (indexA: number, indexB: number): void => {
     const difference = elevationM[indexA] - elevationM[indexB];
     if (difference === 0) return;
+
+    const areaA = Math.max(cellAreasM2[indexA], 1);
+    const areaB = Math.max(cellAreasM2[indexB], 1);
     const factorA = waterFactor ? clamp(waterFactor[indexA], 0, 2) : 1;
     const factorB = waterFactor ? clamp(waterFactor[indexB], 0, 2) : 1;
-    const amount = Math.min(
-      Math.abs(difference) * MAX_EXCHANGE_FRACTION,
-      rate * Math.abs(difference) * (factorA + factorB) * 0.5,
-    );
-    if (amount <= 0) return;
+
+    // A transferred volume V reduces Δh by V(1/A_a + 1/A_b).
+    const inverseConductance = 1 / areaA + 1 / areaB;
+    const conductance = 1 / inverseConductance;
+    const maximumDifferenceReduction = Math.abs(difference) * MAX_EXCHANGE_FRACTION;
+    const rateDifferenceReduction = rate * Math.abs(difference) * (factorA + factorB) * 0.5;
+    const volumeM3 = Math.min(maximumDifferenceReduction, rateDifferenceReduction) * conductance;
+    if (!(volumeM3 > 0)) return;
+
     if (difference > 0) {
-      delta[indexA] -= amount;
-      delta[indexB] += amount;
+      delta[indexA] -= volumeM3 / areaA;
+      delta[indexB] += volumeM3 / areaB;
     } else {
-      delta[indexB] -= amount;
-      delta[indexA] += amount;
+      delta[indexB] -= volumeM3 / areaB;
+      delta[indexA] += volumeM3 / areaA;
     }
+    erodedVolumeM3 += volumeM3;
+    depositedVolumeM3 += volumeM3;
   };
 
   // Visit each undirected wrapped edge once so exchange order cannot matter.
@@ -69,20 +85,17 @@ export function erodeAndDeposit(
   }
 
   const next = new Float32Array(elevationM.length);
-  let erodedVolumeM3 = 0;
-  let depositedVolumeM3 = 0;
-  for (let i = 0; i < next.length; i += 1) {
-    next[i] = elevationM[i] + delta[i];
-    if (delta[i] < 0) erodedVolumeM3 += -delta[i];
-    else depositedVolumeM3 += delta[i];
-  }
+  for (let i = 0; i < next.length; i += 1) next[i] = elevationM[i] + delta[i];
 
-  const massScale = grid.cellAreaM2 * PLANET_UNITS.crustDensityKgM3;
+  const densityKgM3 = PLANET_UNITS.crustDensityKgM3;
   return {
     elevationM: next,
     deltaM: Float32Array.from(delta),
-    erodedMassKg: erodedVolumeM3 * massScale,
-    depositedMassKg: depositedVolumeM3 * massScale,
+    erodedVolumeM3,
+    depositedVolumeM3,
+    volumeBalanceM3: erodedVolumeM3 - depositedVolumeM3,
+    erodedMassKg: erodedVolumeM3 * densityKgM3,
+    depositedMassKg: depositedVolumeM3 * densityKgM3,
   };
 }
 

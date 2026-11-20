@@ -14,20 +14,19 @@ import { precipitationMPerYear } from "../simulation/planetEngine/climate/Precip
 
 const BASE_TEMPERATURE: LocalTemperatureInput = {
   globalMeanTemperatureK: 288,
-  latitudeRad: 0,
+  globalMeanInsolationWm2: 340,
+  irradianceWm2: 420,
   elevationM: 0,
   seaLevelM: 0,
-  declinationRad: 0,
-  obliquityRad: 0.409,
   humidity: 0.5,
   gravityMS2: 9.81,
 };
 
 describe("M3 — climate chain", () => {
-  it("temperature falls with latitude at fixed declination", () => {
+  it("temperature falls as local irradiance falls from equator to pole", () => {
     const equator = localTemperatureK(BASE_TEMPERATURE);
-    const mid = localTemperatureK({ ...BASE_TEMPERATURE, latitudeRad: Math.PI / 4 });
-    const pole = localTemperatureK({ ...BASE_TEMPERATURE, latitudeRad: Math.PI / 2 });
+    const mid = localTemperatureK({ ...BASE_TEMPERATURE, irradianceWm2: 240 });
+    const pole = localTemperatureK({ ...BASE_TEMPERATURE, irradianceWm2: 5 });
     expect(equator).toBeGreaterThan(mid);
     expect(mid).toBeGreaterThan(pole);
   });

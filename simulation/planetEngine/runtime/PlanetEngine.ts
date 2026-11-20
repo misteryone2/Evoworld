@@ -1,20 +1,24 @@
 /**
- * CONTRACT / RUNTIME
+ * PHYSICAL_MODEL / RUNTIME / CONTRACT
  *
- * Deterministic orchestration facade. The engine depends only on time and its
- * immutable configuration; it never reads Date.now, Math.random, DOM globals,
- * Three.js, World or any biology/GENOME module.
+ * Deterministic orchestration facade. One `step()` is one logical tick: read
+ * initial state, compute flows, apply mass/energy transfers, evolve geology and
+ * surface, recompute climate/hydrology diagnostics, advance time once, then
+ * publish a coherent core snapshot and headless Environment Snapshot.
+ *
+ * The engine never reads Date.now, Math.random, DOM globals, Three.js, World or
+ * any biology/GENOME module.
  */
 
 import type {
   ClimateField,
   ElevationGrid,
   EnvironmentSnapshot,
-  GasKey,
   HydrologyField,
   OrbitPosition,
   PlanetEngineSnapshot,
   PlanetPhysicalConfig,
+  PlanetSchedulerConfig,
   PlanetState,
   SurfaceField,
 } from "../contracts";
@@ -23,35 +27,37 @@ import {
   createEarthLikeConfig,
   createInitialState,
   PLANET_ENGINE_VERSION,
+  resolveSchedulerConfig,
   rotationPhaseAt,
   rotationRateRadPerS,
+  gravityMS2,
 } from "../core/PlanetCore";
 import { orbitAt } from "../core/Orbit";
-import { stellarFluxWm2 } from "../core/Stellar";
 import { computeEnergyBudget, estimateBondAlbedo, surfacePressureFromState } from "../core/EnergyBudget";
 import { PlanetInvariantError, validateConfig, validateState } from "../core/invariants";
-import { gravityMS2 } from "../core/PlanetCore";
 import { stepInterior } from "../geology/Interior";
 import { tectonicElevationDeltaM } from "../geology/Tectonics";
 import { volcanicEventAt } from "../geology/Volcanism";
 import { applyElevationDeltaM, erodeAndDeposit } from "../geology/SurfaceEvolution";
 import { buildElevationGrid, solveSeaLevelM } from "../surface/Hypsometry";
+import { cellAreasForConfig, meanCellAreaM2 } from "../surface/GridGeometry";
 import { buildSurfaceField } from "../surface/Continents";
 import { buildCoastlineMask } from "../surface/Coastlines";
+import { injectGasMassKg } from "../atmosphere/Composition";
 import { dailyMeanIrradianceWm2, latitudeAtY, longitudeAtX } from "../climate/Insolation";
 import { localTemperatureK } from "../climate/TemperatureField";
 import { relativeHumidityFromPressure } from "../climate/Humidity";
 import { zonalWindMS } from "../atmosphere/Circulation";
 import { seasonAt } from "../climate/ClimateZones";
-import { applyWaterFluxes, totalWaterInventoryKg } from "../hydrology/Inventory";
+import { applyWaterFluxes, totalWaterInventoryKg, type WaterFluxKg } from "../hydrology/Inventory";
 import { updateSeaLevelFromInventory } from "../hydrology/SeaLevel";
 import { computeWaterCycle } from "../hydrology/WaterCycle";
+import { BiomeMemoryStore } from "../biomes/stability";
 import { createEnvironmentSnapshot } from "../snapshot/EnvironmentSnapshot";
 import { PLANET_UNITS } from "../units";
 
-const GAS_KEYS: readonly GasKey[] = ["N2", "O2", "CO2", "H2O", "CH4", "Ar", "other"];
-
 function cloneConfig(config: PlanetPhysicalConfig): PlanetPhysicalConfig {
+  const scheduler = resolveSchedulerConfig(config);
   return createEarthLikeConfig({
     ...config,
     orbit: { ...config.orbit },
@@ -60,6 +66,7 @@ function cloneConfig(config: PlanetPhysicalConfig): PlanetPhysicalConfig {
     atmosphere: { ...config.atmosphere, composition: { ...config.atmosphere.composition } },
     hydrosphere: { ...config.hydrosphere },
     surface: { ...config.surface },
+    scheduler: { ...scheduler },
   });
 }
 
@@ -75,27 +82,54 @@ function cloneSurfaceField(field: SurfaceField): SurfaceField {
   return {
     ...field,
     elevationM: new Float32Array(field.elevationM),
+    cellAreasM2: new Float64Array(field.cellAreasM2),
     oceanMask: new Uint8Array(field.oceanMask),
     coastlineMask: new Uint8Array(field.coastlineMask),
   };
+}
+
+function cloneClimateField(field: ClimateField): ClimateField {
+  return {
+    ...field,
+    latitudeRad: new Float32Array(field.latitudeRad),
+    longitudeRad: new Float32Array(field.longitudeRad),
+    temperatureK: new Float32Array(field.temperatureK),
+    irradianceWm2: new Float32Array(field.irradianceWm2),
+    humidity: new Float32Array(field.humidity),
+    windMS: new Float32Array(field.windMS),
+  };
+}
+
+interface GeologyFlow {
+  interior: { heatJ: number; volcanicActivity: number; tectonicStress: number };
+  elevationDeltaM: Float32Array;
+  volcanicCo2Kg: number;
 }
 
 export class PlanetEngine {
   readonly engineVersion = PLANET_ENGINE_VERSION;
 
   private readonly config: PlanetPhysicalConfig;
+  private readonly schedulerConfig: PlanetSchedulerConfig;
+  private readonly biomeMemory = new BiomeMemoryStore();
   private state: PlanetState;
   private currentSnapshot: PlanetEngineSnapshot;
+  private currentEnvironmentSnapshot?: EnvironmentSnapshot;
   private elevationGrid?: ElevationGrid;
   private cachedElevationRevision = -1;
   private elevationRevision = 0;
   private surfaceCache?: { key: string; field: SurfaceField };
+  private climateCache?: { revision: number; field: ClimateField };
+  private climateRevision = 0;
+  private lastStepDeltaS: number = PLANET_UNITS.secondsPerEarthDay;
 
   constructor(config: PlanetPhysicalConfig) {
     validateConfig(config);
     this.config = cloneConfig(config);
+    this.schedulerConfig = resolveSchedulerConfig(this.config);
     this.state = createInitialState(this.config);
     this.state.climate.albedo = estimateBondAlbedo(this.config);
+    updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     validateState(this.config, this.state);
     this.currentSnapshot = this.refreshDerived();
   }
@@ -108,15 +142,87 @@ export class PlanetEngine {
     return cloneState(this.state);
   }
 
-  /** Advance by a caller-supplied SI duration. One call is one simulation tick. */
+  /** One coordinated logical tick. All public snapshots correspond to its end. */
   step(deltaS: number): PlanetEngineSnapshot {
     if (!Number.isFinite(deltaS) || deltaS < 0) {
       throw new PlanetInvariantError("step deltaS must be a finite non-negative number");
     }
-    return this.seek(this.state.tick + 1, this.state.timeS + deltaS);
+
+    const nextTick = this.state.tick + 1;
+    const nextTimeS = this.state.timeS + deltaS;
+    const scheduler = this.state.scheduler;
+
+    // 1. Read one coherent initial state and accumulate deterministic clocks.
+    const initialState = cloneState(this.state);
+    const initialSurface = this.getSurfaceField();
+    const initialClimate = this.getClimateField();
+    scheduler.pendingClimateS += deltaS;
+    scheduler.pendingHydrologyS += deltaS;
+    scheduler.pendingGeologyS += deltaS;
+
+    const climateDue = nextTick % this.schedulerConfig.climateIntervalTicks === 0;
+    const hydrologyDue = nextTick % this.schedulerConfig.hydrologyIntervalTicks === 0;
+    const geologyDue = nextTick % this.schedulerConfig.geologyIntervalTicks === 0;
+    const hydrologyDeltaS = scheduler.pendingHydrologyS;
+    const geologyDeltaS = scheduler.pendingGeologyS;
+
+    // 2. Compute flows from the initial state before applying any transfer.
+    const waterFluxes: WaterFluxKg | undefined = hydrologyDue
+      ? computeWaterCycle({
+        config: this.config,
+        state: initialState,
+        surface: initialSurface,
+        climate: initialClimate,
+        deltaS: hydrologyDeltaS,
+      }).fluxesKg
+      : undefined;
+    const geologyFlow: GeologyFlow | undefined = geologyDue
+      ? this.computeGeologyFlows(initialState, geologyDeltaS, nextTimeS)
+      : undefined;
+
+    // 3. Apply mass and energy transfers to the mutable state.
+    if (waterFluxes) {
+      applyWaterFluxes(this.state, waterFluxes);
+      this.climateRevision += 1;
+      scheduler.lastHydrologyTick = nextTick;
+      scheduler.pendingHydrologyS = 0;
+    }
+    if (climateDue) {
+      scheduler.lastClimateTick = nextTick;
+      scheduler.pendingClimateS = 0;
+    }
+
+    // 4. Evolve geology and surface with the same volume/M conserving rules.
+    if (geologyFlow) {
+      this.applyGeologyFlow(geologyFlow, geologyDeltaS);
+      scheduler.lastGeologyTick = nextTick;
+      scheduler.pendingGeologyS = 0;
+    }
+    if (geologyFlow || waterFluxes) {
+      updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
+    }
+
+    // 5. Climate and hydrology diagnostics are recomputed from post-transfer
+    //    state in `currentEnvironmentSnapshot()` below.
+    // 6. Advance tick and time exactly once, before derived values are built.
+    this.state.tick = nextTick;
+    this.state.timeS = nextTimeS;
+    this.state.rotationPhaseRad = rotationPhaseAt(this.config, nextTimeS);
+    this.lastStepDeltaS = deltaS;
+    this.climateRevision += 1;
+
+    // 7/8. Publish a coherent core snapshot. The environment view is created
+    // lazily from the same end-of-tick state on first access.
+    const snapshot = this.refreshDerived();
+    this.currentSnapshot = snapshot;
+    this.currentEnvironmentSnapshot = undefined;
+    return cloneSnapshot(snapshot);
   }
 
-  /** Seek to an absolute tick/time. Deterministic because no history is stored. */
+  /**
+   * Derived-only absolute seek. It does not replay stateful geology/hydrology,
+   * so it is intended for orbital inspection, not as a simulation substitute.
+   */
   seek(tick: number, timeS: number): PlanetEngineSnapshot {
     if (!Number.isInteger(tick) || tick < 0) {
       throw new PlanetInvariantError("seek tick must be a non-negative integer");
@@ -126,11 +232,29 @@ export class PlanetEngine {
     }
     this.state.tick = tick;
     this.state.timeS = timeS;
+    this.state.scheduler = {
+      lastClimateTick: 0,
+      lastHydrologyTick: 0,
+      lastGeologyTick: 0,
+      pendingClimateS: 0,
+      pendingHydrologyS: 0,
+      pendingGeologyS: 0,
+    };
+    this.biomeMemory.clear();
+    this.climateRevision += 1;
     return this.refreshDerivedAndSnapshot();
   }
 
   snapshot(): PlanetEngineSnapshot {
     return cloneSnapshot(this.currentSnapshot);
+  }
+
+  /** Environment view of the latest completed tick, built on first access. */
+  environmentSnapshot(): EnvironmentSnapshot {
+    if (!this.currentEnvironmentSnapshot) {
+      this.currentEnvironmentSnapshot = this.createEnvironmentSnapshot(this.lastStepDeltaS);
+    }
+    return this.currentEnvironmentSnapshot;
   }
 
   /** Deterministic elevation grid; rebuilt only when geology mutates it. */
@@ -142,6 +266,7 @@ export class PlanetEngine {
     return {
       ...this.elevationGrid,
       elevationM: new Float32Array(this.elevationGrid.elevationM),
+      cellAreasM2: new Float64Array(this.elevationGrid.cellAreasM2),
     };
   }
 
@@ -160,46 +285,15 @@ export class PlanetEngine {
     return cloneSurfaceField(field);
   }
 
-  /**
-   * Explicit geology step. It is separate from `step()` so orbital/climate
-   * determinism tests remain valid while surface evolution is opt-in.
-   */
-  stepGeology(deltaS: number): SurfaceField {
-    if (!Number.isFinite(deltaS) || deltaS <= 0) {
-      throw new PlanetInvariantError("stepGeology deltaS must be a finite positive number");
-    }
-
-    const interior = stepInterior(this.config, this.state, deltaS);
-    this.state.interior.heatJ = interior.heatJ;
-    this.state.interior.tectonicStress = interior.tectonicStress;
-    this.state.interior.volcanicActivity = interior.volcanicActivity;
-
-    const grid = this.getElevationGrid();
-    const deltaM = new Float32Array(grid.elevationM.length);
-    let volcanicCo2Kg = 0;
-
-    for (let y = 0; y < grid.height; y += 1) {
-      for (let x = 0; x < grid.width; x += 1) {
-        const index = y * grid.width + x;
-        const event = volcanicEventAt(this.config, this.state, x, y, this.state.timeS, deltaS);
-        deltaM[index] = tectonicElevationDeltaM(this.config, this.state, x, y, deltaS) + event.elevationDeltaM;
-        volcanicCo2Kg += event.co2Kg;
-      }
-    }
-
-    this.injectAtmosphericMassKg(volcanicCo2Kg, "CO2");
-    const uplifted = applyElevationDeltaM(grid, deltaM);
-    const eroded = erodeAndDeposit(this.config, uplifted, deltaS);
-    this.setElevationGrid(eroded.elevationM);
-    validateState(this.config, this.state);
-    return this.getSurfaceField();
-  }
-
   /** Local climate driven by orbit, obliquity, elevation and gas inventory. */
   getClimateField(): ClimateField {
+    if (this.climateCache?.revision === this.climateRevision) {
+      return cloneClimateField(this.climateCache.field);
+    }
+
     const surface = this.getSurfaceField();
     const orbit = orbitAt(this.config, this.state.timeS);
-    const fluxWm2 = stellarFluxWm2(this.config.star.luminosityW, orbit.distanceM);
+    const budget = computeEnergyBudget(this.config, orbit, this.state);
     const pressurePa = surfacePressureFromState(this.config, this.state);
     const vaporPressurePa = this.state.atmosphere.composition.H2O * pressurePa;
     const omega = rotationRateRadPerS(this.config);
@@ -218,25 +312,24 @@ export class PlanetEngine {
         const index = y * surface.width + x;
         const lat = latitudeAtY(y, surface.height);
         const lon = longitudeAtX(x, surface.width, this.state.rotationPhaseRad);
-        const irradiance = dailyMeanIrradianceWm2(fluxWm2, lat, orbit.declinationRad);
+        const irradiance = dailyMeanIrradianceWm2(budget.fluxWm2, lat, orbit.declinationRad);
         const heightAboveSeaM = Math.max(0, surface.elevationM[index] - surface.seaLevelM);
         const oceanProximity = surface.oceanMask[index] === 1
           ? 1
           : 1 - Math.min(1, heightAboveSeaM / Math.max(this.config.surface.roughnessM, 1));
         const rh = relativeHumidityFromPressure(
-          this.state.climate.globalMeanTemperatureK,
+          budget.surfaceTemperatureK,
           vaporPressurePa * (surface.oceanMask[index] === 1 ? 1 : 0.6 + 0.4 * oceanProximity),
           oceanProximity,
         );
         const temperature = localTemperatureK({
-          globalMeanTemperatureK: this.state.climate.globalMeanTemperatureK,
-          latitudeRad: lat,
+          globalMeanTemperatureK: budget.surfaceTemperatureK,
+          globalMeanInsolationWm2: budget.meanInsolationWm2,
+          irradianceWm2: irradiance,
           elevationM: surface.elevationM[index],
           seaLevelM: surface.seaLevelM,
-          declinationRad: orbit.declinationRad,
-          obliquityRad: this.state.obliquityRad,
           humidity: rh,
-          gravityMS2: this.currentSnapshot.gravityMS2,
+          gravityMS2: gravityMS2(this.config),
         });
 
         latitudeRad[index] = lat;
@@ -248,7 +341,7 @@ export class PlanetEngine {
       }
     }
 
-    return {
+    const field: ClimateField = {
       width: surface.width,
       height: surface.height,
       latitudeRad,
@@ -259,20 +352,24 @@ export class PlanetEngine {
       windMS,
       season,
     };
+    this.climateCache = { revision: this.climateRevision, field };
+    return cloneClimateField(field);
   }
 
   getHydrologyField(deltaS: number): HydrologyField {
-    const result = computeWaterCycle({
+    return computeWaterCycle({
       config: this.config,
       state: this.state,
       surface: this.getSurfaceField(),
       climate: this.getClimateField(),
       deltaS,
-    });
-    return result.field;
+    }).field;
   }
 
-  /** Close the water cycle for one timestep and recompute sea level. */
+  /**
+   * Manual hydrology step. It applies one water transfer but does NOT advance
+   * tick/time; `step()` is the single coordinated production clock.
+   */
   stepClimateHydrology(deltaS: number): HydrologyField {
     if (!Number.isFinite(deltaS) || deltaS <= 0) {
       throw new PlanetInvariantError("stepClimateHydrology deltaS must be a finite positive number");
@@ -286,29 +383,72 @@ export class PlanetEngine {
     });
     applyWaterFluxes(this.state, result.fluxesKg);
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
-    validateState(this.config, this.state);
+    this.refreshDerivedAndSnapshot();
     return result.field;
   }
 
+  /**
+   * Manual geology step. It evolves the surface but does NOT advance tick/time;
+   * `step()` is the single coordinated production clock.
+   */
+  stepGeology(deltaS: number): SurfaceField {
+    if (!Number.isFinite(deltaS) || deltaS <= 0) {
+      throw new PlanetInvariantError("stepGeology deltaS must be a finite positive number");
+    }
+    const flow = this.computeGeologyFlows(this.state, deltaS, this.state.timeS);
+    this.applyGeologyFlow(flow, deltaS);
+    updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
+    this.refreshDerivedAndSnapshot();
+    return this.getSurfaceField();
+  }
+
   /** Stable headless bridge for ecology/GENOME consumers. */
-  createEnvironmentSnapshot(deltaS = PLANET_UNITS.secondsPerEarthDay): EnvironmentSnapshot {
-    return createEnvironmentSnapshot(this, {
+  createEnvironmentSnapshot(deltaS: number = PLANET_UNITS.secondsPerEarthDay): EnvironmentSnapshot {
+    const snapshot = createEnvironmentSnapshot(this, {
       engineVersion: this.engineVersion,
       deltaS,
     });
+    this.currentEnvironmentSnapshot = snapshot;
+    return snapshot;
+  }
+
+  /** Engine-owned serializable memory shared by every consecutive snapshot. */
+  getBiomeMemory(): BiomeMemoryStore {
+    return this.biomeMemory;
   }
 
   totalWaterKg(): number {
     return totalWaterInventoryKg(this.state);
   }
 
-  private injectAtmosphericMassKg(massKg: number, gas: GasKey): void {
-    if (!(massKg > 0)) return;
-    const oldMass = this.state.atmosphere.totalMassKg;
-    const newMass = oldMass + massKg;
-    for (const key of GAS_KEYS) this.state.atmosphere.composition[key] *= oldMass / newMass;
-    this.state.atmosphere.composition[gas] += massKg / newMass;
-    this.state.atmosphere.totalMassKg = newMass;
+  private computeGeologyFlows(baseState: PlanetState, deltaS: number, timeS: number): GeologyFlow {
+    const interior = stepInterior(this.config, baseState, deltaS);
+    const grid = this.getElevationGrid();
+    const elevationDeltaM = new Float32Array(grid.elevationM.length);
+    let volcanicCo2Kg = 0;
+
+    for (let y = 0; y < grid.height; y += 1) {
+      for (let x = 0; x < grid.width; x += 1) {
+        const index = y * grid.width + x;
+        const event = volcanicEventAt(this.config, baseState, x, y, timeS, deltaS);
+        elevationDeltaM[index] = tectonicElevationDeltaM(this.config, baseState, x, y, deltaS)
+          + event.elevationDeltaM;
+        volcanicCo2Kg += event.co2Kg;
+      }
+    }
+
+    return { interior, elevationDeltaM, volcanicCo2Kg };
+  }
+
+  private applyGeologyFlow(flow: GeologyFlow, deltaS: number): void {
+    this.state.interior.heatJ = flow.interior.heatJ;
+    this.state.interior.tectonicStress = flow.interior.tectonicStress;
+    this.state.interior.volcanicActivity = flow.interior.volcanicActivity;
+    injectGasMassKg(this.state, "CO2", flow.volcanicCo2Kg);
+
+    const uplifted = applyElevationDeltaM(this.getElevationGrid(), flow.elevationDeltaM);
+    const eroded = erodeAndDeposit(this.config, uplifted, deltaS);
+    this.setElevationGrid(eroded.elevationM);
   }
 
   private setElevationGrid(elevationM: Float32Array): void {
@@ -318,16 +458,19 @@ export class PlanetEngine {
       if (elevationM[i] < minM) minM = elevationM[i];
       if (elevationM[i] > maxM) maxM = elevationM[i];
     }
+    const cellAreasM2 = cellAreasForConfig(this.config);
     this.elevationGrid = {
       width: this.config.surface.gridWidth,
       height: this.config.surface.gridHeight,
       elevationM: new Float32Array(elevationM),
       minM,
       maxM,
-      cellAreaM2: (4 * Math.PI * this.config.radiusM ** 2) / elevationM.length,
+      cellAreasM2,
+      cellAreaM2: meanCellAreaM2(cellAreasM2),
     };
     this.elevationRevision += 1;
     this.surfaceCache = undefined;
+    this.climateRevision += 1;
   }
 
   private refreshDerived(): PlanetEngineSnapshot {
@@ -362,6 +505,7 @@ export class PlanetEngine {
     const snapshot = this.refreshDerived();
     validateState(this.config, this.state);
     this.currentSnapshot = snapshot;
+    this.currentEnvironmentSnapshot = undefined;
     return cloneSnapshot(snapshot);
   }
 }

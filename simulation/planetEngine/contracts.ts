@@ -16,6 +16,41 @@ export type GasKey = "N2" | "O2" | "CO2" | "H2O" | "CH4" | "Ar" | "other";
 
 export type ModelTag = "PHYSICAL_MODEL" | "APPROXIMATION" | "SIMULATION_HEURISTIC" | "VISUAL_EFFECT";
 
+export type PlanetSubsystem =
+  | "orbitalMechanics"
+  | "energyBudget"
+  | "gasInventory"
+  | "greenhouse"
+  | "atmosphericCirculation"
+  | "hypsometry"
+  | "geology"
+  | "erosion"
+  | "localClimate"
+  | "waterCycle"
+  | "drainageProxy"
+  | "biomeClassifier"
+  | "environmentSnapshot";
+
+/**
+ * Mandatory machine-readable classification. See `MODELS.md` for the
+ * conservation claims and residual approximations of every subsystem.
+ */
+export const MODEL_CLASSIFICATION: Readonly<Record<PlanetSubsystem, ModelTag>> = {
+  orbitalMechanics: "PHYSICAL_MODEL",
+  energyBudget: "APPROXIMATION",
+  gasInventory: "PHYSICAL_MODEL",
+  greenhouse: "APPROXIMATION",
+  atmosphericCirculation: "SIMULATION_HEURISTIC",
+  hypsometry: "PHYSICAL_MODEL",
+  geology: "SIMULATION_HEURISTIC",
+  erosion: "APPROXIMATION",
+  localClimate: "APPROXIMATION",
+  waterCycle: "SIMULATION_HEURISTIC",
+  drainageProxy: "SIMULATION_HEURISTIC",
+  biomeClassifier: "SIMULATION_HEURISTIC",
+  environmentSnapshot: "APPROXIMATION",
+};
+
 export interface PlanetOrbitConfig {
   semiMajorAxisM: number;
   eccentricity: number;
@@ -57,6 +92,27 @@ export interface PlanetSurfaceConfig {
   roughnessM: number;
 }
 
+/**
+ * Deterministic multi-rate scheduler. A subsystem runs on tick `t` iff
+ * `t % intervalTicks === 0`; the pending SI duration is passed to that
+ * subsystem so a slower clock never changes the average physical rate.
+ */
+export interface PlanetSchedulerConfig {
+  climateIntervalTicks: number;
+  hydrologyIntervalTicks: number;
+  geologyIntervalTicks: number;
+}
+
+/** Serializable scheduler state; one logical tick advances it exactly once. */
+export interface PlanetSchedulerState {
+  lastClimateTick: number;
+  lastHydrologyTick: number;
+  lastGeologyTick: number;
+  pendingClimateS: number;
+  pendingHydrologyS: number;
+  pendingGeologyS: number;
+}
+
 export interface PlanetPhysicalConfig {
   schemaVersion: 1;
   seed: number;
@@ -71,6 +127,7 @@ export interface PlanetPhysicalConfig {
   atmosphere: PlanetAtmosphereConfig;
   hydrosphere: PlanetHydrosphereConfig;
   surface: PlanetSurfaceConfig;
+  scheduler?: PlanetSchedulerConfig;
 }
 
 /** Mutable state evolved by later milestones. M1 initializes it from config. */
@@ -93,6 +150,7 @@ export interface PlanetState {
   hydrosphere: {
     oceanMassKg: number;
     iceMassKg: number;
+    /** Authoritative mass of water in the atmospheric reservoir. */
     vaporMassKg: number;
     soilWaterKg: number;
     seaLevelM: number;
@@ -106,6 +164,7 @@ export interface PlanetState {
     co2Ppm: number;
     albedo: number;
   };
+  scheduler: PlanetSchedulerState;
 }
 
 /** Deterministic elevation tile produced by geophysics, not by legacy fBm. */
@@ -115,7 +174,9 @@ export interface ElevationGrid {
   elevationM: Float32Array;
   minM: number;
   maxM: number;
-  /** Approximate uniform cell area from total sphere area / cell count. */
+  /** Per-cell latitude-weighted area; authoritative for all mass balances. */
+  cellAreasM2: Float64Array;
+  /** Arithmetic mean only. Retained for display; never use for local fluxes. */
   cellAreaM2: number;
 }
 
@@ -142,7 +203,11 @@ export interface ClimateField {
   season: Season;
 }
 
-/** Local water-cycle fields; `riverFlow` is a deterministic D8 proxy. */
+/**
+ * SIMULATION_HEURISTIC fields. `riverFlow` is a deterministic topographic
+ * accumulation proxy, NOT a transported water mass or a solved river network.
+ * Inventory transfers use global reservoirs, not these local fields.
+ */
 export interface HydrologyField {
   width: number;
   height: number;
@@ -164,7 +229,7 @@ export interface OrbitPosition {
   declinationRad: number;
 }
 
-/** One local environmental sample produced by the full engine (later milestones). */
+/** One local environmental sample produced by the full engine. */
 export interface EnvironmentSample {
   x: number;
   y: number;
@@ -197,9 +262,15 @@ export interface EnvironmentSample {
   season: Season;
 }
 
+export type ReadonlyEnvironmentSample = Readonly<EnvironmentSample>;
+export type ReadonlyLegacyCell = Readonly<Cell>;
+
 /**
  * Stable integration contract. `toLegacyCell` keeps the exact units consumed by
  * `simulation/biology/environment.ts` so no GENOME module needs modification.
+ * Returned objects are immutable; callers cannot mutate engine state through
+ * a snapshot. Integer coordinates wrap on the toroidal grid; non-finite or
+ * non-integer coordinates are rejected.
  */
 export interface EnvironmentSnapshot {
   version: 1;
@@ -209,9 +280,11 @@ export interface EnvironmentSnapshot {
   gridWidth: number;
   gridHeight: number;
   season: Season;
-  sample(x: number, y: number): EnvironmentSample;
+  sample(x: number, y: number): ReadonlyEnvironmentSample;
   /** Exact legacy `Cell` shape; no GENOME/biology module is imported or edited. */
-  toLegacyCell(x: number, y: number): Cell;
+  toLegacyCell(x: number, y: number): ReadonlyLegacyCell;
+  /** Eagerly materialize samples; biome memory is committed in scan order. */
+  materialize(): void;
 }
 
 /** Snapshot returned by the M1 facade. Purely derived from config and time. */
