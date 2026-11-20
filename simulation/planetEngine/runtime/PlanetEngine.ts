@@ -114,6 +114,23 @@ interface GeologyFlow {
   volcanicCo2Kg: number;
 }
 
+/**
+ * Why the climate cache was invalidated. `scheduled` is the normal multi-rate
+ * clock; `forced` is a genuine out-of-band change of climate inputs; `seek` is
+ * a derived time jump; `manual` is diagnostic/benchmark refresh; `initial` is
+ * the construction of the first field. Simple time advance is deliberately
+ * absent: by itself it never invalidates the cache.
+ */
+export type ClimateRefreshReason = "initial" | "scheduled" | "forced" | "seek" | "manual";
+
+const CLIMATE_REFRESH_REASONS: readonly ClimateRefreshReason[] = [
+  "initial", "scheduled", "forced", "seek", "manual",
+];
+
+function emptyClimateRefreshCounts(): Record<ClimateRefreshReason, number> {
+  return { initial: 0, scheduled: 0, forced: 0, seek: 0, manual: 0 };
+}
+
 export class PlanetEngine {
   readonly engineVersion = PLANET_ENGINE_VERSION;
 
@@ -124,14 +141,23 @@ export class PlanetEngine {
   private currentSnapshot: PlanetEngineSnapshot;
   private currentEnvironmentSnapshot?: EnvironmentSnapshot;
   private elevationGrid?: ElevationGrid;
-  private cachedElevationRevision = -1;
-  private elevationRevision = 0;
+  private cachedSurfaceRevision = -1;
+  /** Surface geometry revision; separate from state and climate revisions. */
+  private surfaceRevision = 0;
+  /** Applied hydrology transfers; separate from climate. */
+  private hydrologyRevision = 0;
+  /** Applied geology transfers; separate from climate. */
+  private geologyRevision = 0;
   private surfaceCache?: { key: string; field: SurfaceField };
   private climateCache?: { revision: number; field: ClimateField };
   /** Bumped on every state mutation; deliberately NOT used by the climate cache. */
   private stateRevision = 0;
-  /** Bumped only by the scheduler when a climate refresh is actually due. */
+  /** Bumped only when the climate field is really invalidated. */
   private climateRevision = 0;
+  /** Reason carried from invalidation to the actual recomputation. */
+  private pendingClimateRefreshReason: ClimateRefreshReason = "initial";
+  private climateRefreshCounts = emptyClimateRefreshCounts();
+  private lastClimateRefreshReason?: ClimateRefreshReason;
   /** Instrumentation: number of real climate-field recomputations. */
   private climateUpdateCount = 0;
   private lastBiomeCommitTick = -1;
@@ -187,9 +213,9 @@ export class PlanetEngine {
     this.stateRevision += 1;
 
     if (climateDue) {
-      // Only the scheduler may invalidate the climate cache. Water and geology
-      // changes bump `stateRevision`, never `climateRevision`.
-      this.climateRevision += 1;
+      // Scheduled refresh: the only automatic climate invalidation. Water and
+      // geology changes bump their own revisions, never `climateRevision`.
+      this.invalidateClimateCache("scheduled");
       scheduler.lastClimateTick = nextTick;
       scheduler.pendingClimateS = 0;
     }
@@ -218,11 +244,13 @@ export class PlanetEngine {
     if (waterFluxes) {
       applyWaterFluxes(this.state, waterFluxes);
       this.stateRevision += 1;
+      this.hydrologyRevision += 1;
       scheduler.lastHydrologyTick = nextTick;
       scheduler.pendingHydrologyS = 0;
     }
     if (geologyFlow) {
       this.applyGeologyFlow(geologyFlow, geologyDeltaS);
+      this.geologyRevision += 1;
       scheduler.lastGeologyTick = nextTick;
       scheduler.pendingGeologyS = 0;
     }
@@ -267,20 +295,32 @@ export class PlanetEngine {
     this.lastBiomeCommitTick = -1;
     this.stateRevision += 1;
     // seek changes time/orbit, so the climate field must be rebuilt once.
-    this.climateRevision += 1;
+    this.invalidateClimateCache("seek");
     return this.refreshDerivedAndSnapshot();
   }
 
   /** Instrumentation for scheduler/cache verification; no state is mutated. */
   getRuntimeDiagnostics(): Readonly<{
     stateRevision: number;
+    surfaceRevision: number;
+    hydrologyRevision: number;
+    geologyRevision: number;
     climateRevision: number;
     climateUpdateCount: number;
+    climateRefreshCounts: Readonly<Record<ClimateRefreshReason, number>>;
+    lastClimateRefreshReason?: ClimateRefreshReason;
+    lastBiomeCommitTick: number;
   }> {
     return {
       stateRevision: this.stateRevision,
+      surfaceRevision: this.surfaceRevision,
+      hydrologyRevision: this.hydrologyRevision,
+      geologyRevision: this.geologyRevision,
       climateRevision: this.climateRevision,
       climateUpdateCount: this.climateUpdateCount,
+      climateRefreshCounts: { ...this.climateRefreshCounts },
+      lastClimateRefreshReason: this.lastClimateRefreshReason,
+      lastBiomeCommitTick: this.lastBiomeCommitTick,
     };
   }
 
@@ -296,11 +336,24 @@ export class PlanetEngine {
     return this.currentEnvironmentSnapshot;
   }
 
+  /**
+   * Single climate invalidation gate. The reason is carried to the next real
+   * recomputation so diagnostics can distinguish scheduled cadence from a
+   * genuine out-of-band input change, a seek or a manual refresh.
+   */
+  private invalidateClimateCache(reason: ClimateRefreshReason): void {
+    if (!CLIMATE_REFRESH_REASONS.includes(reason)) {
+      throw new PlanetInvariantError(`unknown climate refresh reason: ${reason}`);
+    }
+    this.climateRevision += 1;
+    this.pendingClimateRefreshReason = reason;
+  }
+
   /** Deterministic elevation grid; rebuilt only when geology mutates it. */
   getElevationGrid(): ElevationGrid {
-    if (!this.elevationGrid || this.cachedElevationRevision !== this.elevationRevision) {
+    if (!this.elevationGrid || this.cachedSurfaceRevision !== this.surfaceRevision) {
       this.elevationGrid = buildElevationGrid(this.config);
-      this.cachedElevationRevision = this.elevationRevision;
+      this.cachedSurfaceRevision = this.surfaceRevision;
     }
     const grid = this.elevationGrid;
     return {
@@ -315,7 +368,7 @@ export class PlanetEngine {
 
   /** Surface derived from elevation + ocean mass inventory + solved sea level. */
   getSurfaceField(): SurfaceField {
-    const key = `${this.state.hydrosphere.oceanMassKg.toFixed(6)}:${this.elevationRevision}`;
+    const key = `${this.state.hydrosphere.oceanMassKg.toFixed(6)}:${this.surfaceRevision}`;
     if (this.surfaceCache?.key === key) return cloneSurfaceField(this.surfaceCache.field);
 
     const grid = this.getElevationGrid();
@@ -397,6 +450,8 @@ export class PlanetEngine {
     };
     this.climateCache = { revision: this.climateRevision, field };
     this.climateUpdateCount += 1;
+    this.climateRefreshCounts[this.pendingClimateRefreshReason] += 1;
+    this.lastClimateRefreshReason = this.pendingClimateRefreshReason;
     return cloneClimateField(field);
   }
 
@@ -428,8 +483,11 @@ export class PlanetEngine {
     applyWaterFluxes(this.state, result.fluxesKg);
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
     this.stateRevision += 1;
-    // Explicit out-of-band mutation: invalidate once so the next read is fresh.
-    this.climateRevision += 1;
+    this.hydrologyRevision += 1;
+    // Vapor/H₂O is a climate input: this out-of-band mutation really forces a
+    // fresh field once, even when the scheduler is not due.
+    this.invalidateClimateCache("forced");
+    this.getClimateField();
     this.refreshDerivedAndSnapshot();
     return result.field;
   }
@@ -440,7 +498,7 @@ export class PlanetEngine {
    * manual helpers it is out-of-band and invalidates the climate cache once.
    */
   refreshClimateField(): ClimateField {
-    this.climateRevision += 1;
+    this.invalidateClimateCache("manual");
     return this.getClimateField();
   }
 
@@ -455,9 +513,11 @@ export class PlanetEngine {
     const flow = this.computeGeologyFlows(this.state, deltaS, this.state.timeS);
     this.applyGeologyFlow(flow, deltaS);
     updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
-    this.stateRevision += 1;
-    // Explicit out-of-band mutation: invalidate once so the next read is fresh.
-    this.climateRevision += 1;
+    this.geologyRevision += 1;
+    // Elevation and injected volcanic CO₂ are climate inputs: force one fresh
+    // field even when the scheduler is not due.
+    this.invalidateClimateCache("forced");
+    this.getClimateField();
     this.refreshDerivedAndSnapshot();
     return this.getSurfaceField();
   }
@@ -570,7 +630,7 @@ export class PlanetEngine {
       cellAreaM2: meanCellAreaM2(cellAreasM2),
       transportElevationM: transportElevationM ? new Float64Array(transportElevationM) : undefined,
     };
-    this.elevationRevision += 1;
+    this.surfaceRevision += 1;
     this.surfaceCache = undefined;
     // Surface geometry changes are tracked by `stateRevision`. They must NOT
     // invalidate the climate cache: only the scheduler controls that clock.

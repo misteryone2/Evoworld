@@ -132,9 +132,110 @@ describe("P1 — climate scheduler cache isolation", () => {
     engine.step(STEP_S);
     const after = engine.getRuntimeDiagnostics();
     expect(after.stateRevision).toBeGreaterThan(baseline.stateRevision);
+    expect(after.surfaceRevision).toBe(baseline.surfaceRevision + 1);
+    expect(after.hydrologyRevision).toBe(baseline.hydrologyRevision + 1);
+    expect(after.geologyRevision).toBe(baseline.geologyRevision + 1);
     expect(after.climateRevision).toBe(baseline.climateRevision);
     expect(after.climateUpdateCount).toBe(baseline.climateUpdateCount);
     expect(engine.getState().scheduler.lastHydrologyTick).toBe(1);
     expect(engine.getState().scheduler.lastGeologyTick).toBe(1);
+  });
+
+  it("climateIntervalTicks = 5 forces exactly one scheduled refresh on the fifth tick", () => {
+    const engine = makeEngine(5);
+    const before = signature(engine.getClimateField());
+    const baseline = engine.getRuntimeDiagnostics();
+    expect(baseline.climateRefreshCounts.initial).toBe(1);
+
+    for (let tick = 1; tick <= 4; tick += 1) {
+      engine.step(STEP_S);
+      expect(engine.getRuntimeDiagnostics().climateUpdateCount).toBe(baseline.climateUpdateCount);
+      expect(engine.getRuntimeDiagnostics().climateRevision).toBe(baseline.climateRevision);
+      expect(signature(engine.getClimateField())).toEqual(before);
+      expect(engine.getState().scheduler.lastClimateTick).toBe(0);
+      expect(engine.getState().scheduler.pendingClimateS).toBe(tick * STEP_S);
+      expect(engine.snapshot().timeS).toBeCloseTo(tick * STEP_S, 6);
+    }
+
+    engine.step(STEP_S);
+    const after = engine.getRuntimeDiagnostics();
+    expect(after.climateUpdateCount).toBe(baseline.climateUpdateCount + 1);
+    expect(after.climateRevision).toBe(baseline.climateRevision + 1);
+    expect(after.climateRefreshCounts.scheduled).toBe(baseline.climateRefreshCounts.scheduled + 1);
+    expect(after.lastClimateRefreshReason).toBe("scheduled");
+    expect(signature(engine.getClimateField())).not.toEqual(before);
+    expect(engine.getState().scheduler.lastClimateTick).toBe(5);
+    expect(engine.getState().scheduler.pendingClimateS).toBe(0);
+    expect(engine.snapshot().tick).toBe(5);
+    expect(engine.snapshot().timeS).toBeCloseTo(5 * STEP_S, 6);
+
+    // Reading a fresh cache never recomputes or changes diagnostics.
+    const stable = engine.getRuntimeDiagnostics();
+    engine.getClimateField();
+    engine.getClimateField();
+    expect(engine.getRuntimeDiagnostics()).toEqual(stable);
+  });
+
+  it("records forced, manual and seek invalidations without moving the clock", () => {
+    const engine = makeEngine(100);
+    engine.getClimateField();
+    const baseline = engine.getRuntimeDiagnostics();
+
+    const manual = engine.refreshClimateField();
+    expect(manual.temperatureK).toBeInstanceOf(Float32Array);
+    const afterManual = engine.getRuntimeDiagnostics();
+    expect(afterManual.climateUpdateCount).toBe(baseline.climateUpdateCount + 1);
+    expect(afterManual.climateRevision).toBe(baseline.climateRevision + 1);
+    expect(afterManual.climateRefreshCounts.manual).toBe(baseline.climateRefreshCounts.manual + 1);
+    expect(afterManual.lastClimateRefreshReason).toBe("manual");
+    expect(afterManual.stateRevision).toBe(baseline.stateRevision);
+    expect(engine.getState().tick).toBe(0);
+    expect(engine.getState().timeS).toBe(0);
+
+    engine.stepClimateHydrology(STEP_S);
+    const afterWater = engine.getRuntimeDiagnostics();
+    expect(afterWater.climateUpdateCount).toBe(afterManual.climateUpdateCount + 1);
+    expect(afterWater.climateRevision).toBe(afterManual.climateRevision + 1);
+    expect(afterWater.climateRefreshCounts.forced).toBe(afterManual.climateRefreshCounts.forced + 1);
+    expect(afterWater.lastClimateRefreshReason).toBe("forced");
+    expect(afterWater.hydrologyRevision).toBe(afterManual.hydrologyRevision + 1);
+    expect(afterWater.stateRevision).toBeGreaterThan(afterManual.stateRevision);
+    expect(engine.getState().tick).toBe(0);
+    expect(engine.getState().timeS).toBe(0);
+
+    engine.stepGeology(STEP_S);
+    const afterGeology = engine.getRuntimeDiagnostics();
+    expect(afterGeology.climateUpdateCount).toBe(afterWater.climateUpdateCount + 1);
+    expect(afterGeology.climateRefreshCounts.forced).toBe(afterWater.climateRefreshCounts.forced + 1);
+    expect(afterGeology.lastClimateRefreshReason).toBe("forced");
+    expect(afterGeology.geologyRevision).toBe(afterWater.geologyRevision + 1);
+    expect(afterGeology.surfaceRevision).toBe(afterWater.surfaceRevision + 1);
+    expect(engine.getState().tick).toBe(0);
+    expect(engine.getState().timeS).toBe(0);
+
+    engine.seek(123, 456);
+    const afterSeek = engine.getRuntimeDiagnostics();
+    expect(afterSeek.climateUpdateCount).toBe(afterGeology.climateUpdateCount + 1);
+    expect(afterSeek.climateRefreshCounts.seek).toBe(afterGeology.climateRefreshCounts.seek + 1);
+    expect(afterSeek.lastClimateRefreshReason).toBe("seek");
+    expect(engine.getState().tick).toBe(123);
+    expect(engine.getState().timeS).toBe(456);
+  });
+
+  it("keeps field reads observationally pure and deterministic", () => {
+    const readEveryTick = makeEngine(5);
+    const readAtEnd = makeEngine(5);
+    const signaturesEveryTick: number[][] = [];
+
+    for (let tick = 1; tick <= 11; tick += 1) {
+      readEveryTick.step(STEP_S);
+      signaturesEveryTick.push(signature(readEveryTick.getClimateField()));
+      readAtEnd.step(STEP_S);
+    }
+
+    expect(signature(readAtEnd.getClimateField())).toEqual(signaturesEveryTick[signaturesEveryTick.length - 1]);
+    expect(readEveryTick.getRuntimeDiagnostics()).toEqual(readAtEnd.getRuntimeDiagnostics());
+    expect(readEveryTick.getState()).toEqual(readAtEnd.getState());
+    expect(readEveryTick.snapshot()).toEqual(readAtEnd.snapshot());
   });
 });
