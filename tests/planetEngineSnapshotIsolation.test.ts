@@ -51,7 +51,7 @@ describe("P1 — historical EnvironmentSnapshot isolation", () => {
 
   it("rejects temporal regression at the store boundary", () => {
     const engine = engineAt(20);
-    const store = engine.getBiomeMemory();
+    const store = BiomeMemoryStore.fromJSON(engine.getBiomeMemory().toJSON());
     const before = JSON.stringify(store.toJSON());
     const stale: BiomeDecision = { biome: "desert", stability: 0.1, changed: true };
     for (const record of store.toJSON()) {
@@ -61,6 +61,28 @@ describe("P1 — historical EnvironmentSnapshot isolation", () => {
     expect(JSON.stringify(store.toJSON())).toBe(before);
     expect(() => store.commit(0, stale, -1)).toThrow();
     expect(() => store.commit(0, stale, 1.5)).toThrow();
+  });
+
+  it("exposes only an immutable facade to consumers", () => {
+    const engine = engineAt(20);
+    const facade = engine.getBiomeMemory();
+    const exposed = facade as unknown as Record<string, unknown>;
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(exposed.set).toBeUndefined();
+    expect(exposed.commit).toBeUndefined();
+    expect(exposed.clear).toBeUndefined();
+
+    const first = facade.get(0);
+    expect(first).toBeDefined();
+    expect(Object.isFrozen(first)).toBe(true);
+    const attemptedWrite = first as { biome: string };
+    expect(() => { attemptedWrite.biome = "desert"; }).toThrow(TypeError);
+    expect(facade.get(0)?.biome).toBe(first?.biome);
+
+    const snapshot = engine.createEnvironmentSnapshot();
+    snapshot.materialize();
+    expect(JSON.stringify(engine.getBiomeMemory().toJSON()))
+      .toBe(JSON.stringify(facade.toJSON()));
   });
 
   it("is independent of cell access order", () => {

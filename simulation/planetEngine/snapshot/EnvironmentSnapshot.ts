@@ -21,7 +21,7 @@ import type { EnvironmentSample, EnvironmentSnapshot } from "../contracts";
 import { orbitAt } from "../core/Orbit";
 import { surfacePressureFromState } from "../core/EnergyBudget";
 import { PlanetInvariantError } from "../core/invariants";
-import { type BiomeMemory, BiomeMemoryStore, decideBiome } from "../biomes/stability";
+import { type BiomeMemory, type ReadonlyBiomeMemory, decideBiome } from "../biomes/stability";
 import { seasonalShapeK } from "../climate/TemperatureField";
 import { slopeAt } from "../hydrology/Drainage";
 import { legacyWaterAxis } from "../units";
@@ -35,7 +35,7 @@ export interface EnvironmentProvider {
   getSurfaceField(): SurfaceField;
   getClimateField(): ClimateField;
   getHydrologyField(deltaS: number): HydrologyField;
-  getBiomeMemory(): BiomeMemoryStore;
+  getBiomeMemory(): ReadonlyBiomeMemory;
 }
 
 export interface EnvironmentSnapshotOptions {

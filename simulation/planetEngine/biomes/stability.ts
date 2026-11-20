@@ -27,6 +27,15 @@ export interface BiomeDecision {
   changed: boolean;
 }
 
+/** Public read-only surface of the engine-owned biome memory. */
+export interface ReadonlyBiomeMemory {
+  readonly size: number;
+  get(index: number): Readonly<BiomeMemory> | undefined;
+  view(): ReadonlyMap<number, Readonly<BiomeMemory>>;
+  entries(): ReadonlyMap<number, Readonly<BiomeMemory>>;
+  toJSON(): SerializedBiomeMemory[];
+}
+
 export const BIOME_HYSTERESIS = 0.15;
 export const BIOME_COOLDOWN_TICKS = 8;
 
@@ -71,8 +80,12 @@ export function decideBiome(
  * Explicit, serializable per-cell biome memory. The engine owns all writes;
  * snapshots receive only a frozen read-only view.
  */
-export class BiomeMemoryStore {
+export class BiomeMemoryStore implements ReadonlyBiomeMemory {
   private readonly records = new Map<number, BiomeMemory>();
+
+  get size(): number {
+    return this.records.size;
+  }
 
   get(index: number): BiomeMemory | undefined {
     return this.records.get(index);
@@ -125,4 +138,29 @@ export class BiomeMemoryStore {
   entries(): ReadonlyMap<number, BiomeMemory> {
     return this.records;
   }
+}
+
+/**
+ * Frozen adapter returned to snapshots and external consumers. It deliberately
+ * exposes no `set`, `commit`, `clear` or raw map, so only the engine can write.
+ */
+export function readonlyBiomeMemory(store: BiomeMemoryStore): ReadonlyBiomeMemory {
+  return Object.freeze({
+    get size(): number {
+      return store.size;
+    },
+    get(index: number): Readonly<BiomeMemory> | undefined {
+      const record = store.get(index);
+      return record ? Object.freeze({ ...record }) : undefined;
+    },
+    view(): ReadonlyMap<number, Readonly<BiomeMemory>> {
+      return store.view();
+    },
+    entries(): ReadonlyMap<number, Readonly<BiomeMemory>> {
+      return store.view();
+    },
+    toJSON(): SerializedBiomeMemory[] {
+      return store.toJSON();
+    },
+  });
 }

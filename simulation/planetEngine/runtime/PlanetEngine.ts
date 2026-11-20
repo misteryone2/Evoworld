@@ -56,6 +56,8 @@ import { slopeAt } from "../hydrology/Drainage";
 import {
   BiomeMemoryStore,
   decideBiome,
+  readonlyBiomeMemory,
+  type ReadonlyBiomeMemory,
   type SerializedBiomeMemory,
 } from "../biomes/stability";
 import { createEnvironmentSnapshot } from "../snapshot/EnvironmentSnapshot";
@@ -532,9 +534,9 @@ export class PlanetEngine {
     return snapshot;
   }
 
-  /** Engine-owned serializable memory shared by every consecutive snapshot. */
-  getBiomeMemory(): BiomeMemoryStore {
-    return this.biomeMemory;
+  /** Engine-owned serializable memory exposed to consumers as a read-only view. */
+  getBiomeMemory(): ReadonlyBiomeMemory {
+    return readonlyBiomeMemory(this.biomeMemory);
   }
 
   /** Restore a previously serialized memory store without temporal regression. */
