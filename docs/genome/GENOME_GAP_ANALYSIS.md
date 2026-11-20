@@ -1,7 +1,8 @@
 # GENOME — Analisi dei gap
 
 **Data:** 2026-11-20  
-**Branch:** `milestone/genome/gen0-audit`  
+**Branch:** `milestone/genome/gen0-audit` — PR #4 (open), baseline `2234eec`  
+**Revisione:** Rev 1 dopo la review tecnica di PR #4.  
 **Confronto:** requisiti GEN-1…GEN-8 vs codice verificato in `main@5672f12`.  
 **Regola:** un gap è dichiarato solo se non esiste evidenza nel codice. Un sistema presente ma incompleto è classificato `EXISTING_NEEDS_EXTENSION`, non `MISSING`.
 

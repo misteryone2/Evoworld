@@ -2,6 +2,8 @@
 
 **Data:** 2026-11-20  
 **Branch di audit:** `milestone/genome/gen0-audit`, creato da `main@5672f12296e484a4ba02ba2876e2f5e82d266cb1`  
+**Baseline GEN-0:** commit `2234eec6bb18e0ff5822247346a90461001737fd`; PR #4 open, branch pubblicato su `origin`  
+**Revisione:** Rev 1 dopo la review tecnica di PR #4.  
 **Metodo:** lettura diretta del codice, verifica Git/API, baseline test eseguito. Nessuna modifica al codice di produzione.  
 **Classificazioni:** `EXISTING_COMPLETE`, `EXISTING_NEEDS_EXTENSION`, `EXISTING_DEFECT`, `MISSING`, `BLOCKED`, `UNVERIFIED`.
 
@@ -12,7 +14,7 @@
 | Ref | Hash | Verifica |
 |---|---|---|
 | `main` / `origin/main` | `5672f12296e484a4ba02ba2876e2f5e82d266cb1` | uguali, working tree pulito all'inizio dell'audit |
-| `milestone/genome/gen0-audit` | `5672f12…` | branch dedicato creato per GEN-0 |
+| `milestone/genome/gen0-audit` | `2234eec…` | branch dedicato GEN-0; 1 commit, 7 file documentali, PR #4 open |
 | `graphics/g3-renderer-integration` | `717da65c81329188dc3ce25f5e83dcdf405cd1be` | branch storico G, ancora presente su `origin`; uguale a `archive/g3.1` |
 | `iv1-r1-approved` | tag `3a439ef…` → `dbb114ecf849b90c74cf776f171e27a45e427ead` | approvazione finale IV1 |
 | PR #1 | `closed`, `merged=false`, head `8c48c7d…` | chiusa come *superseded*; 8 file conservati in `archive/g1-pr1-remote` |
@@ -169,4 +171,4 @@ I failure deterministici e i 17 timeout della corsa quiescente sono elencati in 
 5. **Sviluppo** (nuovo modulo): stadi ontogenetici che modulino il fenotipo senza toccare il genoma.
 6. **Body plan** (`lib/anatomy/bodyPlan.ts`): alimentare il piano da loci anatomici reali solo quando esistono; fino ad allora mantenere `undetermined` / `speculative`.
 
-Ogni punto che tocca contratti condivisi richiede il checkpoint di `GENOME_ARCHITECTURE.md` §9.
+Ogni punto che tocca contratti condivisi richiede il checkpoint di `GENOME_ARCHITECTURE.md` §13.
