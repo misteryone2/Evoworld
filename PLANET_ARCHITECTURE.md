@@ -203,7 +203,7 @@ Daily mean insolation può usare integrazione numerica deterministica su 24 pass
 ### 4.3 Bilancio energetico — PHYSICAL_MODEL + APPROXIMATION
 
 ```text
-T_eq = [S_global * (1 - A) / (4σ)]^(1/4)
+T_eq = [S(1 - A) / (4σ)]^(1/4), dove S è il flux locale; equivalentemente [S_global(1 - A) / σ]^(1/4) con S_global = S/4
 ΔT_greenhouse = k * ln(pCO2 / p_ref) + τ_other * k2   // APPROXIMATION logaritmica
 T_surface = T_eq + ΔT_greenhouse
 Γ_dry = g / cp                                        // PHYSICAL_MODEL
