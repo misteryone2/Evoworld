@@ -5,6 +5,14 @@ import {
   PLANET_ENGINE_VERSION,
 } from "../simulation/planetEngine/core/PlanetCore";
 import { PlanetEngine } from "../simulation/planetEngine/runtime/PlanetEngine";
+import {
+  DEFAULT_SPATIAL_WATER_OPTIONS,
+  SpatialWaterState,
+} from "../simulation/planetEngine/hydrology/spatial/SpatialWaterState";
+import {
+  stepSpatialWaterCycle,
+  type SpatialForcing,
+} from "../simulation/planetEngine/hydrology/spatial/SpatialWaterCycle";
 import { PLANET_UNITS } from "../simulation/planetEngine/units";
 import type { PlanetPhysicalConfig } from "../simulation/planetEngine/contracts";
 
@@ -22,10 +30,10 @@ import type { PlanetPhysicalConfig } from "../simulation/planetEngine/contracts"
 
 const SIZES = [64, 128, 256, 512, 1024] as const;
 type Size = (typeof SIZES)[number];
-type Phase = "init" | "step" | "climate" | "hydrology" | "geology" | "surface" | "snapshot" | "sample";
+type Phase = "init" | "step" | "climate" | "hydrology" | "geology" | "surface" | "spatialHydrology" | "snapshot" | "sample";
 
 const PHASES: readonly Phase[] = [
-  "init", "step", "climate", "hydrology", "geology", "surface", "snapshot", "sample",
+  "init", "step", "climate", "hydrology", "geology", "surface", "spatialHydrology", "snapshot", "sample",
 ];
 const SEED = 7;
 const DELTA_S = PLANET_UNITS.secondsPerEarthDay;
@@ -35,11 +43,11 @@ const WARMUP: Record<Size, number> = { 64: 2, 128: 2, 256: 1, 512: 1, 1024: 1 };
 // Reduced at large grids to keep the whole profile within the configured
 // 400 s vitest timeout. The exact counts are included in the JSON report.
 const ITERATIONS: Record<Size, Record<Phase, number>> = {
-  64: { init: 6, step: 6, climate: 20, hydrology: 20, geology: 20, surface: 20, snapshot: 20, sample: 20 },
-  128: { init: 5, step: 5, climate: 14, hydrology: 14, geology: 14, surface: 14, snapshot: 14, sample: 14 },
-  256: { init: 4, step: 4, climate: 10, hydrology: 10, geology: 10, surface: 10, snapshot: 10, sample: 10 },
-  512: { init: 3, step: 3, climate: 6, hydrology: 6, geology: 6, surface: 6, snapshot: 6, sample: 6 },
-  1024: { init: 2, step: 2, climate: 3, hydrology: 3, geology: 3, surface: 3, snapshot: 3, sample: 3 },
+  64: { init: 6, step: 6, climate: 20, hydrology: 20, geology: 20, surface: 20, spatialHydrology: 6, snapshot: 20, sample: 20 },
+  128: { init: 5, step: 5, climate: 14, hydrology: 14, geology: 14, surface: 14, spatialHydrology: 4, snapshot: 14, sample: 14 },
+  256: { init: 4, step: 4, climate: 10, hydrology: 10, geology: 10, surface: 10, spatialHydrology: 3, snapshot: 10, sample: 10 },
+  512: { init: 3, step: 3, climate: 6, hydrology: 6, geology: 6, surface: 6, spatialHydrology: 2, snapshot: 6, sample: 6 },
+  1024: { init: 2, step: 2, climate: 3, hydrology: 3, geology: 3, surface: 3, spatialHydrology: 1, snapshot: 3, sample: 3 },
 };
 
 interface MemoryUsage {
@@ -139,6 +147,34 @@ function sampleCells(engine: PlanetEngine, width: number, height: number, iterat
   return checksum;
 }
 
+/** Isolated Phase-A prototype fixtures; constructed outside measured regions. */
+function makeSpatialFixture(size: Size): {
+  state: SpatialWaterState;
+  forcing: SpatialForcing;
+  inventory: { oceanMassKg: number; vaporMassKg: number };
+} {
+  const engine = new PlanetEngine(makeConfig(size));
+  const grid = engine.getElevationGrid();
+  const seaLevelM = engine.getSurfaceField().seaLevelM;
+  const oceanMask = new Uint8Array(grid.width * grid.height);
+  for (let i = 0; i < oceanMask.length; i += 1) {
+    oceanMask[i] = grid.transportElevationM![i] < seaLevelM ? 1 : 0;
+  }
+  const state = new SpatialWaterState(grid, { ...DEFAULT_SPATIAL_WATER_OPTIONS }, oceanMask);
+  const precipitationKg = new Float64Array(state.size);
+  const evaporationDemandKg = new Float64Array(state.size);
+  for (let i = 0; i < state.size; i += 1) {
+    // Deterministic 1 mm rain / 0.5 mm evaporation forcing per cell.
+    precipitationKg[i] = 0.001 * state.cellAreasM2[i] * PLANET_UNITS.waterDensityKgM3;
+    evaporationDemandKg[i] = 0.0005 * state.cellAreasM2[i] * PLANET_UNITS.waterDensityKgM3;
+  }
+  return {
+    state,
+    forcing: { precipitationKg, evaporationDemandKg },
+    inventory: { oceanMassKg: 1e18, vaporMassKg: 1e18 },
+  };
+}
+
 function profile(size: Size): Measurement[] {
   const config = makeConfig(size);
   const iterations = ITERATIONS[size];
@@ -150,6 +186,7 @@ function profile(size: Size): Measurement[] {
   const hydrologyEngine = new PlanetEngine(config);
   const geologyEngine = new PlanetEngine(config);
   const surfaceEngine = new PlanetEngine(config);
+  const spatialFixture = makeSpatialFixture(size);
   const snapshotEngine = new PlanetEngine(config);
   snapshotEngine.environmentSnapshot();
 
@@ -180,6 +217,17 @@ function profile(size: Size): Measurement[] {
       case "surface":
         rows.push(measure(size, phase, warmup, iterations.surface, () =>
           surfaceEngine.refreshSurfaceField().elevationM[0]));
+        break;
+      case "spatialHydrology":
+        rows.push(measure(size, phase, warmup, iterations.spatialHydrology, () => {
+          const result = stepSpatialWaterCycle(
+            spatialFixture.state,
+            spatialFixture.inventory,
+            spatialFixture.forcing,
+            DELTA_S,
+          );
+          return result.surfaceAfterM3;
+        }));
         break;
       case "snapshot":
         rows.push(measure(size, phase, warmup, iterations.snapshot, () =>
@@ -238,6 +286,7 @@ describe("Planet Engine — P2 headless benchmark", () => {
           "Cell sampling uses 64 deterministic cache-miss cells per measured iteration.",
           "Throughput is operations/mean time: grid cells/s for every phase except sample, which reports samples/s.",
           "The surface phase calls refreshSurfaceField() to force a derived-cache miss without mutating state.",
+          "The spatialHydrology phase is isolated Phase-A prototype work: 1 mm rain, 0.5 mm evaporation, 3600 s substeps; no PlanetEngine default step is changed.",
         ],
         rows: rows.map((row) => ({
           ...row,
