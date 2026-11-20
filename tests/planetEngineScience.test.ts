@@ -22,7 +22,6 @@ import {
 } from "../simulation/planetEngine/core/EnergyBudget";
 import {
   GAS_KEYS,
-  MOLAR_MASS_KG_PER_MOL,
   dryAirMassKgFromState,
   injectGasMassKg,
   meanMolarMassKgPerMol,
