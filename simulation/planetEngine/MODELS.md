@@ -64,6 +64,32 @@ sediment mass and global water fluxes all use these per-cell areas. The scalar
 `cellAreaM2` is only the arithmetic mean and must not be used for local mass
 balances.
 
+## Validation status
+
+Reference tests in `tests/planetEngineScience.test.ts` check independent
+textbook values, plausible ranges and invariants — not just monotonicity:
+
+| Quantity | Reference | Status |
+| --- | --- | --- |
+| Gravity | g = GM/R² ≈ 9.8203 m/s² for the Earth-like config | `PHYSICAL_MODEL` — validated |
+| Orbital period | ≈ 365.25 days; T² ∝ a³ | `PHYSICAL_MODEL` — validated |
+| Insolation | ≈ 1361 W/m² at 1 AU; inverse-square with distance | `PHYSICAL_MODEL` — validated |
+| Axial tilt | max declination = obliquity; zero tilt removes seasonality | `PHYSICAL_MODEL` — validated |
+| Dry lapse rate | g/cp ≈ 0.009763 K/m | `PHYSICAL_MODEL` — validated |
+| Pressure | p = m·g/A; 1 atm round-trip from the gas inventory | `PHYSICAL_MODEL` — validated |
+| Global energy balance | σT⁴ = S(1−A)/4; T_eq ≈ 258 K; greenhouse ≈ 33 K | `APPROXIMATION` — balance validated, forcing calibrated |
+| Water inventory | total mass constant across steps | `PHYSICAL_MODEL` — validated |
+| Sea level | analytic two-level basin root; monotone with inventory | `PHYSICAL_MODEL` — solver validated |
+| Erosion/deposition | transported mass = volume × crust density | `APPROXIMATION` — conservation validated, coefficient prescribed |
+
+**Not validated / no reference dataset available:** local radiative-advective
+temperature, spatial hydrology and river discharge, wind/circulation fields,
+volcanic and tectonic trigger statistics, biome classification skill, and the
+realistic Earth ocean fraction of the seeded hypsometric generator (~96.6% in
+this config versus ~71% on Earth). These remain `APPROXIMATION` or
+`SIMULATION_HEURISTIC`; passing their internal tests is not a physical
+validation claim.
+
 ## Volume-conservation contract
 
 Transport uses `transportElevationM` (`Float64Array`), which is authoritative
