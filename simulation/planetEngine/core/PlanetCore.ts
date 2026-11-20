@@ -180,6 +180,7 @@ export function createInitialState(config: PlanetPhysicalConfig): PlanetState {
       oceanMassKg: config.hydrosphere.totalWaterKg * oceanFraction,
       iceMassKg: config.hydrosphere.totalWaterKg * config.hydrosphere.iceFraction,
       vaporMassKg: 0,
+      soilWaterKg: 0,
       seaLevelM: 0,
     },
     surface: {

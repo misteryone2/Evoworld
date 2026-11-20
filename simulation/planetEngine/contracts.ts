@@ -9,6 +9,8 @@
 
 import type { Cell, Season, TerrainType } from "../../types";
 
+export type { Season, TerrainType } from "../../types";
+
 /** Real gases tracked by the atmospheric model. `other` is inert filler. */
 export type GasKey = "N2" | "O2" | "CO2" | "H2O" | "CH4" | "Ar" | "other";
 
@@ -92,6 +94,7 @@ export interface PlanetState {
     oceanMassKg: number;
     iceMassKg: number;
     vaporMassKg: number;
+    soilWaterKg: number;
     seaLevelM: number;
   };
   surface: {
@@ -124,6 +127,31 @@ export interface SurfaceField extends ElevationGrid {
   coastlineMask: Uint8Array;
   oceanFraction: number;
   landFraction: number;
+}
+
+/** Local climate fields produced by the deterministic climate chain. */
+export interface ClimateField {
+  width: number;
+  height: number;
+  latitudeRad: Float32Array;
+  longitudeRad: Float32Array;
+  temperatureK: Float32Array;
+  irradianceWm2: Float32Array;
+  humidity: Float32Array;
+  windMS: Float32Array;
+  season: Season;
+}
+
+/** Local water-cycle fields; `riverFlow` is a deterministic D8 proxy. */
+export interface HydrologyField {
+  width: number;
+  height: number;
+  soilMoisture: Float32Array;
+  waterAvailability: Float32Array;
+  precipitationMPerYear: Float32Array;
+  evaporationMPerYear: Float32Array;
+  runoffMPerYear: Float32Array;
+  riverFlow: Float32Array;
 }
 
 export interface OrbitPosition {

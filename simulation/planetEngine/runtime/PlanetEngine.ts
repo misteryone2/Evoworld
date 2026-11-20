@@ -7,8 +7,10 @@
  */
 
 import type {
+  ClimateField,
   ElevationGrid,
   GasKey,
+  HydrologyField,
   OrbitPosition,
   PlanetEngineSnapshot,
   PlanetPhysicalConfig,
@@ -21,9 +23,11 @@ import {
   createInitialState,
   PLANET_ENGINE_VERSION,
   rotationPhaseAt,
+  rotationRateRadPerS,
 } from "../core/PlanetCore";
 import { orbitAt } from "../core/Orbit";
-import { computeEnergyBudget, estimateBondAlbedo } from "../core/EnergyBudget";
+import { stellarFluxWm2 } from "../core/Stellar";
+import { computeEnergyBudget, estimateBondAlbedo, surfacePressureFromState } from "../core/EnergyBudget";
 import { PlanetInvariantError, validateConfig, validateState } from "../core/invariants";
 import { gravityMS2 } from "../core/PlanetCore";
 import { stepInterior } from "../geology/Interior";
@@ -33,6 +37,14 @@ import { applyElevationDeltaM, erodeAndDeposit } from "../geology/SurfaceEvoluti
 import { buildElevationGrid, solveSeaLevelM } from "../surface/Hypsometry";
 import { buildSurfaceField } from "../surface/Continents";
 import { buildCoastlineMask } from "../surface/Coastlines";
+import { dailyMeanIrradianceWm2, latitudeAtY, longitudeAtX } from "../climate/Insolation";
+import { localTemperatureK } from "../climate/TemperatureField";
+import { relativeHumidityFromPressure } from "../climate/Humidity";
+import { zonalWindMS } from "../atmosphere/Circulation";
+import { seasonAt } from "../climate/ClimateZones";
+import { applyWaterFluxes, totalWaterInventoryKg } from "../hydrology/Inventory";
+import { updateSeaLevelFromInventory } from "../hydrology/SeaLevel";
+import { computeWaterCycle } from "../hydrology/WaterCycle";
 import { PLANET_UNITS } from "../units";
 
 const GAS_KEYS: readonly GasKey[] = ["N2", "O2", "CO2", "H2O", "CH4", "Ar", "other"];
@@ -179,6 +191,105 @@ export class PlanetEngine {
     this.setElevationGrid(eroded.elevationM);
     validateState(this.config, this.state);
     return this.getSurfaceField();
+  }
+
+  /** Local climate driven by orbit, obliquity, elevation and gas inventory. */
+  getClimateField(): ClimateField {
+    const surface = this.getSurfaceField();
+    const orbit = orbitAt(this.config, this.state.timeS);
+    const fluxWm2 = stellarFluxWm2(this.config.star.luminosityW, orbit.distanceM);
+    const pressurePa = surfacePressureFromState(this.config, this.state);
+    const vaporPressurePa = this.state.atmosphere.composition.H2O * pressurePa;
+    const omega = rotationRateRadPerS(this.config);
+    const season = seasonAt(this.config, this.state.timeS);
+    const size = surface.width * surface.height;
+
+    const latitudeRad = new Float32Array(size);
+    const longitudeRad = new Float32Array(size);
+    const temperatureK = new Float32Array(size);
+    const irradianceWm2 = new Float32Array(size);
+    const humidity = new Float32Array(size);
+    const windMS = new Float32Array(size);
+
+    for (let y = 0; y < surface.height; y += 1) {
+      for (let x = 0; x < surface.width; x += 1) {
+        const index = y * surface.width + x;
+        const lat = latitudeAtY(y, surface.height);
+        const lon = longitudeAtX(x, surface.width, this.state.rotationPhaseRad);
+        const irradiance = dailyMeanIrradianceWm2(fluxWm2, lat, orbit.declinationRad);
+        const heightAboveSeaM = Math.max(0, surface.elevationM[index] - surface.seaLevelM);
+        const oceanProximity = surface.oceanMask[index] === 1
+          ? 1
+          : 1 - Math.min(1, heightAboveSeaM / Math.max(this.config.surface.roughnessM, 1));
+        const rh = relativeHumidityFromPressure(
+          this.state.climate.globalMeanTemperatureK,
+          vaporPressurePa * (surface.oceanMask[index] === 1 ? 1 : 0.6 + 0.4 * oceanProximity),
+          oceanProximity,
+        );
+        const temperature = localTemperatureK({
+          globalMeanTemperatureK: this.state.climate.globalMeanTemperatureK,
+          latitudeRad: lat,
+          elevationM: surface.elevationM[index],
+          seaLevelM: surface.seaLevelM,
+          declinationRad: orbit.declinationRad,
+          obliquityRad: this.state.obliquityRad,
+          humidity: rh,
+          gravityMS2: this.currentSnapshot.gravityMS2,
+        });
+
+        latitudeRad[index] = lat;
+        longitudeRad[index] = lon;
+        irradianceWm2[index] = irradiance;
+        humidity[index] = rh;
+        windMS[index] = zonalWindMS(lat, omega, 1e-5);
+        temperatureK[index] = temperature;
+      }
+    }
+
+    return {
+      width: surface.width,
+      height: surface.height,
+      latitudeRad,
+      longitudeRad,
+      temperatureK,
+      irradianceWm2,
+      humidity,
+      windMS,
+      season,
+    };
+  }
+
+  getHydrologyField(deltaS: number): HydrologyField {
+    const result = computeWaterCycle({
+      config: this.config,
+      state: this.state,
+      surface: this.getSurfaceField(),
+      climate: this.getClimateField(),
+      deltaS,
+    });
+    return result.field;
+  }
+
+  /** Close the water cycle for one timestep and recompute sea level. */
+  stepClimateHydrology(deltaS: number): HydrologyField {
+    if (!Number.isFinite(deltaS) || deltaS <= 0) {
+      throw new PlanetInvariantError("stepClimateHydrology deltaS must be a finite positive number");
+    }
+    const result = computeWaterCycle({
+      config: this.config,
+      state: this.state,
+      surface: this.getSurfaceField(),
+      climate: this.getClimateField(),
+      deltaS,
+    });
+    applyWaterFluxes(this.state, result.fluxesKg);
+    updateSeaLevelFromInventory(this.getElevationGrid(), this.state);
+    validateState(this.config, this.state);
+    return result.field;
+  }
+
+  totalWaterKg(): number {
+    return totalWaterInventoryKg(this.state);
   }
 
   private injectAtmosphericMassKg(massKg: number, gas: GasKey): void {

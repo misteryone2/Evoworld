@@ -122,8 +122,9 @@ export function validateState(config: PlanetPhysicalConfig, state: PlanetState):
   nonNegative(hydrosphere.oceanMassKg, "state.hydrosphere.oceanMassKg");
   nonNegative(hydrosphere.iceMassKg, "state.hydrosphere.iceMassKg");
   nonNegative(hydrosphere.vaporMassKg, "state.hydrosphere.vaporMassKg");
+  nonNegative(hydrosphere.soilWaterKg, "state.hydrosphere.soilWaterKg");
   finite(hydrosphere.seaLevelM, "state.hydrosphere.seaLevelM");
-  const waterTotal = hydrosphere.oceanMassKg + hydrosphere.iceMassKg + hydrosphere.vaporMassKg;
+  const waterTotal = hydrosphere.oceanMassKg + hydrosphere.iceMassKg + hydrosphere.vaporMassKg + hydrosphere.soilWaterKg;
   assert(
     waterTotal <= config.hydrosphere.totalWaterKg * (1 + COMPOSITION_TOLERANCE),
     "water inventory exceeds configured totalWaterKg",
