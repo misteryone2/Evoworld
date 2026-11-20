@@ -435,6 +435,16 @@ export class PlanetEngine {
   }
 
   /**
+   * Manual climate refresh for diagnostics and benchmarking. It rebuilds the
+   * field from the current state but does NOT advance tick/time. Like the other
+   * manual helpers it is out-of-band and invalidates the climate cache once.
+   */
+  refreshClimateField(): ClimateField {
+    this.climateRevision += 1;
+    return this.getClimateField();
+  }
+
+  /**
    * Manual geology step. It evolves the surface but does NOT advance tick/time;
    * `step()` is the single coordinated production clock.
    */
